@@ -26,12 +26,15 @@ export const getHeadersSectionIsOpen = () => {
   return isOpen ? isOpen === 'true' : defaultIsOpen;
 };
 
+export const HASURA_CONSOLE_GRAPHIQL_HEADERS =
+  'HASURA_CONSOLE_GRAPHIQL_HEADERS';
+
 export const setGraphiQLHeadersInLocalStorage = headers => {
-  window.localStorage.setItem('HASURA_CONSOLE_GRAPHIQL_HEADERS', headers);
+  window.localStorage.setItem(HASURA_CONSOLE_GRAPHIQL_HEADERS, headers);
 };
 
 export const getGraphiQLHeadersFromLocalStorage = () => {
-  return window.localStorage.getItem('HASURA_CONSOLE_GRAPHIQL_HEADERS');
+  return window.localStorage.getItem(HASURA_CONSOLE_GRAPHIQL_HEADERS);
 };
 
 export const parseAuthHeader = header => {
