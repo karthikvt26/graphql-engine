@@ -33,9 +33,32 @@ data:
         /graphql/elm/elm-boilerplate.zip https://graphql-engine-cdn.hasura.io/learn-hasura/boilerplates/elm/elm-boilerplate.zip
       }
 
+      redir 301 {
+        /graphql/reason-react-apollo/boilerplate.zip https://graphql-engine-cdn.hasura.io/learn-hasura/boilerplates/reason-react-apollo/boilerplate.zip
+      }
 
       redir 301 {
-        /graphql/elm/ /graphql/elm-graphql/introduction
+        /graphql/angular-apollo/boilerplate.zip https://graphql-engine-cdn.hasura.io/learn-hasura/boilerplates/angular-apollo/boilerplate.zip
+      }
+
+      redir 301 {
+        /graphql/flutter-graphql/boilerplate.zip https://graphql-engine-cdn.hasura.io/learn-hasura/boilerplates/flutter-graphql/boilerplate.zip
+      }
+
+      redir 301 {
+        /graphql/angular-apollo/ /graphql/angular-apollo/introduction
+      }
+
+      redir 301 {
+        /graphql/flutter-graphql/ /graphql/flutter-graphql/introduction
+      }
+
+      redir 301 {
+        /graphql/reason-react-apollo/ /graphql/reason-react-apollo/introduction
+      }
+
+      redir 301 {
+        /graphql/elm-graphql/ /graphql/elm-graphql/introduction
       }
 
       redir 301 {
@@ -57,7 +80,7 @@ data:
       redir 301 {
         /graphql/android/ /graphql/android/introduction
       }
-      
+
       redir 301 {
         /graphql/hasura/ /graphql/hasura/introduction
       }
@@ -111,7 +134,13 @@ data:
       proxy /graphql/android android-apollo
 
       proxy /graphql/elm-graphql elm-graphql
-      
+
+      proxy /graphql/reason-react-apollo reason-react-apollo
+
+      proxy /graphql/angular-apollo angular-apollo
+
+      proxy /graphql/flutter-graphql flutter-graphql
+
       proxy /graphql hasura/v1/graphql {
         without /graphql
         websocket

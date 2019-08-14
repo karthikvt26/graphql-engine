@@ -15,8 +15,8 @@ const frontendTutorial = [
   },
   {
     name: 'Angular',
-    url: 'https://learn.hasura.io/graphql/angular',
-    comingSoon: true,
+    url: 'https://learn.hasura.io/graphql/angular-apollo',
+    comingSoon: false,
     bgClassName: 'angularBg',
     disableBgClassName: 'angularDisableBg',
   },
@@ -29,8 +29,8 @@ const frontendTutorial = [
   },
   {
     name: 'ReasonML',
-    url: 'https://learn.hasura.io/graphql/reasonml',
-    comingSoon: true,
+    url: 'https://learn.hasura.io/graphql/reason-react-apollo',
+    comingSoon: false,
     bgClassName: 'reBg',
     disableBgClassName: 'reDisableBg',
   },
@@ -75,8 +75,8 @@ const mobileTutorial = [
   },
   {
     name: 'Flutter',
-    url: 'https://learn.hasura.io/graphql/flutter',
-    comingSoon: true,
+    url: 'https://learn.hasura.io/graphql/flutter-graphql',
+    comingSoon: false,
     bgClassName: 'flutterBg',
     disableBgClassName: 'flutterDisableBg',
   },
