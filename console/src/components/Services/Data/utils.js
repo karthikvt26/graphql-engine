@@ -1,3 +1,6 @@
+import globals from '../../../Globals';
+import { TABLE_ENUMS_SUPPORT } from '../../../helpers/versionUtils';
+
 export const INTEGER = 'integer';
 export const SERIAL = 'serial';
 export const BIGINT = 'bigint';
@@ -36,6 +39,7 @@ export const getPlaceholder = type => {
 export const tabNameMap = {
   browse: 'Browse Rows',
   insert: 'Insert Row',
+  edit: 'Edit Row',
   modify: 'Modify',
   relationships: 'Relationships',
   permissions: 'Permissions',
@@ -228,6 +232,14 @@ export const fetchTrackedTableListQuery = options => {
       order_by: [{ column: 'table_name', type: 'asc' }],
     },
   };
+
+  const supportEnums =
+    globals.featuresCompatibility &&
+    globals.featuresCompatibility[TABLE_ENUMS_SUPPORT];
+  if (supportEnums) {
+    query.args.columns.push('is_enum');
+  }
+
   if (
     (options.schemas && options.schemas.length !== 0) ||
     (options.tables && options.tables.length !== 0)
@@ -468,12 +480,14 @@ export const mergeLoadSchemaData = (
     let _uniqueConstraints = [];
     let _fkConstraints = [];
     let _refFkConstraints = [];
+    let _isEnum = false;
 
     if (_isTableTracked) {
       _primaryKey = trackedTableInfo.primary_key;
       _relationships = trackedTableInfo.relationships;
       _permissions = trackedTableInfo.permissions;
       _uniqueConstraints = trackedTableInfo.unique_constraints;
+      _isEnum = trackedTableInfo.is_enum;
 
       _fkConstraints = fkData.filter(
         fk => fk.table_schema === _tableSchema && fk.table_name === _tableName
@@ -501,6 +515,7 @@ export const mergeLoadSchemaData = (
       foreign_key_constraints: _fkConstraints,
       opp_foreign_key_constraints: _refFkConstraints,
       view_info: _viewInfo,
+      is_enum: _isEnum,
     };
 
     _mergedTableData.push(_mergedInfo);
@@ -622,29 +637,6 @@ WHERE (t.typrelid = 0 OR (SELECT c.relkind = 'c' FROM pg_catalog.pg_class c WHER
 GROUP BY t.typname
 ORDER BY t.typname ASC;
 `;
-
-export const fetchTableTriggersSQL = (schema, table) => {
-  return `  
-select 
-  COALESCE(
-    json_agg(
-      row_to_json(t)
-    ), 
-    '[]' :: JSON
-  ) AS result FROM (
-select 
-  trigger_schema, 
-  trigger_name, 
-  event_manipulation, 
-  action_timing, 
-  action_statement, 
-  event_object_schema, 
-  event_object_table 
-FROM information_schema.triggers 
-WHERE event_object_schema = '${schema}' AND event_object_table = '${table}'
-) AS t
-  `;
-};
 
 const postgresFunctionTester = /.*\(\)$/gm;
 

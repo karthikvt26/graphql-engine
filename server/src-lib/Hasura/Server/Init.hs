@@ -3,10 +3,6 @@ module Hasura.Server.Init where
 
 import qualified Database.PG.Query                as Q
 
-import           Data.Char                        (toLower)
-import           Network.Wai.Handler.Warp         (HostPreference)
-import           Options.Applicative
-
 import qualified Data.Aeson                       as J
 import qualified Data.Aeson.Casing                as J
 import qualified Data.Aeson.TH                    as J
@@ -14,27 +10,33 @@ import qualified Data.ByteString.Lazy.Char8       as BLC
 import qualified Data.HashSet                     as Set
 import qualified Data.String                      as DataString
 import qualified Data.Text                        as T
-import qualified Data.UUID                        as UUID
-import qualified Data.UUID.V4                     as UUID
-import qualified Hasura.GraphQL.Execute.LiveQuery as LQ
-import qualified Hasura.Logging                   as L
+import qualified Data.Text.Encoding               as TE
 import qualified Text.PrettyPrint.ANSI.Leijen     as PP
 
+import           Data.Char                        (toLower)
+import           Data.Time.Clock.Units            (milliseconds)
+import           Network.Wai.Handler.Warp         (HostPreference)
+import           Options.Applicative
+
+import qualified Hasura.GraphQL.Execute.LiveQuery as LQ
+import qualified Hasura.Logging                   as L
+
 import           Hasura.Prelude
-import           Hasura.RQL.Types                 ( RoleName (..)
-                                                  , SchemaCache (..)
-                                                  , mkNonEmptyText )
+import           Hasura.RQL.Types                 (RoleName (..),
+                                                   SchemaCache (..),
+                                                   mkNonEmptyText)
 import           Hasura.Server.Auth
 import           Hasura.Server.Cors
 import           Hasura.Server.Logging
 import           Hasura.Server.Utils
+import           Network.URI                      (parseURI)
 
 newtype InstanceId
   = InstanceId { getInstanceId :: Text }
-  deriving (Show, Eq, J.ToJSON, J.FromJSON)
+  deriving (Show, Eq, J.ToJSON, J.FromJSON, Q.FromCol, Q.ToPrepArg)
 
-mkInstanceId :: IO InstanceId
-mkInstanceId = InstanceId . UUID.toText <$> UUID.nextRandom
+generateInstanceId :: IO InstanceId
+generateInstanceId = InstanceId <$> generateFingerprint
 
 data StartupTimeInfo
   = StartupTimeInfo
@@ -94,7 +96,7 @@ data ServeOptions
   , soEnableTelemetry  :: !Bool
   , soStringifyNum     :: !Bool
   , soEnabledAPIs      :: !(Set.HashSet API)
-  , soLiveQueryOpts    :: !LQ.LQOpts
+  , soLiveQueryOpts    :: !LQ.LiveQueriesOptions
   , soEnableAllowlist  :: !Bool
   , soEnabledLogTypes  :: !(Set.HashSet L.EngineLogType)
   , soLogLevel         :: !L.LogLevel
@@ -169,7 +171,7 @@ instance FromEnv AdminSecret where
 
 instance FromEnv RoleName where
   fromEnv string = case mkNonEmptyText (T.pack string) of
-    Nothing -> Left "empty string not allowed"
+    Nothing     -> Left "empty string not allowed"
     Just neText -> Right $ RoleName neText
 
 instance FromEnv Bool where
@@ -185,10 +187,10 @@ instance FromEnv [API] where
   fromEnv = readAPIs
 
 instance FromEnv LQ.BatchSize where
-  fromEnv = fmap LQ.mkBatchSize . readEither
+  fromEnv = fmap LQ.BatchSize . readEither
 
 instance FromEnv LQ.RefetchInterval where
-  fromEnv = fmap LQ.refetchIntervalFromMilli . readEither
+  fromEnv = fmap (LQ.RefetchInterval . milliseconds . fromInteger) . readEither
 
 instance FromEnv JWTConfig where
   fromEnv = readJson
@@ -352,14 +354,9 @@ mkServeOptions rso = do
         _            -> corsCfg
 
     mkLQOpts = do
-      mxRefetchIntM <- withEnv (rsoMxRefetchInt rso) $
-                       fst mxRefetchDelayEnv
-      mxBatchSizeM <- withEnv (rsoMxBatchSize rso) $
-                      fst mxBatchSizeEnv
-      fallbackRefetchIntM <- withEnv (rsoFallbackRefetchInt rso) $
-                             fst fallbackRefetchDelayEnv
-      return $ LQ.mkLQOpts (LQ.mkMxOpts mxBatchSizeM mxRefetchIntM)
-        (LQ.mkFallbackOpts fallbackRefetchIntM)
+      mxRefetchIntM <- withEnv (rsoMxRefetchInt rso) $ fst mxRefetchDelayEnv
+      mxBatchSizeM <- withEnv (rsoMxBatchSize rso) $ fst mxBatchSizeEnv
+      return $ LQ.mkLiveQueriesOptions mxBatchSizeM mxRefetchIntM
 
 
 mkExamplesDoc :: [[String]] -> PP.Doc
@@ -436,6 +433,9 @@ serveCmdFooter =
       , [ "# Start GraphQL Engine with telemetry enabled/disabled"
         , "graphql-engine --database-url <database-url> serve --enable-telemetry true|false"
         ]
+      , [ "# Start GraphQL Engine with HTTP compression enabled for '/v1/query' and '/v1/graphql' endpoints"
+        , "graphql-engine --database-url <database-url> serve --enable-compression"
+        ]
       ]
 
     envVarDoc = mkEnvVarDoc $ envVars <> eventEnvs
@@ -453,7 +453,7 @@ serveCmdFooter =
         , "Max event threads"
         )
       , ( "HASURA_GRAPHQL_EVENTS_FETCH_INTERVAL"
-        , "Postgres events polling interval"
+        , "Postgres events polling interval in milliseconds"
         )
       ]
 
@@ -552,7 +552,7 @@ corsDomainEnv =
 enableConsoleEnv :: (String, String)
 enableConsoleEnv =
   ( "HASURA_GRAPHQL_ENABLE_CONSOLE"
-  , "Enable API Console"
+  , "Enable API Console (default: false)"
   )
 
 enableTelemetryEnv :: (String, String)
@@ -657,24 +657,22 @@ parseRawConnInfo =
 connInfoErrModifier :: String -> String
 connInfoErrModifier s = "Fatal Error : " ++ s
 
-mkConnInfo ::RawConnInfo -> Either String Q.ConnInfo
-mkConnInfo (RawConnInfo mHost mPort mUser pass mURL mDB opts mRetries) =
+mkConnInfo :: RawConnInfo -> Either String Q.ConnInfo
+mkConnInfo (RawConnInfo mHost mPort mUser password mURL mDB opts mRetries) =
+  Q.ConnInfo retries <$>
   case (mHost, mPort, mUser, mDB, mURL) of
 
     (Just host, Just port, Just user, Just db, Nothing) ->
-      return $ Q.ConnInfo host port user pass db opts retries
+      return $ Q.CDOptions $ Q.ConnOptions host port user password db opts
 
-    (_, _, _, _, Just dbURL) -> maybe (throwError invalidUrlMsg)
-                                withRetries $ parseDatabaseUrl dbURL opts
+    (_, _, _, _, Just dbURL) ->
+      return $ Q.CDDatabaseURI $ TE.encodeUtf8 $ T.pack dbURL
     _ -> throwError $ "Invalid options. "
                     ++ "Expecting all database connection params "
                     ++ "(host, port, user, dbname, password) or "
                     ++ "database-url (HASURA_GRAPHQL_DATABASE_URL)"
   where
     retries = fromMaybe 1 mRetries
-    withRetries ci = return $ ci{Q.connRetries = retries}
-    invalidUrlMsg = "Invalid database-url (HASURA_GRAPHQL_DATABASE_URL). "
-                    ++ "Example postgres://foo:bar@example.com:2345/database"
 
 parseTxIsolation :: Parser (Maybe Q.TxIsolation)
 parseTxIsolation = optional $
@@ -961,15 +959,28 @@ parseLogLevel = optional $
 
 -- Init logging related
 connInfoToLog :: Q.ConnInfo -> StartupLog
-connInfoToLog (Q.ConnInfo host port user _ db _ retries) =
+connInfoToLog connInfo =
   StartupLog L.LevelInfo "postgres_connection" infoVal
   where
-    infoVal = J.object [ "host" J..= host
-                       , "port" J..= port
-                       , "user" J..= user
-                       , "database" J..= db
-                       , "retries" J..= retries
-                       ]
+    Q.ConnInfo retries details = connInfo
+    infoVal = case details of
+      Q.CDDatabaseURI uri -> mkDBUriLog $ T.unpack $ bsToTxt uri
+      Q.CDOptions co      ->
+        J.object [ "host" J..= Q.connHost co
+                 , "port" J..= Q.connPort co
+                 , "user" J..= Q.connUser co
+                 , "database" J..= Q.connDatabase co
+                 , "retries" J..= retries
+                 ]
+
+    mkDBUriLog uri =
+      case show <$> parseURI uri of
+        Nothing -> J.object
+          [ "error" J..= ("parsing database url failed" :: String)]
+        Just s  -> J.object
+          [ "retries" J..= retries
+          , "database_url" J..= s
+          ]
 
 serveOptsToLog :: ServeOptions -> StartupLog
 serveOptsToLog so =

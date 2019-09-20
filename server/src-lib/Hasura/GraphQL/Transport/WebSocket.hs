@@ -3,6 +3,7 @@
 module Hasura.GraphQL.Transport.WebSocket
   ( createWSServerApp
   , createWSServerEnv
+  , stopWSServerApp
   , WSServerEnv
   ) where
 
@@ -136,7 +137,7 @@ data WSLogInfo
   , _wsliConnectionInfo :: !WsConnInfo
   , _wsliEvent          :: !WSEvent
   } deriving (Show, Eq)
-$(J.deriveToJSON (J.aesonDrop 4 J.snakeCase) ''WSLogInfo)
+$(J.deriveToJSON (J.aesonDrop 5 J.snakeCase) ''WSLogInfo)
 
 data WSLog
   = WSLog
@@ -532,3 +533,6 @@ createWSServerApp authMode serverEnv =
       (onConn (_wseLogger serverEnv) (_wseCorsPolicy serverEnv))
       (onMessage authMode serverEnv)
       (onClose (_wseLogger serverEnv) $ _wseLiveQMap serverEnv)
+
+stopWSServerApp :: WSServerEnv -> IO ()
+stopWSServerApp wsEnv = WS.shutdown (_wseServer wsEnv)
