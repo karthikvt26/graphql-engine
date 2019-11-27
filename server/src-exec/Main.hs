@@ -25,6 +25,7 @@ runApp (HGEOptionsG rci hgeCmd) =
     HCServe serveOptions -> do
       (initCtx, initTime) <- initialiseCtx hgeCmd rci
       runHGEServer serveOptions initCtx initTime
+
     HCExport -> do
       (initCtx, _) <- initialiseCtx hgeCmd rci
       res <- runTx' initCtx fetchMetadata

@@ -188,6 +188,7 @@ library
                      , Hasura.Db
                      , Hasura.Logging
                      , Hasura.HTTP
+                     , Hasura.EncJSON
 
                      , Hasura.Server.App
                      , Hasura.Server.Auth
@@ -201,9 +202,10 @@ library
                      , Hasura.Server.Compression
                      , Hasura.Server.PGDump
 
+                     , Hasura.GraphQL.Transport.HTTP
+
                      , Hasura.RQL.Types
                      , Hasura.RQL.DDL.Metadata
-                     , Hasura.EncJSON
 
   other-modules:       Hasura.Cache
                      , Hasura.Cache
@@ -271,7 +273,6 @@ library
                      , Hasura.RQL.GBoolExp
 
                      , Hasura.GraphQL.Transport.HTTP.Protocol
-                     , Hasura.GraphQL.Transport.HTTP
                      , Hasura.GraphQL.Transport.WebSocket.Protocol
                      , Hasura.GraphQL.Transport.WebSocket.Server
                      , Hasura.GraphQL.Transport.WebSocket

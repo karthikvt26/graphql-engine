@@ -192,8 +192,10 @@ runHGEServer
      , MonadStateless IO m
      , UserAuthentication m
      , MetadataApiAuthorization m
+     , GQLApiAuthorization m
      , HttpLog m
      , ConsoleRenderer m
+     , ConfigApiHandler m
      )
   => ServeOptions impl
   -> InitCtx
@@ -354,6 +356,15 @@ instance MetadataApiAuthorization AppM where
       withPathK "args" $ throw400 AccessDenied errMsg
     where
       errMsg = "restricted access : admin only"
+
+instance GQLApiAuthorization AppM where
+  authorizeGQLApi userInfo query = do
+    liftIO $ putStrLn "<><> INSIDE GQL API Auth middleware <><>"
+    liftIO $ print userInfo
+    liftIO $ print query
+
+instance ConfigApiHandler AppM where
+  runConfigApiHandler = configApiGetHandler
 
 instance ConsoleRenderer AppM where
   renderConsole path authMode enableTelemetry consoleAssetsDir =

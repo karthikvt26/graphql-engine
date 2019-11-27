@@ -1,5 +1,11 @@
 module Hasura.GraphQL.Transport.HTTP
   ( runGQ
+  , GQLReq(..)
+  , GQLReqUnparsed
+  , GQLReqParsed
+  , GQLExecDoc(..)
+  , OperationName(..)
+  , GQLQueryText(..)
   ) where
 
 import qualified Network.HTTP.Types                     as N

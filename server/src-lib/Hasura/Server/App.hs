@@ -190,6 +190,16 @@ buildQCtx = do
 class MetadataApiAuthorization m where
   authorizeMetadataApi :: RQLQuery -> UserInfo -> Handler m ()
 
+-- | Typeclass representing the GraphQL HTTP API authorization effect
+-- TODO: handle the websocket interface?
+class GQLApiAuthorization m where
+  authorizeGQLApi :: UserInfo -> GH.GQLReqUnparsed -> Handler m ()
+
+-- | The config API (/v1alpha1/config) handler
+class Monad m => ConfigApiHandler m where
+  runConfigApiHandler :: ServerCtx -> Spock.SpockCtxT () m ()
+
+
 mkSpockAction
   :: (MonadIO m, FromJSON a, ToJSON a, UserAuthentication m, HttpLog m)
   => ServerCtx
@@ -298,12 +308,16 @@ v1QueryHandler query = do
       instanceId <- scInstanceId . hcServerCtx <$> ask
       runQuery pgExecCtx instanceId userInfo schemaCache httpMgr sqlGenCtx (SystemDefined False) query
 
-v1Alpha1GQHandler :: (MonadIO m) => GH.GQLReqUnparsed -> Handler m (HttpResponse EncJSON)
+v1Alpha1GQHandler
+  :: (GQLApiAuthorization m, MonadIO m)
+  => GH.GQLReqUnparsed
+  -> Handler m (HttpResponse EncJSON)
 v1Alpha1GQHandler query = do
   userInfo <- asks hcUser
   reqHeaders <- asks hcReqHeaders
   manager <- scManager . hcServerCtx <$> ask
   scRef <- scCacheRef . hcServerCtx <$> ask
+  authorizeGQLApi userInfo query
   (sc, scVer) <- liftIO $ readIORef $ _scrCache scRef
   pgExecCtx <- scPGExecCtx . hcServerCtx <$> ask
   sqlGenCtx <- scSQLGenCtx . hcServerCtx <$> ask
@@ -316,7 +330,7 @@ v1Alpha1GQHandler query = do
   flip runReaderT execCtx $ GH.runGQ requestId userInfo reqHeaders query
 
 v1GQHandler
-  :: (MonadIO m)
+  :: (MonadIO m, GQLApiAuthorization m)
   => GH.GQLReqUnparsed
   -> Handler m (HttpResponse EncJSON)
 v1GQHandler = v1Alpha1GQHandler
@@ -408,6 +422,14 @@ legacyQueryHandler tn queryType req =
   where
     qt = QualifiedObject publicSchema tn
 
+configApiGetHandler :: (MonadIO m, UserAuthentication m, HttpLog m) => ServerCtx -> Spock.SpockCtxT () m ()
+configApiGetHandler serverCtx =
+  Spock.get "v1alpha1/config" $ mkSpockAction serverCtx encodeQErr id $
+    mkGetHandler $ do
+      onlyAdmin
+      let res = encJFromJValue $ runGetConfig (scAuthMode serverCtx)
+      return $ JSONResp $ HttpResponse res Nothing
+
 initErrExit :: QErr -> IO a
 initErrExit e = do
   putStrLn $
@@ -430,6 +452,8 @@ mkWaiApp
      , HttpLog m
      , UserAuthentication m
      , MetadataApiAuthorization m
+     , GQLApiAuthorization m
+     , ConfigApiHandler m
      )
   => Q.TxIsolation
   -> L.Logger L.Hasura
@@ -512,7 +536,14 @@ mkWaiApp isoLevel logger sqlGenCtx enableAL pool ci httpManager mode corsCfg ena
 
 
 httpApp
-  :: (MonadIO m, ConsoleRenderer m, HttpLog m, UserAuthentication m, MetadataApiAuthorization m)
+  :: ( MonadIO m
+     , ConsoleRenderer m
+     , HttpLog m
+     , UserAuthentication m
+     , MetadataApiAuthorization m
+     , GQLApiAuthorization m
+     , ConfigApiHandler m
+     )
   => CorsConfig
   -> ServerCtx
   -> Bool
@@ -555,12 +586,7 @@ httpApp corsCfg serverCtx enableConsole consoleAssetsDir enableTelemetry = do
       Spock.post "v1alpha1/pg_dump" $ spockAction encodeQErr id $
         mkPostHandler v1Alpha1PGDumpHandler
 
-    when enableConfig $
-      Spock.get "v1alpha1/config" $ spockAction encodeQErr id $
-        mkGetHandler $ do
-          onlyAdmin
-          let res = encJFromJValue $ runGetConfig (scAuthMode serverCtx)
-          return $ JSONResp $ HttpResponse res Nothing
+    when enableConfig $ runConfigApiHandler serverCtx
 
     when enableGraphQL $ do
       Spock.post "v1alpha1/graphql/explain" gqlExplainAction
