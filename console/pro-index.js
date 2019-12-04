@@ -7,6 +7,8 @@ import {
   // getGraphiQLHeadersFromLocalStorage,
 } from './src/components/Services/ApiExplorer/ApiRequest/utils';
 
+import { setReadOnlyMode } from './src/components/Main/Actions';
+
 import GraphiQLWrapper from './src/components/Services/ApiExplorer/GraphiQLWrapper/GraphiQLWrapper';
 
 import { CONSOLE_ADMIN_SECRET } from './src/components/AppState';
@@ -146,7 +148,7 @@ export { getRemoteSchemaRouter, remoteSchemaReducer };
 // export other globals
 
 export { globals, endpoints, mainState };
-export { changeRequestHeader, loadMigrationStatus };
+export { changeRequestHeader, loadMigrationStatus, setReadOnlyMode };
 export { validateLogin };
 export { handleMigrationErrors };
 
