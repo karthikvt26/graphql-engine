@@ -494,13 +494,13 @@ const saveForeignKeys = (index, tableSchema, columns) => {
           add constraint "${constraintName}"
           foreign key (${Object.keys(oldConstraint.column_mapping)
     .map(lc => `"${lc}"`)
-    .join(', ')}) 
+    .join(', ')})
           references "${oldConstraint.ref_table_table_schema}"."${
   oldConstraint.ref_table
 }"
           (${Object.values(oldConstraint.column_mapping)
     .map(rc => `"${rc}"`)
-    .join(', ')}) 
+    .join(', ')})
           on update ${pgConfTypes[oldConstraint.on_update]}
           on delete ${pgConfTypes[oldConstraint.on_delete]};
         `;
@@ -940,6 +940,7 @@ const fetchViewDefinition = (viewName, isRedirect) => {
       type: 'run_sql',
       args: {
         sql: sqlQuery,
+        read_only: true,
       },
     };
 
