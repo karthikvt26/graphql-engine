@@ -189,15 +189,9 @@ buildQCtx = do
 class MetadataApiAuthorization m where
   authorizeMetadataApi :: RQLQuery -> UserInfo -> Handler m ()
 
--- | Typeclass representing the GraphQL HTTP API authorization effect
--- TODO: handle the websocket interface?
-class GQLApiAuthorization m where
-  authorizeGQLApi :: UserInfo -> GH.GQLReqUnparsed -> Handler m ()
-
 -- | The config API (/v1alpha1/config) handler
 class Monad m => ConfigApiHandler m where
   runConfigApiHandler :: ServerCtx -> Spock.SpockCtxT () m ()
-
 
 mkSpockAction
   :: (MonadIO m, FromJSON a, ToJSON a, UserAuthentication m, HttpLog m)
@@ -308,7 +302,7 @@ v1QueryHandler query = do
       runQuery pgExecCtx instanceId userInfo schemaCache httpMgr sqlGenCtx (SystemDefined False) query
 
 v1Alpha1GQHandler
-  :: (GQLApiAuthorization m, MonadIO m)
+  :: (GH.GQLApiAuthorization m, MonadIO m)
   => GH.GQLReqUnparsed
   -> Handler m (HttpResponse EncJSON)
 v1Alpha1GQHandler query = do
@@ -316,7 +310,8 @@ v1Alpha1GQHandler query = do
   reqHeaders <- asks hcReqHeaders
   manager <- scManager . hcServerCtx <$> ask
   scRef <- scCacheRef . hcServerCtx <$> ask
-  authorizeGQLApi userInfo query
+  res <- lift $ lift $ GH.authorizeGQLApi userInfo reqHeaders query
+  reqParsed <- either throwError return res
   (sc, scVer) <- liftIO $ readIORef $ _scrCache scRef
   pgExecCtx <- scPGExecCtx . hcServerCtx <$> ask
   sqlGenCtx <- scSQLGenCtx . hcServerCtx <$> ask
@@ -324,12 +319,11 @@ v1Alpha1GQHandler query = do
   enableAL  <- scEnableAllowlist . hcServerCtx <$> ask
   logger    <- scLogger . hcServerCtx <$> ask
   requestId <- asks hcRequestId
-  let execCtx = E.ExecutionCtx logger sqlGenCtx pgExecCtx planCache
-                sc scVer manager enableAL
-  flip runReaderT execCtx $ GH.runGQ requestId userInfo reqHeaders query
+  let execCtx = E.ExecutionCtx logger sqlGenCtx pgExecCtx planCache sc scVer manager enableAL
+  flip runReaderT execCtx $ GH.runGQ requestId userInfo reqHeaders (query, reqParsed)
 
 v1GQHandler
-  :: (MonadIO m, GQLApiAuthorization m)
+  :: (MonadIO m, GH.GQLApiAuthorization m)
   => GH.GQLReqUnparsed
   -> Handler m (HttpResponse EncJSON)
 v1GQHandler = v1Alpha1GQHandler
@@ -452,7 +446,7 @@ mkWaiApp
      , HttpLog m
      , UserAuthentication m
      , MetadataApiAuthorization m
-     , GQLApiAuthorization m
+     , GH.GQLApiAuthorization m
      , ConfigApiHandler m
      , LA.Forall (LA.Pure m)
      )
@@ -541,7 +535,7 @@ httpApp
      , HttpLog m
      , UserAuthentication m
      , MetadataApiAuthorization m
-     , GQLApiAuthorization m
+     , GH.GQLApiAuthorization m
      , ConfigApiHandler m
      )
   => CorsConfig

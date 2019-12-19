@@ -6,6 +6,7 @@ module Hasura.GraphQL.Transport.HTTP
   , GQLExecDoc(..)
   , OperationName(..)
   , GQLQueryText(..)
+  , GQLApiAuthorization (..)
   ) where
 
 import qualified Network.HTTP.Types                     as N
@@ -22,6 +23,15 @@ import qualified Database.PG.Query                      as Q
 import qualified Hasura.GraphQL.Execute                 as E
 import qualified Hasura.Logging                         as L
 
+-- | Typeclass representing the GraphQL API (over both HTTP & Websockets) authorization effect
+class Monad m => GQLApiAuthorization m where
+  authorizeGQLApi
+    :: UserInfo
+    -> [N.Header]
+    -- ^ request headers
+    -> GQLReqUnparsed
+    -> m (Either QErr GQLReqParsed)
+
 runGQ
   :: ( MonadIO m
      , MonadError QErr m
@@ -30,17 +40,16 @@ runGQ
   => RequestId
   -> UserInfo
   -> [N.Header]
-  -> GQLReqUnparsed
+  -> (GQLReqUnparsed, GQLReqParsed)
   -> m (HttpResponse EncJSON)
-runGQ reqId userInfo reqHdrs req = do
+runGQ reqId userInfo reqHdrs req@(reqUnparsed, _) = do
   E.ExecutionCtx _ sqlGenCtx pgExecCtx planCache sc scVer _ enableAL <- ask
-  execPlan <- E.getResolvedExecPlan pgExecCtx planCache
-              userInfo sqlGenCtx enableAL sc scVer req
+  execPlan <- E.getResolvedExecPlan pgExecCtx planCache userInfo sqlGenCtx enableAL sc scVer req
   case execPlan of
     E.GExPHasura resolvedOp ->
-      flip HttpResponse Nothing <$> runHasuraGQ reqId req userInfo resolvedOp
+      flip HttpResponse Nothing <$> runHasuraGQ reqId reqUnparsed userInfo resolvedOp
     E.GExPRemote rsi opDef  ->
-      E.execRemoteGQ reqId userInfo reqHdrs req rsi opDef
+      E.execRemoteGQ reqId userInfo reqHdrs reqUnparsed rsi opDef
 
 runHasuraGQ
   :: ( MonadIO m

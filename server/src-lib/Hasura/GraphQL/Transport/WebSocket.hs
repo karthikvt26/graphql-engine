@@ -45,6 +45,8 @@ import           Hasura.Server.Cors
 import           Hasura.Server.Utils                         (RequestId, diffTimeToMicro,
                                                               getRequestId)
 
+import           Hasura.GraphQL.Transport.HTTP               (GQLApiAuthorization (..))
+
 import qualified Hasura.GraphQL.Execute                      as E
 import qualified Hasura.GraphQL.Execute.LiveQuery            as LQ
 import qualified Hasura.GraphQL.Transport.WebSocket.Server   as WS
@@ -258,7 +260,7 @@ onConn (L.Logger logger) corsPolicy wsId requestHead = do
             <> "HASURA_GRAPHQL_WS_READ_COOKIE to force read cookie when CORS is disabled."
 
 
-onStart :: WSServerEnv -> WSConn -> StartMsg -> IO ()
+onStart :: forall m. (MonadIO m, GQLApiAuthorization m) => WSServerEnv -> WSConn -> StartMsg -> m ()
 onStart serverEnv wsConn (StartMsg opId q) = catchAndIgnore $ do
 
   opM <- liftIO $ STM.atomically $ STMMap.lookup opId opMap
@@ -277,12 +279,13 @@ onStart serverEnv wsConn (StartMsg opId q) = catchAndIgnore $ do
       withComplete $ sendStartErr e
 
   requestId <- getRequestId reqHdrs
+  reqParsedE <- lift $ authorizeGQLApi userInfo reqHdrs q
+  reqParsed <- either (withComplete . preExecErr requestId) return reqParsedE
   (sc, scVer) <- liftIO $ IORef.readIORef gCtxMapRef
   execPlanE <- runExceptT $ E.getResolvedExecPlan pgExecCtx
-               planCache userInfo sqlGenCtx enableAL sc scVer q
+               planCache userInfo sqlGenCtx enableAL sc scVer (q, reqParsed)
   execPlan <- either (withComplete . preExecErr requestId) return execPlanE
-  let execCtx = E.ExecutionCtx logger sqlGenCtx pgExecCtx
-                planCache sc scVer httpMgr enableAL
+  let execCtx = E.ExecutionCtx logger sqlGenCtx pgExecCtx planCache sc scVer httpMgr enableAL
 
   case execPlan of
     E.GExPHasura resolvedOp ->
@@ -291,7 +294,7 @@ onStart serverEnv wsConn (StartMsg opId q) = catchAndIgnore $ do
       runRemoteGQ execCtx requestId userInfo reqHdrs opDef rsi
   where
     runHasuraGQ :: RequestId -> GQLReqUnparsed -> UserInfo -> E.ExecOp
-                -> ExceptT () IO ()
+                -> ExceptT () m ()
     runHasuraGQ reqId query userInfo = \case
       E.ExOpQuery opTx genSql ->
         execQueryOrMut reqId query genSql $ runLazyTx' pgExecCtx opTx
@@ -314,9 +317,10 @@ onStart serverEnv wsConn (StartMsg opId q) = catchAndIgnore $ do
       either (postExecErr reqId) sendSuccResp resp
       sendCompleted (Just reqId)
 
-    runRemoteGQ :: E.ExecutionCtx -> RequestId -> UserInfo -> [H.Header]
-                -> G.TypedOperationDefinition -> RemoteSchemaInfo
-                -> ExceptT () IO ()
+    runRemoteGQ
+      :: E.ExecutionCtx -> RequestId -> UserInfo -> [H.Header]
+      -> G.TypedOperationDefinition -> RemoteSchemaInfo
+      -> ExceptT () m ()
     runRemoteGQ execCtx reqId userInfo reqHdrs opDef rsi = do
       when (G._todType opDef == G.OperationTypeSubscription) $
         withComplete $ preExecErr reqId $
@@ -362,7 +366,7 @@ onStart serverEnv wsConn (StartMsg opId q) = catchAndIgnore $ do
       logOpEv (ODProtoErr e) Nothing
 
     sendCompleted reqId = do
-      sendMsg wsConn $ SMComplete $ CompletionMsg opId
+      liftIO $ sendMsg wsConn $ SMComplete $ CompletionMsg opId
       logOpEv ODCompleted reqId
 
     postExecErr reqId qErr = do
@@ -384,7 +388,7 @@ onStart serverEnv wsConn (StartMsg opId q) = catchAndIgnore $ do
       sendMsg wsConn $ SMData $ DataMsg opId $
         GRHasura $ GQSuccess $ encJToLBS encJson
 
-    withComplete :: ExceptT () IO () -> ExceptT () IO a
+    withComplete :: ExceptT () m () -> ExceptT () m a
     withComplete action = do
       action
       sendCompleted Nothing
@@ -395,11 +399,11 @@ onStart serverEnv wsConn (StartMsg opId q) = catchAndIgnore $ do
       WS.sendMsg wsConn $ encodeServerMsg $ SMData $
         DataMsg opId (GRHasura resp)
 
-    catchAndIgnore :: ExceptT () IO () -> IO ()
+    catchAndIgnore :: ExceptT () m () -> m ()
     catchAndIgnore m = void $ runExceptT m
 
 onMessage
-  :: (MonadIO m, UserAuthentication m)
+  :: (MonadIO m, UserAuthentication m, GQLApiAuthorization m)
   => AuthMode
   -> WSServerEnv
   -> WSConn -> BL.ByteString -> m ()
@@ -414,7 +418,7 @@ onMessage authMode serverEnv wsConn msgRaw =
       CMConnInit params -> onConnInit (_wseLogger serverEnv)
                            (_wseHManager serverEnv)
                            wsConn authMode params
-      CMStart startMsg  -> liftIO $ onStart serverEnv wsConn startMsg
+      CMStart startMsg  -> onStart serverEnv wsConn startMsg
       CMStop stopMsg    -> liftIO $ onStop serverEnv wsConn stopMsg
       CMConnTerm        -> liftIO $ WS.closeConn wsConn "GQL_CONNECTION_TERMINATE received"
   where
@@ -534,6 +538,7 @@ createWSServerApp
      , MC.MonadBaseControl IO m
      , LA.Forall (LA.Pure m)
      , UserAuthentication m
+     , GQLApiAuthorization m
      )
   => AuthMode
   -> WSServerEnv
