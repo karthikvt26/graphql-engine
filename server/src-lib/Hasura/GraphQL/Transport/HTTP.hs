@@ -17,7 +17,7 @@ import           Hasura.GraphQL.Transport.HTTP.Protocol
 import           Hasura.Prelude
 import           Hasura.RQL.Types
 import           Hasura.Server.Context
-import           Hasura.Server.Utils                    (RequestId)
+import           Hasura.Server.Utils                    (IpAddress, RequestId)
 
 import qualified Database.PG.Query                      as Q
 import qualified Hasura.GraphQL.Execute                 as E
@@ -27,9 +27,10 @@ import qualified Hasura.Logging                         as L
 class Monad m => GQLApiAuthorization m where
   authorizeGQLApi
     :: UserInfo
-    -> [N.Header]
-    -- ^ request headers
+    -> ([N.Header], IpAddress)
+    -- ^ request headers and IP address
     -> GQLReqUnparsed
+    -- ^ the unparsed GraphQL query string and related object
     -> m (Either QErr GQLReqParsed)
 
 runGQ

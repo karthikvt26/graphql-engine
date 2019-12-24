@@ -204,6 +204,7 @@ library
                      , Hasura.Server.Version
                      , Hasura.Server.Logging
                      , Hasura.Server.Context
+                     , Hasura.Server.Config
                      , Hasura.Server.Migrate
                      , Hasura.Server.Compression
                      , Hasura.Server.PGDump
@@ -228,7 +229,6 @@ library
                      , Hasura.Server.CheckUpdates
                      , Hasura.Server.Telemetry
                      , Hasura.Server.SchemaUpdate
-                     , Hasura.Server.Config
                      , Hasura.Server.Migrate.Version
                      , Hasura.Server.Auth.JWT.Internal
                      , Hasura.Server.Auth.JWT.Logging
@@ -347,6 +347,7 @@ library
                      , Hasura.SQL.Types
                      , Hasura.SQL.Value
                      , Network.URI.Extended
+                     , Network.Wai.Handler.WebSockets.Custom
 
 executable graphql-engine
   import: common-all, common-exe

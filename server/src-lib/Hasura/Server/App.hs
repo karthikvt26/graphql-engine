@@ -27,7 +27,7 @@ import qualified Database.PG.Query                      as Q
 import qualified Network.HTTP.Client                    as HTTP
 import qualified Network.HTTP.Types                     as HTTP
 import qualified Network.Wai                            as Wai
-import qualified Network.Wai.Handler.WebSockets         as WS
+import qualified Network.Wai.Handler.WebSockets.Custom  as WSC
 import qualified Network.WebSockets                     as WS
 import qualified System.Metrics                         as EKG
 import qualified System.Metrics.Json                    as EKG
@@ -88,10 +88,11 @@ data ServerCtx
 
 data HandlerCtx
   = HandlerCtx
-  { hcServerCtx  :: !ServerCtx
-  , hcUser       :: !UserInfo
-  , hcReqHeaders :: ![HTTP.Header]
-  , hcRequestId  :: !RequestId
+  { hcServerCtx       :: !ServerCtx
+  , hcUser            :: !UserInfo
+  , hcReqHeaders      :: ![HTTP.Header]
+  , hcSourceIpAddress :: !IpAddress
+  , hcRequestId       :: !RequestId
   }
 
 type Handler m = ExceptT QErr (ReaderT HandlerCtx m)
@@ -208,6 +209,7 @@ mkSpockAction serverCtx qErrEncoder qErrModifier apiHandler = do
     let headers = Wai.requestHeaders req
         authMode = scAuthMode serverCtx
         manager = scManager serverCtx
+        ipAddress = getSourceFromFallback req
 
     requestId <- getRequestId headers
 
@@ -215,7 +217,7 @@ mkSpockAction serverCtx qErrEncoder qErrModifier apiHandler = do
     userInfo  <- either (logErrorAndResp Nothing requestId req (Left reqBody) False headers . qErrModifier)
                  return userInfoE
 
-    let handlerState = HandlerCtx serverCtx userInfo headers requestId
+    let handlerState = HandlerCtx serverCtx userInfo headers ipAddress requestId
         curRole = userRole userInfo
 
     t1 <- liftIO Clock.getCurrentTime -- for measuring response time purposes
@@ -308,9 +310,10 @@ v1Alpha1GQHandler
 v1Alpha1GQHandler query = do
   userInfo <- asks hcUser
   reqHeaders <- asks hcReqHeaders
+  ipAddress <- asks hcSourceIpAddress
   manager <- scManager . hcServerCtx <$> ask
   scRef <- scCacheRef . hcServerCtx <$> ask
-  res <- lift $ lift $ GH.authorizeGQLApi userInfo reqHeaders query
+  res <- lift $ lift $ GH.authorizeGQLApi userInfo (reqHeaders, ipAddress) query
   reqParsed <- either throwError return res
   (sc, scVer) <- liftIO $ readIORef $ _scrCache scRef
   pgExecCtx <- scPGExecCtx . hcServerCtx <$> ask
@@ -451,19 +454,32 @@ mkWaiApp
      , LA.Forall (LA.Pure m)
      )
   => Q.TxIsolation
+  -- ^ postgres transaction isolation to be used in the entire app
   -> L.Logger L.Hasura
+  -- ^ a 'L.Hasura' specific logger
   -> SQLGenCtx
   -> Bool
+  -- ^ is AllowList enabled - TODO: change this boolean to sumtype
   -> Q.PGPool
+  -- ^ the postgres connection pool
   -> Q.ConnInfo
+  -- ^ postgres connection parameters
   -> HTTP.Manager
+  -- ^ HTTP manager so that we can re-use sessions
   -> AuthMode
+  -- ^ 'AuthMode' in which the application should operate in
   -> CorsConfig
   -> Bool
+  -- ^ is console enabled - TODO: better type
   -> Maybe Text
+  -- ^ filepath to the console static assets directory - TODO: better type
   -> Bool
+  -- ^ is telemetry enabled
   -> InstanceId
+  -- ^ each application, when run, gets an 'InstanceId'. this is used at various places including
+  -- schema syncing and telemetry
   -> S.HashSet API
+  -- ^ set of the enabled 'API's
   -> EL.LiveQueriesOptions
   -> E.PlanCacheOptions
   -> m HasuraApp
@@ -515,13 +531,14 @@ mkWaiApp isoLevel logger sqlGenCtx enableAL pool ci httpManager mode corsCfg ena
       liftIO $ EKG.registerCounter "ekg.server_timestamp_ms" getTimeMs ekgStore
 
     spockApp <- liftWithStateless $ \lowerIO ->
-      Spock.spockAsApp $ Spock.spockT lowerIO $ httpApp corsCfg serverCtx enableConsole consoleAssetsDir enableTelemetry
+      Spock.spockAsApp $ Spock.spockT lowerIO $
+        httpApp corsCfg serverCtx enableConsole consoleAssetsDir enableTelemetry
 
     let wsServerApp = WS.createWSServerApp mode wsServerEnv
         stopWSServer = WS.stopWSServerApp wsServerEnv
 
     waiApp <- liftWithStateless $ \lowerIO ->
-      pure $ WS.websocketsOr WS.defaultConnectionOptions (lowerIO . wsServerApp) spockApp
+      pure $ WSC.websocketsOr WS.defaultConnectionOptions (\ip pc -> lowerIO $ wsServerApp ip pc) spockApp
 
     return $ HasuraApp waiApp schemaCacheRef cacheBuiltTime stopWSServer
   where

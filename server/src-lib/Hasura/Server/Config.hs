@@ -1,5 +1,6 @@
 module Hasura.Server.Config
   ( runGetConfig
+  , ServerConfig (..)
   )
   where
 
@@ -32,11 +33,11 @@ $(deriveToJSON (aesonDrop 4 snakeCase) ''ServerConfig)
 
 runGetConfig ::  AuthMode -> ServerConfig
 runGetConfig am = ServerConfig
-    V.currentVersion
-    (isAdminSecretSet am)
-    (isAuthHookSet am)
-    (isJWTSet am)
-    (getJWTInfo am)
+  V.currentVersion
+  (isAdminSecretSet am)
+  (isAuthHookSet am)
+  (isJWTSet am)
+  (getJWTInfo am)
 
 isAdminSecretSet :: AuthMode -> Bool
 isAdminSecretSet = \case
