@@ -148,6 +148,7 @@ const defaultModifyState = {
 };
 
 const defaultState = {
+  schemaFilter: [],
   columnDataTypes: [], // To store list of column types supported by postgres
   columnDataTypeInfoErr: null,
   columnDefaultFunctions: {},

@@ -33,6 +33,7 @@ import {
   fetchDataInit,
   fetchFunctionInit,
   UPDATE_CURRENT_SCHEMA,
+  SET_FILTER_SCHEMA,
   updateSchemaInfo,
   // ADMIN_SECRET_ERROR,
 } from './DataActions';
@@ -135,7 +136,16 @@ const makeDataRouter = (
   );
 };
 
-const dataRouterUtils = (connect, store, composeOnEnterHooks) => {
+/*
+ * allowedSchemas : []
+ * */
+
+const dataRouterUtils = (
+  connect,
+  store,
+  composeOnEnterHooks,
+  { allowedSchemas }
+) => {
   const requireSchema = (nextState, replaceState, cb) => {
     // check if admin secret is available in localstorage. if so use that.
     // if localstorage admin secret didn't work, redirect to login (meaning value has changed)
@@ -157,13 +167,22 @@ const dataRouterUtils = (connect, store, composeOnEnterHooks) => {
       currentSchema === undefined ||
       currentSchema === ''
     ) {
-      currentSchema = 'public';
+      if (allowedSchemas && allowedSchemas.length > 0) {
+        currentSchema = allowedSchemas[0];
+      } else {
+        currentSchema = 'public';
+      }
     }
+    const filterSchema = allowedSchemas || [];
 
     Promise.all([
       store.dispatch({
         type: UPDATE_CURRENT_SCHEMA,
         currentSchema: currentSchema,
+      }),
+      store.dispatch({
+        type: SET_FILTER_SCHEMA,
+        data: filterSchema,
       }),
       store.dispatch(fetchDataInit()),
       store.dispatch(updateSchemaInfo()),
