@@ -484,11 +484,10 @@ onConnInit
   => L.Logger L.Hasura -> H.Manager -> WSConn -> AuthMode -> Maybe ConnParams -> m ()
 onConnInit logger manager wsConn authMode connParamsM = do
   connState <- liftIO (STM.readTVarIO (_wscUser $ WS.getData wsConn))
-  case connState of
-    CSInitError e -> unexpectedInitError e
-    CSInitialised _ -> unexpectedInitError "unexpected initialised state on connection_init"
-    CSNotInitialised hdrs ipAddress -> do
-      let headers = mkHeaders hdrs
+  case getIpAddress connState of
+    Left err -> unexpectedInitError err
+    Right ipAddress -> do
+      let headers = mkHeaders connState
       res <- resolveUserInfo logger manager headers authMode
       case res of
         Left e  -> do
@@ -510,14 +509,22 @@ onConnInit logger manager wsConn authMode connParamsM = do
       logWSEvent logger wsConn $ EConnErr connErr
       sendMsg wsConn $ SMConnErr connErr
 
-    mkHeaders hdrs =
-      paramHeaders ++ unWsHeaders hdrs
+    mkHeaders connState =
+      paramHeaders ++ getClientHeaders connState
 
     paramHeaders =
       [ (CI.mk $ TE.encodeUtf8 h, TE.encodeUtf8 v)
       | (h, v) <- maybe [] Map.toList $ connParamsM >>= _cpHeaders
       ]
 
+    getClientHeaders = \case
+      CSNotInitialised hdrs _ -> unWsHeaders hdrs
+      _                       -> []
+
+    getIpAddress = \case
+      CSNotInitialised _ ip -> return ip
+      CSInitialised WsClientState{..} -> return wscsIpAddress
+      CSInitError e -> Left e
 
 onClose
   :: MonadIO m
