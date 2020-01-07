@@ -283,3 +283,10 @@ showSockAddr (SockAddrInet6 _ _ (0,0,0x0000ffff,addr4) _) = showIPv4 addr4 False
 showSockAddr (SockAddrInet6 _ _ (0,0,0,1) _)              = "::1"
 showSockAddr (SockAddrInet6 _ _ addr6 _)                  = showIPv6 addr6
 showSockAddr _                                            = "unknownSocket"
+
+withElapsedTime :: MonadIO m => m a -> m (NominalDiffTime, a)
+withElapsedTime ma = do
+  t1 <- liftIO getCurrentTime
+  a <- ma
+  t2 <- liftIO getCurrentTime
+  return (diffUTCTime t2 t1, a)

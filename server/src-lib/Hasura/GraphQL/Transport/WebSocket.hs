@@ -44,12 +44,14 @@ import           Hasura.Server.Auth                          (AuthMode, UserAuth
 import           Hasura.Server.Context
 import           Hasura.Server.Cors
 import           Hasura.Server.Utils                         (IpAddress (..), RequestId,
-                                                              diffTimeToMicro, getRequestId)
+                                                              diffTimeToMicro, getRequestId,
+                                                              withElapsedTime)
 
 import           Hasura.GraphQL.Transport.HTTP               (GQLApiAuthorization (..))
 
 import qualified Hasura.GraphQL.Execute                      as E
 import qualified Hasura.GraphQL.Execute.LiveQuery            as LQ
+import qualified Hasura.GraphQL.Execute.LiveQuery.Poll       as LQ
 import qualified Hasura.GraphQL.Transport.WebSocket.Server   as WS
 import qualified Hasura.Logging                              as L
 
@@ -100,9 +102,20 @@ data WSConnData
 type WSServer = WS.WSServer WSConnData
 
 type WSConn = WS.WSConn WSConnData
+
 sendMsg :: (MonadIO m) => WSConn -> ServerMsg -> m ()
-sendMsg wsConn =
-  liftIO . WS.sendMsg wsConn . encodeServerMsg
+sendMsg wsConn msg =
+  liftIO $ WS.sendMsg wsConn $ WS.WSQueueResponse (encodeServerMsg msg) Nothing
+
+sendMsgWithMetadata :: (MonadIO m) => WSConn -> ServerMsg -> LQ.LiveQueryMetadata -> m ()
+sendMsgWithMetadata wsConn msg (LQ.LiveQueryMetadata execTime) =
+  liftIO $ WS.sendMsg wsConn $ WS.WSQueueResponse bs wsInfo
+  where
+    bs = encodeServerMsg msg
+    wsInfo = Just $ WS.WSEventInfo
+      { WS._wseiQueryExecutionTime = Just $ realToFrac execTime
+      , WS._wseiResponseSize = Just $ BL.length bs
+      }
 
 data OpDetail
   = ODStarted
@@ -325,8 +338,9 @@ onStart serverEnv wsConn (StartMsg opId q) = catchAndIgnore $ do
       logOpEv ODStarted (Just reqId)
       -- log the generated SQL and the graphql query
       L.unLogger logger $ QueryLog query genSql reqId
-      resp <- liftIO $ runExceptT action
-      either (postExecErr reqId) sendSuccResp resp
+      (dt, resp) <- withElapsedTime $ liftIO $ runExceptT action
+      let lqMeta = LQ.LiveQueryMetadata dt
+      either (postExecErr reqId) (`sendSuccResp` lqMeta) resp
       sendCompleted (Just reqId)
 
     runRemoteGQ
@@ -339,15 +353,16 @@ onStart serverEnv wsConn (StartMsg opId q) = catchAndIgnore $ do
         err400 NotSupported "subscription to remote server is not supported"
 
       -- if it's not a subscription, use HTTP to execute the query on the remote
-      resp <- runExceptT $ flip runReaderT execCtx $
+      (dt, resp) <- withElapsedTime $ runExceptT $ flip runReaderT execCtx $
               E.execRemoteGQ reqId userInfo reqHdrs q rsi opDef
-      either (postExecErr reqId) (sendRemoteResp reqId . _hrBody) resp
+      let ocMeta = LQ.LiveQueryMetadata dt
+      either (postExecErr reqId) (\val -> sendRemoteResp reqId (_hrBody val) ocMeta) resp
       sendCompleted (Just reqId)
 
-    sendRemoteResp reqId resp =
+    sendRemoteResp reqId resp meta =
       case J.eitherDecodeStrict (encJToBS resp) of
         Left e    -> postExecErr reqId $ invalidGqlErr $ T.pack e
-        Right res -> sendMsg wsConn $ SMData $ DataMsg opId (GRRemote res)
+        Right res -> sendMsgWithMetadata wsConn (SMData $ DataMsg opId $ GRRemote res) meta
 
     invalidGqlErr err = err500 Unexpected $
       "Failed parsing GraphQL response from remote: " <> err
@@ -373,8 +388,8 @@ onStart serverEnv wsConn (StartMsg opId q) = catchAndIgnore $ do
 
     sendStartErr e = do
       let errFn = getErrFn errRespTy
-      sendMsg wsConn $ SMErr $ ErrorMsg opId $ errFn False $
-        err400 StartFailed e
+      sendMsg wsConn $
+        SMErr $ ErrorMsg opId $ errFn False $ err400 StartFailed e
       logOpEv (ODProtoErr e) Nothing
 
     sendCompleted reqId = do
@@ -384,8 +399,8 @@ onStart serverEnv wsConn (StartMsg opId q) = catchAndIgnore $ do
     postExecErr reqId qErr = do
       let errFn = getErrFn errRespTy
       logOpEv (ODQueryErr qErr) (Just reqId)
-      sendMsg wsConn $ SMData $ DataMsg opId $
-        GRHasura $ GQExecError $ pure $ errFn False qErr
+      sendMsg wsConn $ SMData $
+        DataMsg opId $ GRHasura $ GQExecError $ pure $ errFn False qErr
 
     -- why wouldn't pre exec error use graphql response?
     preExecErr reqId qErr = do
@@ -394,11 +409,11 @@ onStart serverEnv wsConn (StartMsg opId q) = catchAndIgnore $ do
       let err = case errRespTy of
             ERTLegacy           -> errFn False qErr
             ERTGraphqlCompliant -> J.object ["errors" J..= [errFn False qErr]]
-      sendMsg wsConn $ SMErr $ ErrorMsg opId err
+      sendMsg wsConn (SMErr $ ErrorMsg opId err)
 
     sendSuccResp encJson =
-      sendMsg wsConn $ SMData $ DataMsg opId $
-        GRHasura $ GQSuccess $ encJToLBS encJson
+      sendMsgWithMetadata wsConn
+        (SMData $ DataMsg opId $ GRHasura $ GQSuccess $ encJToLBS encJson)
 
     withComplete :: ExceptT () m () -> ExceptT () m a
     withComplete action = do
@@ -407,9 +422,12 @@ onStart serverEnv wsConn (StartMsg opId q) = catchAndIgnore $ do
       throwError ()
 
     -- on change, send message on the websocket
-    liveQOnChange resp =
-      WS.sendMsg wsConn $ encodeServerMsg $ SMData $
-        DataMsg opId (GRHasura resp)
+    liveQOnChange :: LQ.OnChange
+    liveQOnChange (GQSuccess (LQ.LiveQueryResponse bs dTime)) =
+      sendMsgWithMetadata wsConn (SMData $ DataMsg opId $ GRHasura $ GQSuccess bs) $
+        LQ.LiveQueryMetadata dTime
+    liveQOnChange resp = sendMsg wsConn $ SMData $ DataMsg opId $ GRHasura $
+      LQ._lqrPayload <$> resp
 
     catchAndIgnore :: ExceptT () m () -> m ()
     catchAndIgnore m = void $ runExceptT m
