@@ -85,6 +85,9 @@ data Code
   | RemoteSchemaConflicts
   -- Websocket/Subscription errors
   | StartFailed
+  -- API limits related TODO: parameterize this and move this to pro
+  | RateLimitExceeded
+  | DepthLimitExceeded
   deriving (Eq)
 
 instance Show Code where
@@ -123,6 +126,8 @@ instance Show Code where
     RemoteSchemaError     -> "remote-schema-error"
     RemoteSchemaConflicts -> "remote-schema-conflicts"
     StartFailed           -> "start-failed"
+    RateLimitExceeded     -> "rate-limit-exceeded"
+    DepthLimitExceeded    -> "depth-limit-exceeded"
 
 data QErr
   = QErr
