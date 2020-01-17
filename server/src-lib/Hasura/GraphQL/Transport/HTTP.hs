@@ -1,5 +1,6 @@
 module Hasura.GraphQL.Transport.HTTP
   ( runGQ
+  , runGQBatched
   , GQLReq(..)
   , GQLReqUnparsed
   , GQLReqParsed
@@ -42,6 +43,9 @@ runGQ
   -> UserInfo
   -> [N.Header]
   -> (GQLReqUnparsed, GQLReqParsed)
+-- =======
+--   -> GQLReq GQLQueryText
+-- >>>>>>> master
   -> m (HttpResponse EncJSON)
 runGQ reqId userInfo reqHdrs req@(reqUnparsed, _) = do
   E.ExecutionCtx _ sqlGenCtx pgExecCtx planCache sc scVer _ enableAL <- ask
@@ -51,6 +55,34 @@ runGQ reqId userInfo reqHdrs req@(reqUnparsed, _) = do
       flip HttpResponse Nothing <$> runHasuraGQ reqId reqUnparsed userInfo resolvedOp
     E.GExPRemote rsi opDef  ->
       E.execRemoteGQ reqId userInfo reqHdrs reqUnparsed rsi opDef
+
+runGQBatched
+  :: ( MonadIO m
+     , MonadError QErr m
+     , MonadReader E.ExecutionCtx m
+     )
+  => RequestId
+  -> UserInfo
+  -> [N.Header]
+  -> (GQLBatchedReqs GQLQueryText, GQLBatchedReqs GQLExecDoc)
+  -> m (HttpResponse EncJSON)
+runGQBatched reqId userInfo reqHdrs reqs =
+  case reqs of
+    (GQLSingleRequest req, GQLSingleRequest reqParsed) ->
+      runGQ reqId userInfo reqHdrs (req, reqParsed)
+    (GQLBatchedReqs batch, GQLBatchedReqs batchParsed) -> do
+      -- It's unclear what we should do if we receive multiple
+      -- responses with distinct headers, so just do the simplest thing
+      -- in this case, and don't forward any.
+      let removeHeaders =
+            flip HttpResponse Nothing
+            . encJFromList
+            . map (either (encJFromJValue . encodeGQErr False) _hrBody)
+          try = flip catchError (pure . Left) . fmap Right
+      fmap removeHeaders $
+        traverse (try . runGQ reqId userInfo reqHdrs) $ zip batch batchParsed
+    -- TODO: is this correct?
+    _ -> throw500 "runGQBatched received different kinds of GQLBatchedReqs"
 
 runHasuraGQ
   :: ( MonadIO m

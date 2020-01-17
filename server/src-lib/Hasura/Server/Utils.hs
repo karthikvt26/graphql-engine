@@ -20,6 +20,7 @@ import qualified Data.ByteString            as B
 import qualified Data.ByteString.Char8      as BS
 import qualified Data.CaseInsensitive       as CI
 import qualified Data.HashSet               as Set
+import qualified Data.List.NonEmpty         as NE
 import qualified Data.Text                  as T
 import qualified Data.Text.Encoding         as TE
 import qualified Data.Text.IO               as TI
@@ -216,6 +217,14 @@ instance FromJSON APIVersion where
       2 -> return VIVersion2
       i -> fail $ "expected 1 or 2, encountered " ++ show i
 
+englishList :: NonEmpty Text -> Text
+englishList = \case
+  one :| []    -> one
+  one :| [two] -> one <> " and " <> two
+  several      ->
+    let final :| initials = NE.reverse several
+    in T.intercalate ", " (reverse initials) <> ", and " <> final
+
 makeReasonMessage :: [a] -> (a -> Text) -> Text
 makeReasonMessage errors showError =
   case errors of
@@ -283,3 +292,10 @@ showSockAddr (SockAddrInet6 _ _ (0,0,0x0000ffff,addr4) _) = showIPv4 addr4 False
 showSockAddr (SockAddrInet6 _ _ (0,0,0,1) _)              = "::1"
 showSockAddr (SockAddrInet6 _ _ addr6 _)                  = showIPv6 addr6
 showSockAddr _                                            = "unknownSocket"
+
+withElapsedTime :: MonadIO m => m a -> m (NominalDiffTime, a)
+withElapsedTime ma = do
+  t1 <- liftIO getCurrentTime
+  a <- ma
+  t2 <- liftIO getCurrentTime
+  return (diffUTCTime t2 t1, a)
