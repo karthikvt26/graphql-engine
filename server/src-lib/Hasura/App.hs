@@ -32,7 +32,7 @@ import qualified Text.Mustache.Compile                  as M
 import           Hasura.Db
 import           Hasura.EncJSON
 import           Hasura.Events.Lib
-import           Hasura.GraphQL.Transport.HTTP          (GQLApiAuthorization (..))
+import           Hasura.GraphQL.Execute                 (GQLApiAuthorization (..))
 import           Hasura.GraphQL.Transport.HTTP.Protocol (toParsed)
 import           Hasura.Logging
 import           Hasura.Prelude

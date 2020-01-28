@@ -42,7 +42,7 @@ runApp (HGEOptionsG rci hgeCmd) =
       (InitCtx{..}, _) <- initialiseCtx hgeCmd rci
       queryBs <- liftIO BL.getContents
       let sqlGenCtx = SQLGenCtx False
-      res <- runAsAdmin _icPgPool sqlGenCtx _icHttpManager do
+      res <- runAsAdmin _icPgPool sqlGenCtx _icHttpManager $ do
         schemaCache <- buildRebuildableSchemaCache
         execQuery queryBs
           & runHasSystemDefinedT (SystemDefined False)

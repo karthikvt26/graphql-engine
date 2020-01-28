@@ -32,7 +32,6 @@ import qualified ListT
 
 import           Hasura.EncJSON
 import           Hasura.GraphQL.Logging
-import           Hasura.GraphQL.Transport.HTTP               (GQLApiAuthorization (..))
 import           Hasura.GraphQL.Transport.HTTP.Protocol
 import           Hasura.GraphQL.Transport.WebSocket.Protocol
 import           Hasura.Prelude
@@ -75,7 +74,7 @@ data WsClientState
   , wscsReqHeaders :: ![H.Header]
   -- ^ headers from the client (in conn params) to forward to the remote schema
   , wscsIpAddress  :: !IpAddress
-  -- ^ IP address required for the 'GQLApiAuthorization' effect
+  -- ^ IP address required for 'GQLApiAuthorization'
   }
 
 data WSConnState
@@ -290,7 +289,7 @@ onConn (L.Logger logger) corsPolicy wsId requestHead ipAddress = do
             <> "HASURA_GRAPHQL_WS_READ_COOKIE to force read cookie when CORS is disabled."
 
 
-onStart :: forall m. (HasVersion, MonadIO m, GQLApiAuthorization m)
+onStart :: forall m. (HasVersion, MonadIO m, E.GQLApiAuthorization m)
         => WSServerEnv -> WSConn -> StartMsg -> m ()
 onStart serverEnv wsConn (StartMsg opId q) = catchAndIgnore $ do
 
@@ -310,7 +309,7 @@ onStart serverEnv wsConn (StartMsg opId q) = catchAndIgnore $ do
       withComplete $ sendStartErr e
 
   requestId <- getRequestId reqHdrs
-  reqParsedE <- lift $ authorizeGQLApi userInfo (reqHdrs, ipAddress) q
+  reqParsedE <- lift $ E.authorizeGQLApi userInfo (reqHdrs, ipAddress) q
   reqParsed <- either (withComplete . preExecErr requestId) return reqParsedE
   -- (sc, scVer) <- liftIO $ IORef.readIORef gCtxMapRef
   (sc, scVer) <- liftIO getSchemaCache
@@ -440,7 +439,7 @@ onStart serverEnv wsConn (StartMsg opId q) = catchAndIgnore $ do
     catchAndIgnore m = void $ runExceptT m
 
 onMessage
-  :: (HasVersion, MonadIO m, UserAuthentication m, GQLApiAuthorization m)
+  :: (HasVersion, MonadIO m, UserAuthentication m, E.GQLApiAuthorization m)
   => AuthMode
   -> WSServerEnv
   -> WSConn -> BL.ByteString -> m ()
@@ -590,7 +589,7 @@ createWSServerApp
      , MC.MonadBaseControl IO m
      , LA.Forall (LA.Pure m)
      , UserAuthentication m
-     , GQLApiAuthorization m
+     , E.GQLApiAuthorization m
      )
   => AuthMode
   -> WSServerEnv

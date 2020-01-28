@@ -187,9 +187,9 @@ buildQCtx = do
   sqlGenCtx <- scSQLGenCtx . hcServerCtx <$> ask
   return $ QCtx userInfo cache sqlGenCtx
 
--- | Typeclass representing the metadata API authorization effect
+-- | Authorization rules to be applied on the metadata (`/v1/query`) API
 class MetadataApiAuthorization m where
-  authorizeMetadataApi :: RQLQuery -> UserInfo -> Handler m ()
+  authorizeMetadataApi :: HasVersion => RQLQuery -> UserInfo -> Handler m ()
 
 -- | The config API (/v1alpha1/config) handler
 class Monad m => ConfigApiHandler m where
@@ -305,7 +305,7 @@ v1QueryHandler query = do
       runQuery pgExecCtx instanceId userInfo schemaCache httpMgr sqlGenCtx (SystemDefined False) query
 
 v1Alpha1GQHandler
-  :: (HasVersion, GH.GQLApiAuthorization m, MonadIO m)
+  :: (HasVersion, E.GQLApiAuthorization m, MonadIO m)
   => GH.GQLBatchedReqs GH.GQLQueryText -> Handler m (HttpResponse EncJSON)
 v1Alpha1GQHandler query = do
   userInfo <- asks hcUser
@@ -314,14 +314,14 @@ v1Alpha1GQHandler query = do
   manager <- scManager . hcServerCtx <$> ask
   scRef <- scCacheRef . hcServerCtx <$> ask
 
-  -- apply the 'GQLApiAuthorization' effect and get back parsed GQL queries
+  -- apply the 'E.GQLApiAuthorization' effect and get back parsed GQL queries
   -- TODO: is this optimal? is there any better way of doing it?
   res <- case query of
     GH.GQLSingleRequest req -> do
-      r <- lift $ lift $ GH.authorizeGQLApi userInfo (reqHeaders, ipAddress) req
+      r <- lift $ lift $ E.authorizeGQLApi userInfo (reqHeaders, ipAddress) req
       return $ GH.GQLSingleRequest <$> r
     GH.GQLBatchedReqs reqs -> do
-      r <- lift $ lift $ traverse (GH.authorizeGQLApi userInfo (reqHeaders, ipAddress)) reqs
+      r <- lift $ lift $ traverse (E.authorizeGQLApi userInfo (reqHeaders, ipAddress)) reqs
       return $ fmap GH.GQLBatchedReqs $ sequence r
 
   reqParsed <- either throwError return res
@@ -337,7 +337,7 @@ v1Alpha1GQHandler query = do
   flip runReaderT execCtx $ GH.runGQBatched requestId userInfo reqHeaders (query, reqParsed)
 
 v1GQHandler
-  :: (HasVersion, GH.GQLApiAuthorization m, MonadIO m)
+  :: (HasVersion, E.GQLApiAuthorization m, MonadIO m)
   => GH.GQLBatchedReqs GH.GQLQueryText
   -> Handler m (HttpResponse EncJSON)
 v1GQHandler = v1Alpha1GQHandler
@@ -463,7 +463,7 @@ mkWaiApp
      , HttpLog m
      , UserAuthentication m
      , MetadataApiAuthorization m
-     , GH.GQLApiAuthorization m
+     , E.GQLApiAuthorization m
      , ConfigApiHandler m
      , LA.Forall (LA.Pure m)
      )
@@ -567,7 +567,7 @@ httpApp
      , HttpLog m
      , UserAuthentication m
      , MetadataApiAuthorization m
-     , GH.GQLApiAuthorization m
+     , E.GQLApiAuthorization m
      , ConfigApiHandler m
      )
   => CorsConfig

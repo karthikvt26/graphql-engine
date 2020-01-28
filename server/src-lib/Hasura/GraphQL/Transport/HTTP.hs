@@ -7,10 +7,9 @@ module Hasura.GraphQL.Transport.HTTP
   , GQLExecDoc(..)
   , OperationName(..)
   , GQLQueryText(..)
-  , GQLApiAuthorization (..)
   ) where
 
-import qualified Network.HTTP.Types                     as N
+import qualified Network.HTTP.Types                     as HTTP
 
 import           Hasura.EncJSON
 import           Hasura.GraphQL.Logging
@@ -18,22 +17,12 @@ import           Hasura.GraphQL.Transport.HTTP.Protocol
 import           Hasura.Prelude
 import           Hasura.RQL.Types
 import           Hasura.Server.Context
-import           Hasura.Server.Utils                    (IpAddress, RequestId)
+import           Hasura.Server.Utils                    (RequestId)
 import           Hasura.Server.Version                  (HasVersion)
 
 import qualified Database.PG.Query                      as Q
 import qualified Hasura.GraphQL.Execute                 as E
 import qualified Hasura.Logging                         as L
-
--- | Typeclass representing the GraphQL API (over both HTTP & Websockets) authorization effect
-class Monad m => GQLApiAuthorization m where
-  authorizeGQLApi
-    :: UserInfo
-    -> ([N.Header], IpAddress)
-    -- ^ request headers and IP address
-    -> GQLReqUnparsed
-    -- ^ the unparsed GraphQL query string and related object
-    -> m (Either QErr GQLReqParsed)
 
 runGQ
   :: ( HasVersion
@@ -43,11 +32,8 @@ runGQ
      )
   => RequestId
   -> UserInfo
-  -> [N.Header]
+  -> [HTTP.Header]
   -> (GQLReqUnparsed, GQLReqParsed)
--- =======
---   -> GQLReq GQLQueryText
--- >>>>>>> master
   -> m (HttpResponse EncJSON)
 runGQ reqId userInfo reqHdrs req@(reqUnparsed, _) = do
   E.ExecutionCtx _ sqlGenCtx pgExecCtx planCache sc scVer _ enableAL <- ask
@@ -66,7 +52,7 @@ runGQBatched
      )
   => RequestId
   -> UserInfo
-  -> [N.Header]
+  -> [HTTP.Header]
   -> (GQLBatchedReqs GQLQueryText, GQLBatchedReqs GQLExecDoc)
   -> m (HttpResponse EncJSON)
 runGQBatched reqId userInfo reqHdrs reqs =

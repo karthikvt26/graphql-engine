@@ -18,6 +18,7 @@ module Hasura.GraphQL.Execute
   , EP.dumpPlanCache
 
   , ExecutionCtx(..)
+  , GQLApiAuthorization(..)
   ) where
 
 import           Control.Exception                      (try)
@@ -32,7 +33,7 @@ import qualified Data.String.Conversions                as CS
 import qualified Data.Text                              as T
 import qualified Language.GraphQL.Draft.Syntax          as G
 import qualified Network.HTTP.Client                    as HTTP
-import qualified Network.HTTP.Types                     as N
+import qualified Network.HTTP.Types                     as HTTP
 import qualified Network.Wreq                           as Wreq
 
 import           Hasura.EncJSON
@@ -47,7 +48,7 @@ import           Hasura.Prelude
 import           Hasura.RQL.DDL.Headers
 import           Hasura.RQL.Types
 import           Hasura.Server.Context
-import           Hasura.Server.Utils                    (RequestId, filterRequestHeaders)
+import           Hasura.Server.Utils                    (IpAddress, RequestId, filterRequestHeaders)
 import           Hasura.Server.Version                  (HasVersion)
 
 import qualified Hasura.GraphQL.Execute.LiveQuery       as EL
@@ -80,6 +81,19 @@ data ExecutionCtx
   , _ecxHttpManager     :: !HTTP.Manager
   , _ecxEnableAllowList :: !Bool
   }
+
+-- | Typeclass representing rules/authorization to be enforced on the GraphQL API (over both HTTP & Websockets)
+-- | This is separate from the permissions system. Permissions apply on GraphQL related objects, but
+-- this is applicable on other general things
+class Monad m => GQLApiAuthorization m where
+  authorizeGQLApi
+    :: UserInfo
+    -> ([HTTP.Header], IpAddress)
+    -- ^ request headers and IP address
+    -> GQLReqUnparsed
+    -- ^ the unparsed GraphQL query string (and related values)
+    -> m (Either QErr GQLReqParsed)
+    -- ^ after enforcing authorization, it should return the parsed GraphQL query
 
 -- Enforces the current limitation
 assertSameLocationNodes
@@ -352,7 +366,7 @@ execRemoteGQ
      )
   => RequestId
   -> UserInfo
-  -> [N.Header]
+  -> [HTTP.Header]
   -> GQLReqUnparsed
   -> RemoteSchemaInfo
   -> G.TypedOperationDefinition

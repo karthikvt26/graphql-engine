@@ -225,6 +225,8 @@ library
                      , Hasura.Server.Compression
                      , Hasura.Server.PGDump
 
+                     , Hasura.GraphQL.Execute
+                     , Hasura.GraphQL.Validate
                      , Hasura.GraphQL.Transport.HTTP
 
                      , Hasura.RQL.Types
@@ -320,13 +322,11 @@ library
                      , Hasura.GraphQL.Schema.Mutation.Delete
                      , Hasura.GraphQL.Schema
                      , Hasura.GraphQL.Utils
-                     , Hasura.GraphQL.Validate
                      , Hasura.GraphQL.Validate.Types
                      , Hasura.GraphQL.Validate.Context
                      , Hasura.GraphQL.Validate.Field
                      , Hasura.GraphQL.Validate.InputValue
                      , Hasura.GraphQL.Explain
-                     , Hasura.GraphQL.Execute
                      , Hasura.GraphQL.Execute.Plan
                      , Hasura.GraphQL.Execute.Query
                      , Hasura.GraphQL.Execute.LiveQuery
