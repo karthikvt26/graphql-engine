@@ -12,3 +12,5 @@ coverage
 .idea/*
 test
 **/.tern-port
+packages/
+elm-stuff/

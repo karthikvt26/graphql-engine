@@ -50,6 +50,14 @@ module.exports = {
         type: 'javascript/auto',
       },
       {
+        test: /\.elm$/,
+        exclude: [/elm-stuff/, /node_modules/],
+        loader: 'elm-webpack-loader',
+        options: {
+          debug: true,
+        },
+      },
+      {
         test: /\.jsx?$/,
         exclude: /node_modules/,
         use: 'babel-loader',

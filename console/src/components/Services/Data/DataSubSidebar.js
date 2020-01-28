@@ -45,6 +45,19 @@ class DataSubSidebar extends React.Component {
     });
   }
 
+  tableSearchCustom(v) {
+    this.setState({
+      searchInput: v,
+    });
+  }
+
+  setupPorts(ports) {
+    ports.searchInputChange.subscribe(value => {
+      console.log(value);
+      this.tableSearchCustom(value);
+    });
+  }
+
   render() {
     const styles = require('../../Common/Layout/LeftSubSidebar/LeftSubSidebar.scss');
     const functionSymbol = require('../../Common/Layout/LeftSubSidebar/function.svg');
@@ -204,6 +217,7 @@ class DataSubSidebar extends React.Component {
         addLabel={'Add Table'}
         addTestString={'sidebar-add-table'}
         childListTestString={'table-links'}
+        ports={this.setupPorts.bind(this)}
       >
         {getChildList()}
       </LeftSubSidebar>

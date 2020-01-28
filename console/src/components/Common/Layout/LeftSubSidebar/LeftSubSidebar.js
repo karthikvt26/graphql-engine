@@ -1,21 +1,28 @@
 import React from 'react';
 import { Link } from 'react-router';
 
+import Elm from 'react-elm-components';
+
+import HelloWorld from '../../../../elm/Main.elm';
+
 import Button from '../../Button/Button';
 
 class LeftSubSidebar extends React.Component {
   render() {
+    console.log('HelloWorld');
+    console.log(HelloWorld);
     const styles = require('./LeftSubSidebar.scss');
 
     const {
       showAddBtn,
-      searchInput,
+      // searchInput,
       heading,
       addLink,
       addLabel,
       addTestString,
       children,
       childListTestString,
+      ports,
     } = this.props;
 
     const getAddButton = () => {
@@ -54,8 +61,20 @@ class LeftSubSidebar extends React.Component {
             }
           >
             <i className="fa fa-search" aria-hidden="true" />
+            <Elm src={HelloWorld.Elm.Main} flags={{}} ports={ports} />
+          </div>
+          {/*
+          <div
+            className={
+              styles.sidebarSearch +
+              ' form-group col-xs-12 ' +
+              styles.padd_remove
+            }
+          >
+            <i className="fa fa-search" aria-hidden="true" />
             {searchInput}
           </div>
+          */}
         </div>
         <div>
           <div className={styles.sidebarHeadingWrapper}>

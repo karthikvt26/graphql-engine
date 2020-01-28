@@ -40,6 +40,15 @@ cd console
 npm ci
 ```
 
+### Setting up elm
+
+This setup requires elm cli to be installed
+
+```bash
+elm make
+npm ci
+```
+
 ### Run console development server
 
 Hasura console can be developed in two modes, `server` or `cli` mode. If you are looking to add/tweak functionality related to migrations, check out [Develop with Hasura CLI](#develop-with-hasura-cli-cli-mode), otherwise check out [Develop with Hasura GraphQL engine](#develop-with-hasura-graphql-engine-server-mode).
