@@ -3,30 +3,32 @@ module Main (main) where
 import           Hasura.Prelude
 
 import           Control.Concurrent.MVar
-import           Control.Natural            ((:~>) (..))
-import           Data.Time.Clock            (getCurrentTime)
+import           Control.Natural              ((:~>) (..))
+import           Data.Time.Clock              (getCurrentTime)
 import           Options.Applicative
-import           System.Environment         (getEnvironment)
-import           System.Exit                (exitFailure)
+import           System.Environment           (getEnvironment)
+import           System.Exit                  (exitFailure)
 import           Test.Hspec
 
-import qualified Data.Aeson                 as A
-import qualified Data.ByteString.Lazy.Char8 as BL
-import qualified Database.PG.Query          as Q
-import qualified Network.HTTP.Client        as HTTP
-import qualified Network.HTTP.Client.TLS    as HTTP
-import qualified Test.Hspec.Runner          as Hspec
+import qualified Data.Aeson                   as A
+import qualified Data.ByteString.Lazy.Char8   as BL
+import qualified Database.PG.Query            as Q
+import qualified Network.HTTP.Client          as HTTP
+import qualified Network.HTTP.Client.TLS      as HTTP
+import qualified Test.Hspec.Runner            as Hspec
 
-import           Hasura.Db                  (PGExecCtx (..))
-import           Hasura.RQL.Types           (SQLGenCtx (..), adminUserInfo)
+import           Hasura.Db                    (PGExecCtx (..))
+import           Hasura.RQL.Types             (SQLGenCtx (..), adminUserInfo)
 import           Hasura.RQL.Types.Run
-import           Hasura.Server.Init         (RawConnInfo, mkConnInfo, mkRawConnInfo,
-                                             parseRawConnInfo, runWithEnv)
+import           Hasura.Server.Init           (RawConnInfo, mkConnInfo, mkRawConnInfo,
+                                               parseRawConnInfo, runWithEnv)
 import           Hasura.Server.Migrate
+import           Hasura.Server.Version
 
-import qualified Hasura.IncrementalSpec     as IncrementalSpec
-import qualified Hasura.RQL.MetadataSpec    as MetadataSpec
-import qualified Hasura.Server.MigrateSpec  as MigrateSpec
+import qualified Data.Parser.CacheControlSpec as CacheControlParser
+import qualified Hasura.IncrementalSpec       as IncrementalSpec
+import qualified Hasura.RQL.MetadataSpec      as MetadataSpec
+import qualified Hasura.Server.MigrateSpec    as MigrateSpec
 
 data TestSuites
   = AllSuites !RawConnInfo
@@ -37,7 +39,7 @@ data TestSuite
   | PostgresSuite !RawConnInfo
 
 main :: IO ()
-main = parseArgs >>= \case
+main = withVersion $$(getVersionFromEnvironment) $ parseArgs >>= \case
   AllSuites pgConnOptions -> do
     postgresSpecs <- buildPostgresSpecs pgConnOptions
     runHspec (unitSpecs *> postgresSpecs)
@@ -47,10 +49,11 @@ main = parseArgs >>= \case
 
 unitSpecs :: Spec
 unitSpecs = do
+  describe "Data.Parser.CacheControl" CacheControlParser.spec
   describe "Hasura.Incremental" IncrementalSpec.spec
   describe "Hasura.RQL.Metadata" MetadataSpec.spec
 
-buildPostgresSpecs :: RawConnInfo -> IO Spec
+buildPostgresSpecs :: (HasVersion) => RawConnInfo -> IO Spec
 buildPostgresSpecs pgConnOptions = do
   env <- getEnvironment
 
