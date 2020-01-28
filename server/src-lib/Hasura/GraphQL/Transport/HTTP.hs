@@ -19,6 +19,7 @@ import           Hasura.Prelude
 import           Hasura.RQL.Types
 import           Hasura.Server.Context
 import           Hasura.Server.Utils                    (IpAddress, RequestId)
+import           Hasura.Server.Version                  (HasVersion)
 
 import qualified Database.PG.Query                      as Q
 import qualified Hasura.GraphQL.Execute                 as E
@@ -35,7 +36,8 @@ class Monad m => GQLApiAuthorization m where
     -> m (Either QErr GQLReqParsed)
 
 runGQ
-  :: ( MonadIO m
+  :: ( HasVersion
+     , MonadIO m
      , MonadError QErr m
      , MonadReader E.ExecutionCtx m
      )
@@ -57,7 +59,8 @@ runGQ reqId userInfo reqHdrs req@(reqUnparsed, _) = do
       E.execRemoteGQ reqId userInfo reqHdrs reqUnparsed rsi opDef
 
 runGQBatched
-  :: ( MonadIO m
+  :: ( HasVersion
+     , MonadIO m
      , MonadError QErr m
      , MonadReader E.ExecutionCtx m
      )
@@ -83,6 +86,9 @@ runGQBatched reqId userInfo reqHdrs reqs =
         traverse (try . runGQ reqId userInfo reqHdrs) $ zip batch batchParsed
     -- TODO: is this correct?
     _ -> throw500 "runGQBatched received different kinds of GQLBatchedReqs"
+-- =======
+--         traverse (try . runGQ reqId userInfo reqHdrs) batch
+-- >>>>>>> master
 
 runHasuraGQ
   :: ( MonadIO m

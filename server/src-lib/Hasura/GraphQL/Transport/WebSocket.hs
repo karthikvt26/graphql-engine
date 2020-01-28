@@ -45,6 +45,7 @@ import           Hasura.Server.Cors
 import           Hasura.Server.Utils                         (IpAddress (..), RequestId,
                                                               diffTimeToMicro, getRequestId,
                                                               withElapsedTime)
+import           Hasura.Server.Version                       (HasVersion)
 
 import qualified Hasura.GraphQL.Execute                      as E
 import qualified Hasura.GraphQL.Execute.LiveQuery            as LQ
@@ -289,7 +290,8 @@ onConn (L.Logger logger) corsPolicy wsId requestHead ipAddress = do
             <> "HASURA_GRAPHQL_WS_READ_COOKIE to force read cookie when CORS is disabled."
 
 
-onStart :: forall m. (MonadIO m, GQLApiAuthorization m) => WSServerEnv -> WSConn -> StartMsg -> m ()
+onStart :: forall m. (HasVersion, MonadIO m, GQLApiAuthorization m)
+        => WSServerEnv -> WSConn -> StartMsg -> m ()
 onStart serverEnv wsConn (StartMsg opId q) = catchAndIgnore $ do
 
   opM <- liftIO $ STM.atomically $ STMMap.lookup opId opMap
@@ -399,9 +401,6 @@ onStart serverEnv wsConn (StartMsg opId q) = catchAndIgnore $ do
 
     sendCompleted reqId = do
       liftIO $ sendMsg wsConn $ SMComplete $ CompletionMsg opId
--- =======
---       sendMsg wsConn (SMComplete $ CompletionMsg opId)
--- >>>>>>> master
       logOpEv ODCompleted reqId
 
     postExecErr reqId qErr = do
@@ -441,7 +440,7 @@ onStart serverEnv wsConn (StartMsg opId q) = catchAndIgnore $ do
     catchAndIgnore m = void $ runExceptT m
 
 onMessage
-  :: (MonadIO m, UserAuthentication m, GQLApiAuthorization m)
+  :: (HasVersion, MonadIO m, UserAuthentication m, GQLApiAuthorization m)
   => AuthMode
   -> WSServerEnv
   -> WSConn -> BL.ByteString -> m ()
@@ -506,7 +505,7 @@ logWSEvent (L.Logger logger) wsConn wsEv = do
         ODStopped    -> False
 
 onConnInit
-  :: (MonadIO m, UserAuthentication m)
+  :: (HasVersion, MonadIO m, UserAuthentication m)
   => L.Logger L.Hasura -> H.Manager -> WSConn -> AuthMode -> Maybe ConnParams -> m ()
 onConnInit logger manager wsConn authMode connParamsM = do
   connState <- liftIO (STM.readTVarIO (_wscUser $ WS.getData wsConn))
@@ -586,7 +585,8 @@ createWSServerEnv logger pgExecCtx lqState getSchemaCache httpManager
     sqlGenCtx planCache wsServer enableAL
 
 createWSServerApp
-  :: ( MonadIO m
+  :: ( HasVersion
+     , MonadIO m
      , MC.MonadBaseControl IO m
      , LA.Forall (LA.Pure m)
      , UserAuthentication m

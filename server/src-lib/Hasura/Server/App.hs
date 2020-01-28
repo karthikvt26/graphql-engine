@@ -193,10 +193,10 @@ class MetadataApiAuthorization m where
 
 -- | The config API (/v1alpha1/config) handler
 class Monad m => ConfigApiHandler m where
-  runConfigApiHandler :: ServerCtx -> Spock.SpockCtxT () m ()
+  runConfigApiHandler :: HasVersion => ServerCtx -> Spock.SpockCtxT () m ()
 
 mkSpockAction
-  :: (MonadIO m, FromJSON a, ToJSON a, UserAuthentication m, HttpLog m)
+  :: (HasVersion, MonadIO m, FromJSON a, ToJSON a, UserAuthentication m, HttpLog m)
   => ServerCtx
   -> (Bool -> QErr -> Value)
   -- ^ `QErr` JSON encoder function
@@ -283,7 +283,7 @@ mkSpockAction serverCtx qErrEncoder qErrModifier apiHandler = do
 
       mkHeaders = maybe [] (map unHeader)
 
-v1QueryHandler :: (MonadIO m, MetadataApiAuthorization m) => RQLQuery -> Handler m (HttpResponse EncJSON)
+v1QueryHandler :: (HasVersion, MonadIO m, MetadataApiAuthorization m) => RQLQuery -> Handler m (HttpResponse EncJSON)
 v1QueryHandler query = do
   userInfo <- asks hcUser
   authorizeMetadataApi query userInfo
@@ -304,14 +304,8 @@ v1QueryHandler query = do
       instanceId <- scInstanceId . hcServerCtx <$> ask
       runQuery pgExecCtx instanceId userInfo schemaCache httpMgr sqlGenCtx (SystemDefined False) query
 
--- <<<<<<< HEAD
--- v1Alpha1GQHandler
---   :: (GH.GQLApiAuthorization m, MonadIO m)
---   => GH.GQLReqUnparsed
---   -> Handler m (HttpResponse EncJSON)
--- =======
 v1Alpha1GQHandler
-  :: (GH.GQLApiAuthorization m, MonadIO m)
+  :: (HasVersion, GH.GQLApiAuthorization m, MonadIO m)
   => GH.GQLBatchedReqs GH.GQLQueryText -> Handler m (HttpResponse EncJSON)
 v1Alpha1GQHandler query = do
   userInfo <- asks hcUser
@@ -343,7 +337,7 @@ v1Alpha1GQHandler query = do
   flip runReaderT execCtx $ GH.runGQBatched requestId userInfo reqHeaders (query, reqParsed)
 
 v1GQHandler
-  :: (GH.GQLApiAuthorization m, MonadIO m)
+  :: (HasVersion, GH.GQLApiAuthorization m, MonadIO m)
   => GH.GQLBatchedReqs GH.GQLQueryText
   -> Handler m (HttpResponse EncJSON)
 v1GQHandler = v1Alpha1GQHandler
@@ -395,7 +389,7 @@ consoleAssetsHandler logger dir path = do
     headers = ("Content-Type", mimeType) : encHeader
 
 class (Monad m) => ConsoleRenderer m where
-  renderConsole :: T.Text -> AuthMode -> Bool -> Maybe Text -> m (Either String Text)
+  renderConsole :: HasVersion => T.Text -> AuthMode -> Bool -> Maybe Text -> m (Either String Text)
 
 renderHtmlTemplate :: M.Template -> Value -> Either String Text
 renderHtmlTemplate template jVal =
@@ -425,7 +419,7 @@ queryParsers =
       return $ f q
 
 legacyQueryHandler
-  :: (MonadIO m, MetadataApiAuthorization m)
+  :: (HasVersion, MonadIO m, MetadataApiAuthorization m)
   => TableName -> T.Text -> Object
   -> Handler m (HttpResponse EncJSON)
 legacyQueryHandler tn queryType req =
@@ -435,7 +429,9 @@ legacyQueryHandler tn queryType req =
   where
     qt = QualifiedObject publicSchema tn
 
-configApiGetHandler :: (MonadIO m, UserAuthentication m, HttpLog m) => ServerCtx -> Spock.SpockCtxT () m ()
+configApiGetHandler
+  :: (HasVersion, MonadIO m, UserAuthentication m, HttpLog m)
+  => ServerCtx -> Spock.SpockCtxT () m ()
 configApiGetHandler serverCtx =
   Spock.get "v1alpha1/config" $ mkSpockAction serverCtx encodeQErr id $
     mkGetHandler $ do
@@ -460,7 +456,8 @@ data HasuraApp
 
 mkWaiApp
   :: forall m.
-     ( MonadIO m
+     ( HasVersion
+     , MonadIO m
      , MonadStateless IO m
      , ConsoleRenderer m
      , HttpLog m
@@ -564,7 +561,8 @@ mkWaiApp isoLevel logger sqlGenCtx enableAL pool ci httpManager mode corsCfg ena
 
 
 httpApp
-  :: ( MonadIO m
+  :: ( HasVersion
+     , MonadIO m
      , ConsoleRenderer m
      , HttpLog m
      , UserAuthentication m
@@ -603,6 +601,10 @@ httpApp corsCfg serverCtx enableConsole consoleAssetsDir enableTelemetry = do
 
     when enableMetadata $ do
 
+      Spock.post "v1/graphql/explain" gqlExplainAction
+
+      Spock.post "v1alpha1/graphql/explain" gqlExplainAction
+
       Spock.post "v1/query" $ spockAction encodeQErr id $
         mkPostHandler $ mkAPIRespHandler v1QueryHandler
 
@@ -611,18 +613,15 @@ httpApp corsCfg serverCtx enableConsole consoleAssetsDir enableTelemetry = do
           mkAPIRespHandler $ legacyQueryHandler (TableName tableName) queryType
 
     when enablePGDump $
+
       Spock.post "v1alpha1/pg_dump" $ spockAction encodeQErr id $
         mkPostHandler v1Alpha1PGDumpHandler
 
     when enableConfig $ runConfigApiHandler serverCtx
 
     when enableGraphQL $ do
-      Spock.post "v1alpha1/graphql/explain" gqlExplainAction
-
       Spock.post "v1alpha1/graphql" $ spockAction GH.encodeGQErr id $
         mkPostHandler $ mkAPIRespHandler v1Alpha1GQHandler
-
-      Spock.post "v1/graphql/explain" gqlExplainAction
 
       Spock.post "v1/graphql" $ spockAction GH.encodeGQErr allMod200 $
         mkPostHandler $ mkAPIRespHandler v1GQHandler
