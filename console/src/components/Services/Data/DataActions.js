@@ -61,6 +61,7 @@ const MAKE_REQUEST = 'ModifyTable/MAKE_REQUEST';
 const REQUEST_SUCCESS = 'ModifyTable/REQUEST_SUCCESS';
 const REQUEST_ERROR = 'ModifyTable/REQUEST_ERROR';
 const SET_FILTER_SCHEMA = 'Data/SET_FILTER_SCHEMA';
+const SET_FILTER_TABLES = 'Data/SET_FILTER_TABLES';
 
 const useCompositeFnsNewCheck =
   globals.featuresCompatibility &&
@@ -507,8 +508,23 @@ const loadSchema = configOptions => {
   };
 };
 
-const updateSchemaInfo = options => dispatch => {
-  return dispatch(loadSchema(options)).then(() => {
+const updateSchemaInfo = options => (dispatch, getState) => {
+  const currentSchema = getState().tables.currentSchema;
+  const { tableFilter } = getState().tables;
+  let filterTables = [];
+  if (currentSchema && tableFilter && currentSchema in tableFilter) {
+    filterTables = tableFilter[currentSchema].map(t => {
+      return {
+        table_name: t,
+        table_schema: currentSchema,
+      };
+    });
+  }
+  return dispatch(
+    loadSchema(
+      filterTables.length > 0 ? { tables: [...filterTables] } : options
+    )
+  ).then(() => {
     dispatch(setUntrackedRelations());
   });
 };
@@ -937,6 +953,13 @@ const dataReducer = (state = defaultState, action) => {
         ...state,
         schemaFilter: [...action.data],
       };
+    case SET_FILTER_TABLES:
+      return {
+        ...state,
+        tableFilter: {
+          ...action.data,
+        },
+      };
     default:
       return state;
   }
@@ -948,6 +971,7 @@ export {
   REQUEST_SUCCESS,
   REQUEST_ERROR,
   SET_FILTER_SCHEMA,
+  SET_FILTER_TABLES,
   setTable,
   updateSchemaInfo,
   handleMigrationErrors,

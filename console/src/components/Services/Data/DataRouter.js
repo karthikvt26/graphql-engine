@@ -34,6 +34,7 @@ import {
   fetchFunctionInit,
   UPDATE_CURRENT_SCHEMA,
   SET_FILTER_SCHEMA,
+  SET_FILTER_TABLES,
   updateSchemaInfo,
   // ADMIN_SECRET_ERROR,
 } from './DataActions';
@@ -144,7 +145,8 @@ const dataRouterUtils = (
   connect,
   store,
   composeOnEnterHooks,
-  getAllowedSchemas
+  getAllowedSchemas,
+  getAllowedTables
 ) => {
   const requireSchema = (nextState, replaceState, cb) => {
     // check if admin secret is available in localstorage. if so use that.
@@ -185,6 +187,10 @@ const dataRouterUtils = (
       store.dispatch({
         type: SET_FILTER_SCHEMA,
         data: filterSchema,
+      }),
+      store.dispatch({
+        type: SET_FILTER_TABLES,
+        data: getAllowedTables(),
       }),
       store.dispatch(fetchDataInit()),
       store.dispatch(updateSchemaInfo()),
