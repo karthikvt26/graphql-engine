@@ -6,7 +6,6 @@ module Hasura.Server.Auth.JWT.Logging
   where
 
 import           Data.Aeson
-
 import           Hasura.HTTP
 import           Hasura.Logging        (EngineLogType (..), Hasura,
                                         InternalLogTypes (..), LogLevel (..),

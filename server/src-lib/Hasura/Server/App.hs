@@ -481,10 +481,11 @@ mkWaiApp
   -> S.HashSet API
   -- ^ set of the enabled 'API's
   -> EL.LiveQueriesOptions
+  -> (Maybe EL.LiveQueriesState)
   -> E.PlanCacheOptions
   -> m HasuraApp
 mkWaiApp isoLevel logger sqlGenCtx enableAL pool ci httpManager mode corsCfg enableConsole consoleAssetsDir
-         enableTelemetry instanceId apis lqOpts planCacheOptions = do
+         enableTelemetry instanceId apis lqOpts lqState planCacheOptions = do
 
     let pgExecCtx = PGExecCtx pool isoLevel
         pgExecCtxSer = PGExecCtx pool Q.Serializable
@@ -503,8 +504,16 @@ mkWaiApp isoLevel logger sqlGenCtx enableAL pool ci httpManager mode corsCfg ena
 
     let corsPolicy = mkDefaultCorsPolicy corsCfg
 
-    lqState <- liftIO $ EL.initLiveQueriesState lqOpts pgExecCtx
-    wsServerEnv <- WS.createWSServerEnv logger pgExecCtx lqState cacheRef httpManager corsPolicy
+-- <<<<<<< Updated upstream
+--     lqState <- liftIO $ EL.initLiveQueriesState lqOpts pgExecCtx
+--     wsServerEnv <- WS.createWSServerEnv logger pgExecCtx lqState cacheRef httpManager corsPolicy
+--                    sqlGenCtx enableAL planCache
+-- =======
+    lqState' <- case lqState of
+      Just ls -> return ls
+      Nothing -> liftIO $ EL.initLiveQueriesState lqOpts pgExecCtx
+
+    wsServerEnv <- WS.createWSServerEnv logger pgExecCtx lqState' cacheRef httpManager corsPolicy
                    sqlGenCtx enableAL planCache
 
     ekgStore <- liftIO EKG.newStore
@@ -521,7 +530,7 @@ mkWaiApp isoLevel logger sqlGenCtx enableAL pool ci httpManager mode corsCfg ena
                     , scEnabledAPIs     =  apis
                     , scInstanceId      =  instanceId
                     , scPlanCache       =  planCache
-                    , scLQState         =  lqState
+                    , scLQState         =  lqState'
                     , scEnableAllowlist =  enableAL
                     , scEkgStore        =  ekgStore
                     }
