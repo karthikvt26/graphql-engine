@@ -59,6 +59,9 @@ import           Hasura.GraphQL.Execute.LiveQuery.Plan
 import           Hasura.GraphQL.Transport.HTTP.Protocol
 import           Hasura.RQL.Types
 
+import           Debug.Pretty.Simple
+import           Text.Pretty.Simple
+
 -- -------------------------------------------------------------------------------------------------
 -- Subscribers
 
@@ -67,6 +70,10 @@ data Subscriber
   { _sRootAlias        :: !G.Alias
   , _sOnChangeCallback :: !OnChange
   }
+
+instance Show Subscriber where
+  show (Subscriber root _) =
+    "Subscriber { _sRootAlias = " <> show root <> ", _sOnChangeCallback = <fn> }"
 
 -- | live query onChange metadata, used for adding more extra analytics data
 data LiveQueryMetadata
@@ -152,18 +159,18 @@ dumpCohortMap cohortMap = do
       [ "variables" J..= variableValues
       , "cohort" J..= cohortJ
       ]
-  where
-    dumpCohort (Cohort respId respTV curOps newOps) =
-      STM.atomically $ do
-      prevResHash <- STM.readTVar respTV
-      curOpIds <- TMap.toList curOps
-      newOpIds <- TMap.toList newOps
-      return $ J.object
-        [ "resp_id" J..= respId
-        , "current_ops" J..= map fst curOpIds
-        , "new_ops" J..= map fst newOpIds
-        , "previous_result_hash" J..= prevResHash
-        ]
+
+dumpCohort (Cohort respId respTV curOps newOps) =
+  STM.atomically $ do
+  prevResHash <- STM.readTVar respTV
+  curOpIds <- TMap.toList curOps
+  newOpIds <- TMap.toList newOps
+  return $ J.object
+    [ "resp_id" J..= respId
+    , "current_ops" J..= map fst curOpIds
+    , "new_ops" J..= map fst newOpIds
+    , "previous_result_hash" J..= prevResHash
+    ]
 
 data CohortSnapshot
   = CohortSnapshot
@@ -297,6 +304,29 @@ dumpPollerMap extended lqMap =
       , "max" J..= Metrics.max stats
       ]
 
+showCohortSnapshotMap :: Map.HashMap CohortId CohortSnapshot -> IO ()
+showCohortSnapshotMap cmap = do
+  let assocList = Map.toList cmap
+  forM_ assocList $ \(cohortId, cohortSnapshot) -> do
+    putStrLn "cohort snaps -->"
+    putStr "cohortId: " >> pPrint cohortId
+    putStrLn "cohortSnapShot: " >> showCohortSnapshot cohortSnapshot
+
+showCohortSnapshot :: CohortSnapshot -> IO ()
+showCohortSnapshot (CohortSnapshot vars prevResp subs newSubs) = do
+  respHash <- STM.atomically $ STM.readTVar prevResp
+  putStrLn "(cohort vars, resp hash, existing subs, new subs)"
+  pPrint (vars, respHash, subs, newSubs)
+
+showCohortMapToList :: [(CohortKey, Cohort)] -> IO ()
+showCohortMapToList xs = do
+  forM_ xs $ \(cohortKey, cohort) -> do
+    putStrLn "cohort map to list"
+    putStr "cohortKey: " >> pPrint cohortKey
+    jVal <- J.encode <$> dumpCohort cohort
+    putStrLn "cohort: " >> pPrint jVal
+
+
 -- | Where the magic happens: the top-level action run periodically by each active 'Poller'.
 pollQuery
   :: RefetchMetrics
@@ -306,6 +336,8 @@ pollQuery
   -> Poller
   -> IO ()
 pollQuery metrics batchSize pgExecCtx pgQuery handler = do
+  putStrLn "inside pollQuery ====>"
+
   procInit <- Clock.getCurrentTime
 
   -- get a snapshot of all the cohorts
@@ -313,12 +345,19 @@ pollQuery metrics batchSize pgExecCtx pgQuery handler = do
   cohorts <- STM.atomically $ TMap.toList cohortMap
   cohortSnapshotMap <- Map.fromList <$> mapM (STM.atomically . getCohortSnapshot) cohorts
 
+  putStrLn "cohorts ======>"
+  showCohortMapToList cohorts
+  putStrLn "cohortSnapshotMap ======>"
+  showCohortSnapshotMap cohortSnapshotMap
+
   let queryVarsBatches = chunksOf (unBatchSize batchSize) $ getQueryVars cohortSnapshotMap
+  putStrLn "queryVarsBatches ======>"
+  pPrint queryVarsBatches
 
   snapshotFinish <- Clock.getCurrentTime
   Metrics.add (_rmSnapshot metrics) $
     realToFrac $ Clock.diffUTCTime snapshotFinish procInit
-  flip A.mapConcurrently_ queryVarsBatches $ \queryVars -> do
+  A.forConcurrently_ queryVarsBatches $ \queryVars -> do
     queryInit <- Clock.getCurrentTime
     mxRes <- runExceptT . runLazyTx' pgExecCtx $ executeMultiplexedQuery pgQuery queryVars
     queryFinish <- Clock.getCurrentTime

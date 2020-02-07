@@ -187,6 +187,9 @@ library
                      , QuickCheck
                      , generic-arbitrary
 
+                     -- for dev only
+                     , pretty-simple
+
   exposed-modules:     Control.Monad.Stateless
 
                      , Hasura.Prelude

@@ -53,6 +53,17 @@ data LiveQueryId
   , _lqiSubscriber :: !SubscriberId
   }
 
+-- | Typeclass representing the action performed when polling for a live query. Currently in OSS, it
+-- polls via 'pollQuery' and then sleeps as per the given refetch interval. In Pro, this might also
+-- log the 'LiveQueriesState'.
+class (Monad m, MonadIO m) => LiveQueryPoller m where
+  runPoller :: PGExecCtx -> BatchSize -> RefetchInterval -> RefetchMetrics -> Poller -> MultiplexedQuery -> m ()
+  -- default implementation:
+  -- runPoller pgExecCtx batchSize refetchInterval metrics handler query = do
+  --   pollQuery metrics batchSize pgExecCtx query handler
+  --   threadDelay $ unRefetchInterval refetchInterval
+
+
 addLiveQuery
   :: LiveQueriesState
   -> LiveQueryPlan
@@ -90,6 +101,7 @@ addLiveQuery lqState plan onResultAction = do
 
   pure $ LiveQueryId handlerId cohortKey sinkId
   where
+
     LiveQueriesState lqOpts pgExecCtx lqMap = lqState
     LiveQueriesOptions batchSize refetchInterval = lqOpts
     LiveQueryPlan (ParameterizedLiveQueryPlan role alias query) cohortKey = plan
@@ -105,6 +117,7 @@ addLiveQuery lqState plan onResultAction = do
       TMap.insert newCohort cohortKey $ _pCohorts handler
 
     newPoller = Poller <$> TMap.new <*> STM.newEmptyTMVar
+
 
 removeLiveQuery
   :: LiveQueriesState
