@@ -50,6 +50,7 @@ class ApiExplorer extends Component {
     this.props.dispatch(hydrateDQBData(data));
   }
   */
+  state = { dataHeaders: this.props.dataHeaders };
 
   render() {
     const {
@@ -57,13 +58,13 @@ class ApiExplorer extends Component {
       credentials,
       explorerData,
       route,
-      dataHeaders,
       tables,
       headerFocus,
       location,
       serverVersion,
       serverConfig,
     } = this.props;
+    const { dataHeaders } = this.state;
 
     const styles = require('./ApiExplorer.scss');
     const consoleUrl =
