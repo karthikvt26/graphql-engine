@@ -32,7 +32,6 @@ import qualified Text.Mustache.Compile                  as M
 import           Hasura.Db
 import           Hasura.EncJSON
 import           Hasura.Events.Lib
-import qualified Hasura.GraphQL.Execute.LiveQuery       as EL
 import           Hasura.GraphQL.Transport.HTTP          (GQLApiAuthorization (..))
 import           Hasura.GraphQL.Transport.HTTP.Protocol (toParsed)
 import           Hasura.Logging
@@ -107,13 +106,12 @@ mkPGLogger (Logger logger) (Q.PLERetryMsg msg) =
 -- | most of the required types for initializing graphql-engine
 data InitCtx
   = InitCtx
-  { _icHttpManager    :: !HTTP.Manager
-  , _icInstanceId     :: !InstanceId
-  , _icDbUid          :: !Text
-  , _icLoggers        :: !Loggers
-  , _icConnInfo       :: !Q.ConnInfo
-  , _icPgPool         :: !Q.PGPool
-  , _icLiveQueryState :: !(Maybe EL.LiveQueriesState)
+  { _icHttpManager :: !HTTP.Manager
+  , _icInstanceId  :: !InstanceId
+  , _icDbUid       :: !Text
+  , _icLoggers     :: !Loggers
+  , _icConnInfo    :: !Q.ConnInfo
+  , _icPgPool      :: !Q.PGPool
   }
 
 -- | Collection of the LoggerCtx, the regular Logger and the PGLogger
@@ -144,7 +142,7 @@ initialiseCtx hgeCmd rci = do
   httpManager <- liftIO $ HTTP.newManager HTTP.tlsManagerSettings
   instanceId <- liftIO generateInstanceId
   connInfo <- liftIO procConnInfo
-  (loggers, pool, lqState) <- case hgeCmd of
+  (loggers, pool) <- case hgeCmd of
     -- for server command generate a proper pool
     HCServe so@ServeOptions{..} -> do
       l@(Loggers _ logger pgLogger) <- mkLoggers soEnabledLogTypes soLogLevel
@@ -153,23 +151,21 @@ initialiseCtx hgeCmd rci = do
       -- log postgres connection info
       unLogger logger $ connInfoToLog connInfo
       pool <- liftIO $ Q.initPGPool connInfo soConnParams pgLogger
-      let pgExecCtx = PGExecCtx pool soTxIso
       -- safe init catalog
       initialiseCatalog pool (SQLGenCtx soStringifyNum) httpManager logger
-      lqState <- liftIO $ EL.initLiveQueriesState soLiveQueryOpts pgExecCtx
-      return (l, pool, Just lqState)
+      return (l, pool)
 
     -- for other commands generate a minimal pool
     _ -> do
       l@(Loggers _ _ pgLogger) <- mkLoggers defaultEnabledLogTypes LevelInfo
       pool <- getMinimalPool pgLogger connInfo
-      return (l, pool, Nothing)
+      return (l, pool)
 
   -- get the unique db id
   eDbId <- liftIO $ runExceptT $ Q.runTx pool (Q.Serializable, Nothing) getDbId
   dbId <- either printErrJExit return eDbId
 
-  return (InitCtx httpManager instanceId dbId loggers connInfo pool lqState, initTime)
+  return (InitCtx httpManager instanceId dbId loggers connInfo pool, initTime)
   where
     procConnInfo =
       either (printErrExit . connInfoErrModifier) return $ mkConnInfo rci
@@ -231,7 +227,6 @@ runHGEServer ServeOptions{..} InitCtx{..} initTime = do
                                                                _icInstanceId
                                                                soEnabledAPIs
                                                                soLiveQueryOpts
-                                                               _icLiveQueryState
                                                                soPlanCacheOptions
 
   -- log inconsistent schema objects

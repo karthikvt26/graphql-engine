@@ -481,75 +481,67 @@ mkWaiApp
   -> S.HashSet API
   -- ^ set of the enabled 'API's
   -> EL.LiveQueriesOptions
-  -> (Maybe EL.LiveQueriesState)
   -> E.PlanCacheOptions
   -> m HasuraApp
 mkWaiApp isoLevel logger sqlGenCtx enableAL pool ci httpManager mode corsCfg enableConsole consoleAssetsDir
-         enableTelemetry instanceId apis lqOpts lqState planCacheOptions = do
+  enableTelemetry instanceId apis lqOpts planCacheOptions = do
 
-    let pgExecCtx = PGExecCtx pool isoLevel
-        pgExecCtxSer = PGExecCtx pool Q.Serializable
-        runCtx = RunCtx adminUserInfo httpManager sqlGenCtx
+  let pgExecCtx = PGExecCtx pool isoLevel
+      pgExecCtxSer = PGExecCtx pool Q.Serializable
+      runCtx = RunCtx adminUserInfo httpManager sqlGenCtx
 
-    (cacheRef, cacheBuiltTime) <- do
-      pgResp <- runExceptT $ peelRun emptySchemaCache runCtx pgExecCtxSer Q.ReadWrite $ do
-        buildSchemaCache
-        liftTx fetchLastUpdate
-      (time, sc) <- either (liftIO . initErrExit) return pgResp
-      scRef <- liftIO $  newIORef (sc, initSchemaCacheVer)
-      return (scRef, snd <$> time)
+  (cacheRef, cacheBuiltTime) <- do
+    pgResp <- runExceptT $ peelRun emptySchemaCache runCtx pgExecCtxSer Q.ReadWrite $ do
+      buildSchemaCache
+      liftTx fetchLastUpdate
+    (time, sc) <- either (liftIO . initErrExit) return pgResp
+    scRef <- liftIO $  newIORef (sc, initSchemaCacheVer)
+    return (scRef, snd <$> time)
 
-    cacheLock <- liftIO $ newMVar ()
-    planCache <- liftIO $ E.initPlanCache planCacheOptions
+  cacheLock <- liftIO $ newMVar ()
+  planCache <- liftIO $ E.initPlanCache planCacheOptions
 
-    let corsPolicy = mkDefaultCorsPolicy corsCfg
+  let corsPolicy = mkDefaultCorsPolicy corsCfg
 
--- <<<<<<< Updated upstream
---     lqState <- liftIO $ EL.initLiveQueriesState lqOpts pgExecCtx
---     wsServerEnv <- WS.createWSServerEnv logger pgExecCtx lqState cacheRef httpManager corsPolicy
---                    sqlGenCtx enableAL planCache
--- =======
-    lqState' <- case lqState of
-      Just ls -> return ls
-      Nothing -> liftIO $ EL.initLiveQueriesState lqOpts pgExecCtx
+  lqState <- liftIO $ EL.initLiveQueriesState lqOpts pgExecCtx
 
-    wsServerEnv <- WS.createWSServerEnv logger pgExecCtx lqState' cacheRef httpManager corsPolicy
-                   sqlGenCtx enableAL planCache
+  wsServerEnv <- WS.createWSServerEnv logger pgExecCtx lqState cacheRef httpManager corsPolicy
+                 sqlGenCtx enableAL planCache
 
-    ekgStore <- liftIO EKG.newStore
+  ekgStore <- liftIO EKG.newStore
 
-    let schemaCacheRef = SchemaCacheRef cacheLock cacheRef (E.clearPlanCache planCache)
-        serverCtx = ServerCtx
-                    { scPGExecCtx       =  pgExecCtx
-                    , scConnInfo        =  ci
-                    , scLogger          =  logger
-                    , scCacheRef        =  schemaCacheRef
-                    , scAuthMode        =  mode
-                    , scManager         =  httpManager
-                    , scSQLGenCtx       =  sqlGenCtx
-                    , scEnabledAPIs     =  apis
-                    , scInstanceId      =  instanceId
-                    , scPlanCache       =  planCache
-                    , scLQState         =  lqState'
-                    , scEnableAllowlist =  enableAL
-                    , scEkgStore        =  ekgStore
-                    }
+  let schemaCacheRef = SchemaCacheRef cacheLock cacheRef (E.clearPlanCache planCache)
+      serverCtx = ServerCtx
+                  { scPGExecCtx       =  pgExecCtx
+                  , scConnInfo        =  ci
+                  , scLogger          =  logger
+                  , scCacheRef        =  schemaCacheRef
+                  , scAuthMode        =  mode
+                  , scManager         =  httpManager
+                  , scSQLGenCtx       =  sqlGenCtx
+                  , scEnabledAPIs     =  apis
+                  , scInstanceId      =  instanceId
+                  , scPlanCache       =  planCache
+                  , scLQState         =  lqState
+                  , scEnableAllowlist =  enableAL
+                  , scEkgStore        =  ekgStore
+                  }
 
-    when (isDeveloperAPIEnabled serverCtx) $ do
-      liftIO $ EKG.registerGcMetrics ekgStore
-      liftIO $ EKG.registerCounter "ekg.server_timestamp_ms" getTimeMs ekgStore
+  when (isDeveloperAPIEnabled serverCtx) $ do
+    liftIO $ EKG.registerGcMetrics ekgStore
+    liftIO $ EKG.registerCounter "ekg.server_timestamp_ms" getTimeMs ekgStore
 
-    spockApp <- liftWithStateless $ \lowerIO ->
-      Spock.spockAsApp $ Spock.spockT lowerIO $
-        httpApp corsCfg serverCtx enableConsole consoleAssetsDir enableTelemetry
+  spockApp <- liftWithStateless $ \lowerIO ->
+    Spock.spockAsApp $ Spock.spockT lowerIO $
+      httpApp corsCfg serverCtx enableConsole consoleAssetsDir enableTelemetry
 
-    let wsServerApp = WS.createWSServerApp mode wsServerEnv
-        stopWSServer = WS.stopWSServerApp wsServerEnv
+  let wsServerApp = WS.createWSServerApp mode wsServerEnv
+      stopWSServer = WS.stopWSServerApp wsServerEnv
 
-    waiApp <- liftWithStateless $ \lowerIO ->
-      pure $ WSC.websocketsOr WS.defaultConnectionOptions (\ip pc -> lowerIO $ wsServerApp ip pc) spockApp
+  waiApp <- liftWithStateless $ \lowerIO ->
+    pure $ WSC.websocketsOr WS.defaultConnectionOptions (\ip pc -> lowerIO $ wsServerApp ip pc) spockApp
 
-    return $ HasuraApp waiApp schemaCacheRef cacheBuiltTime stopWSServer
+  return $ HasuraApp waiApp schemaCacheRef cacheBuiltTime stopWSServer
   where
     getTimeMs :: IO Int64
     getTimeMs = (round . (* 1000)) `fmap` getPOSIXTime

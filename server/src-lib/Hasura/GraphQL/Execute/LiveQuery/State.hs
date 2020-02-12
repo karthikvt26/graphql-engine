@@ -16,11 +16,13 @@ import           Hasura.Prelude
 import qualified Control.Concurrent.Async                 as A
 import qualified Control.Concurrent.STM                   as STM
 import qualified Data.Aeson.Extended                      as J
+import qualified Data.UUID.V4                             as UUID
 import qualified StmContainers.Map                        as STMMap
 
 import           Control.Concurrent.Extended              (threadDelay)
 
 import qualified Hasura.GraphQL.Execute.LiveQuery.TMap    as TMap
+import qualified Hasura.Logging                           as L
 
 import           Hasura.Db
 import           Hasura.GraphQL.Execute.LiveQuery.Options
@@ -56,8 +58,8 @@ data LiveQueryId
 -- | Typeclass representing the action performed when polling for a live query. Currently in OSS, it
 -- polls via 'pollQuery' and then sleeps as per the given refetch interval. In Pro, this might also
 -- log the 'LiveQueriesState'.
-class (Monad m, MonadIO m) => LiveQueryPoller m where
-  runPoller :: PGExecCtx -> BatchSize -> RefetchInterval -> RefetchMetrics -> Poller -> MultiplexedQuery -> m ()
+-- class (Monad m, MonadIO m) => LiveQueryPoller m where
+  -- runPoller :: PGExecCtx -> BatchSize -> RefetchInterval -> RefetchMetrics -> Poller -> MultiplexedQuery -> m ()
   -- default implementation:
   -- runPoller pgExecCtx batchSize refetchInterval metrics handler query = do
   --   pollQuery metrics batchSize pgExecCtx query handler
@@ -65,12 +67,13 @@ class (Monad m, MonadIO m) => LiveQueryPoller m where
 
 
 addLiveQuery
-  :: LiveQueriesState
+  :: L.Logger L.Hasura
+  -> LiveQueriesState
   -> LiveQueryPlan
   -> OnChange
   -- ^ the action to be executed when result changes
   -> IO LiveQueryId
-addLiveQuery lqState plan onResultAction = do
+addLiveQuery logger lqState plan onResultAction = do
   responseId <- newCohortId
   sinkId <- newSinkId
 
@@ -94,8 +97,9 @@ addLiveQuery lqState plan onResultAction = do
   -- the livequery can only be cancelled after putTMVar
   onJust handlerM $ \handler -> do
     metrics <- initRefetchMetrics
+    pollerId <- PollerId <$> UUID.nextRandom
     threadRef <- A.async $ forever $ do
-      pollQuery metrics batchSize pgExecCtx query handler
+      pollQuery logger pollerId metrics batchSize pgExecCtx query handler
       threadDelay $ unRefetchInterval refetchInterval
     STM.atomically $ STM.putTMVar (_pIOState handler) (PollerIOState threadRef metrics)
 

@@ -213,7 +213,6 @@ library
                      , Hasura.Server.PGDump
 
                      , Hasura.GraphQL.Transport.HTTP
-                     , Hasura.GraphQL.Execute.LiveQuery
 
                      , Hasura.RQL.Types
                      , Hasura.RQL.DDL.Metadata
@@ -311,6 +310,7 @@ library
                      , Hasura.GraphQL.Execute
                      , Hasura.GraphQL.Execute.Plan
                      , Hasura.GraphQL.Execute.Query
+                     , Hasura.GraphQL.Execute.LiveQuery
                      , Hasura.GraphQL.Execute.LiveQuery.Options
                      , Hasura.GraphQL.Execute.LiveQuery.Plan
                      , Hasura.GraphQL.Execute.LiveQuery.Poll
