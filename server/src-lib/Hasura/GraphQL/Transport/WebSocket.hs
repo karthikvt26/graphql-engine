@@ -329,7 +329,9 @@ onStart serverEnv wsConn (StartMsg opId q) = catchAndIgnore $ do
       E.ExOpSubs lqOp -> do
         -- log the graphql query
         L.unLogger logger $ QueryLog query Nothing reqId
-        lqId <- liftIO $ LQ.addLiveQuery logger lqMap lqOp liveQOnChange
+        let wsId = WS.getWSId wsConn
+            uniqSubId = LQ.UniqueSubscriberId wsId opId
+        lqId <- liftIO $ LQ.addLiveQuery logger uniqSubId lqMap lqOp liveQOnChange
         liftIO $ STM.atomically $
           STMMap.insert (lqId, _grOperationName q) opId opMap
         logOpEv ODStarted (Just reqId)

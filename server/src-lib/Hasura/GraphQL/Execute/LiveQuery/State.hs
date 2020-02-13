@@ -65,15 +65,15 @@ data LiveQueryId
   --   pollQuery metrics batchSize pgExecCtx query handler
   --   threadDelay $ unRefetchInterval refetchInterval
 
-
 addLiveQuery
   :: L.Logger L.Hasura
+  -> UniqueSubscriberId
   -> LiveQueriesState
   -> LiveQueryPlan
   -> OnChange
   -- ^ the action to be executed when result changes
   -> IO LiveQueryId
-addLiveQuery logger lqState plan onResultAction = do
+addLiveQuery logger wsOpId lqState plan onResultAction = do
   responseId <- newCohortId
   sinkId <- newSinkId
 
@@ -99,7 +99,7 @@ addLiveQuery logger lqState plan onResultAction = do
     metrics <- initRefetchMetrics
     pollerId <- PollerId <$> UUID.nextRandom
     threadRef <- A.async $ forever $ do
-      pollQuery logger pollerId metrics batchSize pgExecCtx query handler
+      pollQuery logger pollerId metrics lqOpts pgExecCtx query handler
       threadDelay $ unRefetchInterval refetchInterval
     STM.atomically $ STM.putTMVar (_pIOState handler) (PollerIOState threadRef metrics)
 
@@ -107,13 +107,13 @@ addLiveQuery logger lqState plan onResultAction = do
   where
 
     LiveQueriesState lqOpts pgExecCtx lqMap = lqState
-    LiveQueriesOptions batchSize refetchInterval = lqOpts
+    LiveQueriesOptions _ refetchInterval = lqOpts
     LiveQueryPlan (ParameterizedLiveQueryPlan role alias query) cohortKey = plan
 
     handlerId = PollerKey role query
 
     addToCohort sinkId handlerC =
-      TMap.insert (Subscriber alias onResultAction) sinkId $ _cNewSubscribers handlerC
+      TMap.insert (Subscriber alias onResultAction wsOpId) sinkId $ _cNewSubscribers handlerC
 
     addToPoller sinkId responseId handler = do
       newCohort <- Cohort responseId <$> STM.newTVar Nothing <*> TMap.new <*> TMap.new
