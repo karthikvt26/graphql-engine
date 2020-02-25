@@ -32,6 +32,7 @@ import           Hasura.RQL.Types.CustomTypes
 import           Hasura.RQL.Types.EventTrigger
 import           Hasura.RQL.Types.Permission
 import           Hasura.RQL.Types.QueryCollection
+import           Hasura.RQL.Types.RemoteRelationship
 import           Hasura.RQL.Types.RemoteSchema
 import           Hasura.RQL.Types.SchemaCache
 import           Hasura.SQL.Types
@@ -153,6 +154,7 @@ data CatalogMetadata
   , _cmComputedFields       :: ![CatalogComputedField]
   , _cmCustomTypes          :: !CustomTypes
   , _cmActions              :: ![CatalogAction]
+  , _cmRemoteRelationships  :: ![RemoteRelationship]
   } deriving (Show, Eq, Generic)
 instance NFData CatalogMetadata
 instance Cacheable CatalogMetadata

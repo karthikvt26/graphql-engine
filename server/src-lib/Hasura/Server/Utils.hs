@@ -6,7 +6,6 @@ import           Data.Bits                  (shift, (.&.))
 import           Data.ByteString.Char8      (ByteString)
 import           Data.Char
 import           Data.List                  (find)
-import           Data.Time.Clock
 import           Data.Word                  (Word32)
 import           Language.Haskell.TH.Syntax (Lift)
 import           Network.Socket             (SockAddr (..))
@@ -100,12 +99,6 @@ runScript fp = do
     "Running shell script " ++ fp ++ " failed with exit code : "
     ++ show exitCode ++ " and with error : " ++ stdErr
   [|| stdOut ||]
-
--- find duplicates
-duplicates :: Ord a => [a] -> [a]
-duplicates = mapMaybe greaterThanOne . group . sort
-  where
-    greaterThanOne l = bool Nothing (Just $ head l) $ length l > 1
 
 -- regex related
 matchRegex :: B.ByteString -> Bool -> T.Text -> Either String Bool
@@ -298,10 +291,3 @@ showSockAddr (SockAddrInet6 _ _ (0,0,0x0000ffff,addr4) _) = showIPv4 addr4 False
 showSockAddr (SockAddrInet6 _ _ (0,0,0,1) _)              = "::1"
 showSockAddr (SockAddrInet6 _ _ addr6 _)                  = showIPv6 addr6
 showSockAddr _                                            = "unknownSocket"
-
--- withElapsedTime :: MonadIO m => m a -> m (NominalDiffTime, a)
--- withElapsedTime ma = do
---   t1 <- liftIO getCurrentTime
---   a <- ma
---   t2 <- liftIO getCurrentTime
---   return (diffUTCTime t2 t1, a)

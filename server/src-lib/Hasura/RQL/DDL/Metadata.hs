@@ -48,6 +48,7 @@ clearMetadata = Q.catchE defaultTxErrorHandler $ do
   Q.unitQ "DELETE FROM hdb_catalog.hdb_relationship WHERE is_system_defined <> 'true'" () False
   Q.unitQ "DELETE FROM hdb_catalog.event_triggers" () False
   Q.unitQ "DELETE FROM hdb_catalog.hdb_computed_field" () False
+  Q.unitQ "DELETE FROM hdb_catalog.hdb_remote_relationship" () False
   Q.unitQ "DELETE FROM hdb_catalog.hdb_table WHERE is_system_defined <> 'true'" () False
   Q.unitQ "DELETE FROM hdb_catalog.remote_schemas" () False
   Q.unitQ "DELETE FROM hdb_catalog.hdb_allowlist" () False
@@ -68,7 +69,7 @@ applyQP1
   :: (QErrM m)
   => ReplaceMetadata -> m ()
 applyQP1 (ReplaceMetadata _ tables functionsMeta schemas collections
-          allowlist _ actions) = do
+          allowlist _ actions remoteRelationships) = do
   withPathK "tables" $ do
 
     checkMultipleDecls "tables" $ map _tmTable tables
@@ -112,6 +113,10 @@ applyQP1 (ReplaceMetadata _ tables functionsMeta schemas collections
   withPathK "actions" $
     checkMultipleDecls "actions" $ map _amName actions
 
+  withPathK "remote_relationships" $
+      checkMultipleDecls "remote relationships" $
+      map (\rel -> (rtrName rel, rtrTable rel)) remoteRelationships
+
   where
     withTableName qt = withPathK (qualObjectToText qt)
 
@@ -135,7 +140,7 @@ applyQP2
   => ReplaceMetadata
   -> m EncJSON
 applyQP2 (ReplaceMetadata _ tables functionsMeta
-          schemas collections allowlist customTypes actions) = do
+          schemas collections allowlist customTypes actions remoteRelationships) = do
 
   liftTx clearMetadata
   buildSchemaCacheStrict
@@ -213,6 +218,10 @@ applyQP2 (ReplaceMetadata _ tables functionsMeta
                                    (_apmRole permission) Nothing (_apmComment permission)
       Action.persistCreateActionPermission createActionPermission
 
+  -- remote relationships
+  withPathK "remote_relationships" $
+    indexedMapM_ (void . Relationship.runCreateRemoteRelationship) remoteRelationships
+
   buildSchemaCacheStrict
   return successMsg
 
@@ -276,7 +285,7 @@ fetchMetadata = do
   -- fetch all functions
   functions <- FMVersion2 <$> Q.catchE defaultTxErrorHandler fetchFunctions
 
-  -- fetch all custom resolvers
+  -- fetch all remote schemas
   remoteSchemas <- fetchRemoteSchemas
 
   -- fetch all collections
@@ -290,10 +299,12 @@ fetchMetadata = do
   -- fetch actions
   actions <- fetchActions
 
+  -- fetch all remote relationships
+  remoteRels <- Q.catchE defaultTxErrorHandler fetchRemoteRelationships
+
   return $ ReplaceMetadata currentMetadataVersion (HMIns.elems postRelMap) functions
                            remoteSchemas collections allowlist
-                           customTypes
-                           actions
+                           customTypes actions remoteRels
 
   where
 
@@ -429,6 +440,12 @@ fetchMetadata = do
           ) ap on true;
                             |] [] False
 
+    fetchRemoteRelationships =
+      map (Q.getAltJ . runIdentity) <$> Q.listQ [Q.sql|
+                SELECT configuration::json
+                FROM hdb_catalog.hdb_remote_relationship
+                    |] () False
+
 runExportMetadata
   :: (QErrM m, MonadTx m)
   => ExportMetadata -> m EncJSON
@@ -473,13 +490,14 @@ runDropInconsistentMetadata _ = do
 
 purgeMetadataObj :: MonadTx m => MetadataObjId -> m ()
 purgeMetadataObj = liftTx . \case
-  MOTable qt                            -> Schema.deleteTableFromCatalog qt
-  MOFunction qf                         -> Schema.delFunctionFromCatalog qf
-  MORemoteSchema rsn                    -> removeRemoteSchemaFromCatalog rsn
-  MOTableObj qt (MTORel rn _)           -> Relationship.delRelFromCatalog qt rn
-  MOTableObj qt (MTOPerm rn pt)         -> dropPermFromCatalog qt rn pt
-  MOTableObj _ (MTOTrigger trn)         -> delEventTriggerFromCatalog trn
-  MOTableObj qt (MTOComputedField ccn)  -> dropComputedFieldFromCatalog qt ccn
-  MOCustomTypes                         -> CustomTypes.clearCustomTypes
-  MOAction action                       -> Action.deleteActionFromCatalog action Nothing
-  MOActionPermission action role        -> Action.deleteActionPermissionFromCatalog action role
+  MOTable qt                                 -> Schema.deleteTableFromCatalog qt
+  MOFunction qf                              -> Schema.delFunctionFromCatalog qf
+  MORemoteSchema rsn                         -> removeRemoteSchemaFromCatalog rsn
+  MOTableObj qt (MTORel rn _)                -> Relationship.delRelFromCatalog qt rn
+  MOTableObj qt (MTOPerm rn pt)              -> dropPermFromCatalog qt rn pt
+  MOTableObj _ (MTOTrigger trn)              -> delEventTriggerFromCatalog trn
+  MOTableObj qt (MTOComputedField ccn)       -> dropComputedFieldFromCatalog qt ccn
+  MOTableObj qt (MTORemoteRelationship rn)   -> Relationship.delRemoteRelFromCatalog qt rn
+  MOCustomTypes                              -> CustomTypes.clearCustomTypes
+  MOAction action                            -> Action.deleteActionFromCatalog action Nothing
+  MOActionPermission action role             -> Action.deleteActionPermissionFromCatalog action role

@@ -33,8 +33,8 @@ import           Data.List                                (nub)
 
 import qualified Hasura.GraphQL.Context                   as GC
 import qualified Hasura.GraphQL.Schema                    as GS
-import qualified Hasura.GraphQL.Validate.Types      as VT
-import qualified Language.GraphQL.Draft.Syntax      as G
+import qualified Hasura.GraphQL.Validate.Types            as VT
+import qualified Language.GraphQL.Draft.Syntax            as G
 import qualified Hasura.Incremental                       as Inc
 
 import           Hasura.Db
@@ -173,6 +173,7 @@ buildSchemaCacheRule = proc (catalogMetadata, invalidationKeys) -> do
                                     , _boRemoteSchemas resolvedOutputs
                                     , _boCustomTypes resolvedOutputs
                                     , _boActions resolvedOutputs
+                                    , _boRemoteRelationshipTypes resolvedOutputs
                                     )
 
   returnA -< SchemaCache
@@ -197,7 +198,11 @@ buildSchemaCacheRule = proc (catalogMetadata, invalidationKeys) -> do
     buildAndCollectInfo = proc (catalogMetadata, invalidationKeys) -> do
       let CatalogMetadata tables relationships permissions
             eventTriggers remoteSchemas functions allowlistDefs
-            computedFields customTypes actions = catalogMetadata
+            computedFields customTypes actions remoteRelationships = catalogMetadata
+
+      -- remote schemas
+      let remoteSchemaInvalidationKeys = Inc.selectD #_ikRemoteSchemas invalidationKeys
+      remoteSchemaMap <- buildRemoteSchemas -< (remoteSchemaInvalidationKeys, remoteSchemas)
 
       -- tables
       tableRawInfos <- buildTableCache -< (tables, Inc.selectD #_ikMetadata invalidationKeys)
@@ -205,14 +210,19 @@ buildSchemaCacheRule = proc (catalogMetadata, invalidationKeys) -> do
       -- relationships and computed fields
       let relationshipsByTable = M.groupOn _crTable relationships
           computedFieldsByTable = M.groupOn (_afcTable . _cccComputedField) computedFields
-      tableCoreInfos <- (tableRawInfos >- returnA)
+          remoteRelationshipsByTable = M.groupOn rtrTable remoteRelationships
+      rawTableCoreInfos <- (tableRawInfos >- returnA)
         >-> (\info -> (info, relationshipsByTable) >- alignExtraTableInfo mkRelationshipMetadataObject)
         >-> (\info -> (info, computedFieldsByTable) >- alignExtraTableInfo mkComputedFieldMetadataObject)
-        >-> (| Inc.keyed (\_ ((tableRawInfo, tableRelationships), tableComputedFields) -> do
+        >-> (\info -> (info, remoteRelationshipsByTable) >- alignExtraTableInfo mkRemoteRelationshipMetadataObject)
+        >-> (| Inc.keyed (\_ (((tableRawInfo, tableRelationships), tableComputedFields), tableRemoteRelationships) -> do
                  let columns = _tciFieldInfoMap tableRawInfo
-                 allFields <- addNonColumnFields -<
-                   (tableRawInfos, columns, tableRelationships, tableComputedFields)
-                 returnA -< tableRawInfo { _tciFieldInfoMap = allFields }) |)
+                 (allFields, typeMap) <- addNonColumnFields -<
+                   (tableRawInfos, columns, M.map fst remoteSchemaMap, tableRelationships, tableComputedFields, tableRemoteRelationships)
+                 returnA -< (tableRawInfo { _tciFieldInfoMap = allFields }, typeMap)) |)
+
+      let tableCoreInfos = M.map fst rawTableCoreInfos
+          remoteRelationshipTypes = mconcat $ map snd $ M.elems rawTableCoreInfos
 
       -- permissions and event triggers
       tableCoreInfosDep <- Inc.newDependency -< tableCoreInfos
@@ -276,10 +286,6 @@ buildSchemaCacheRule = proc (catalogMetadata, invalidationKeys) -> do
              |)
         >-> (\actionMap -> returnA -< M.catMaybes actionMap)
 
-      -- remote schemas
-      let remoteSchemaInvalidationKeys = Inc.selectD #_ikRemoteSchemas invalidationKeys
-      remoteSchemaMap <- buildRemoteSchemas -< (remoteSchemaInvalidationKeys, remoteSchemas)
-
       returnA -< BuildOutputs
         { _boTables = tableCache
         , _boActions = actionCache
@@ -287,6 +293,7 @@ buildSchemaCacheRule = proc (catalogMetadata, invalidationKeys) -> do
         , _boRemoteSchemas = remoteSchemaMap
         , _boAllowlist = allowList
         , _boCustomTypes = resolvedCustomTypes
+        , _boRemoteRelationshipTypes = remoteRelationshipTypes
         }
 
     mkEventTriggerMetadataObject (CatalogEventTrigger qt trn configuration) =
@@ -381,13 +388,14 @@ buildSchemaCacheRule = proc (catalogMetadata, invalidationKeys) -> do
          , HashMap RemoteSchemaName (RemoteSchemaCtx, MetadataObject)
          , (NonObjectTypeMap, AnnotatedObjects)
          , ActionCache
+         , VT.TypeMap
          ) `arr` (RemoteSchemaMap, GS.GCtxMap, GS.GCtx)
-    buildGQLSchema = proc (tableCache, functionCache, remoteSchemas, customTypes, actionCache) -> do
+    buildGQLSchema = proc (tableCache, functionCache, remoteSchemas, customTypes, actionCache, remoteRelationshipTypes) -> do
       baseGQLSchema <- bindA -< GS.mkGCtxMap (snd customTypes) tableCache functionCache actionCache
       (| foldlA' (\(remoteSchemaMap, gqlSchemas, remoteGQLSchemas)
                    (remoteSchemaName, (remoteSchema, metadataObject)) ->
            (| withRecordInconsistency (do
-                let gqlSchema = convRemoteGCtx $ rscGCtx remoteSchema
+                let gqlSchema = rscGCtx remoteSchema
                 mergedGQLSchemas <- bindErrorA -< mergeRemoteSchema gqlSchemas gqlSchema
                 mergedRemoteGQLSchemas <- bindErrorA -< mergeGCtx remoteGQLSchemas gqlSchema
                 let mergedRemoteSchemaMap = M.insert remoteSchemaName remoteSchema remoteSchemaMap
@@ -396,9 +404,12 @@ buildSchemaCacheRule = proc (catalogMetadata, invalidationKeys) -> do
            >-> (| onNothingA ((remoteSchemaMap, gqlSchemas, remoteGQLSchemas) >- returnA) |))
        |) (M.empty, baseGQLSchema, GC.emptyGCtx) (M.toList remoteSchemas)
        -- merge the custom types into schema
-       >-> (\(remoteSchemaMap, gqlSchema, defGqlCtx) -> do
-               (schemaWithCT, defCtxWithCT) <- bindA -< mergeCustomTypes gqlSchema defGqlCtx customTypes
-               returnA -< (remoteSchemaMap, schemaWithCT, defCtxWithCT)
+       >-> (\(remoteSchemaMap, gqlSchema', defGqlCtx') -> do
+               (gqlSchema, defGqlCtx) <- bindA -< mergeCustomTypes gqlSchema' defGqlCtx' customTypes
+               returnA -< ( remoteSchemaMap
+                          , M.map (mergeRemoteTypesWithGCtx remoteRelationshipTypes) gqlSchema
+                          , mergeRemoteTypesWithGCtx remoteRelationshipTypes defGqlCtx
+                          )
            )
 
 -- | @'withMetadataCheck' cascade action@ runs @action@ and checks if the schema changed as a

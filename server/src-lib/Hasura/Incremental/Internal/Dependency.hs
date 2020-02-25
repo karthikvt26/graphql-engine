@@ -11,6 +11,7 @@ import qualified Language.GraphQL.Draft.Syntax as G
 import qualified Network.URI.Extended          as N
 import qualified Data.URL.Template             as UT
 
+import           Data.Set                      (Set)
 import           Control.Applicative
 import           Data.Aeson                    (Value)
 import           Data.Functor.Classes          (Eq1 (..), Eq2 (..))
@@ -169,6 +170,8 @@ instance (Cacheable a) => Cacheable (Vector a) where
 instance (Cacheable k, Cacheable v) => Cacheable (HashMap k v) where
   unchanged accesses = liftEq2 (unchanged accesses) (unchanged accesses)
 instance (Cacheable a) => Cacheable (HashSet a) where
+  unchanged = liftEq . unchanged
+instance (Cacheable a) => Cacheable (Set a) where
   unchanged = liftEq . unchanged
 
 instance Cacheable ()

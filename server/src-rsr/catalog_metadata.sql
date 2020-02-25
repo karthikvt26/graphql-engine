@@ -9,7 +9,8 @@ select
     'allowlist_collections', allowlist.item,
     'computed_fields', computed_field.items,
     'custom_types', coalesce((select custom_types from hdb_catalog.hdb_custom_types), '{}'),
-    'actions', actions.items
+    'actions', actions.items,
+    'remote_relationships', remote_relationships.items
   )
 from
   (
@@ -205,4 +206,8 @@ from
               hdb_catalog.hdb_action_permission hap
           where hap.action_name = ha.action_name
       ) p on 'true'
-  ) as actions
+  ) as actions,
+  (
+    select coalesce(json_agg(configuration),'[]') as items
+      from hdb_catalog.hdb_remote_relationship
+  ) as remote_relationships

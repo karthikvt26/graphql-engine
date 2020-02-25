@@ -33,8 +33,11 @@ import qualified ListT
 
 import           Hasura.EncJSON
 import           Hasura.GraphQL.Logging
+
 import           Hasura.GraphQL.Transport.HTTP.Protocol
 import           Hasura.GraphQL.Transport.WebSocket.Protocol
+import qualified Hasura.GraphQL.Transport.WebSocket.Server   as WS
+import qualified Hasura.Logging                              as L
 import           Hasura.Prelude
 import           Hasura.RQL.Types
 import           Hasura.RQL.Types.Error                      (Code (StartFailed))
@@ -49,10 +52,7 @@ import           Hasura.Server.Version                       (HasVersion)
 import qualified Hasura.GraphQL.Execute                      as E
 import qualified Hasura.GraphQL.Execute.LiveQuery            as LQ
 import qualified Hasura.GraphQL.Execute.LiveQuery.Poll       as LQ
-import qualified Hasura.GraphQL.Transport.WebSocket.Server   as WS
-import qualified Hasura.Logging                              as L
 import qualified Hasura.Server.Telemetry.Counters            as Telem
-
 
 type OperationMap
   = STMMap.Map OperationId (LQ.LiveQueryId, Maybe OperationName)
@@ -331,8 +331,8 @@ onStart serverEnv wsConn (StartMsg opId q) = catchAndIgnore $ do
                 -> Telem.CacheHit -> RequestId -> GQLReqUnparsed -> UserInfo -> E.ExecOp
                 -> ExceptT () m ()
     runHasuraGQ timerTot telemCacheHit reqId query userInfo = \case
-      E.ExOpQuery opTx genSql ->
-        execQueryOrMut Telem.Query genSql $ runLazyTx' pgExecCtx opTx
+      E.ExOpQuery tx genSql ->
+        execQueryOrMut Telem.Query genSql $ runLazyTx' pgExecCtx tx
       E.ExOpMutation opTx ->
         execQueryOrMut Telem.Mutation Nothing $
           runLazyTx pgExecCtx Q.ReadWrite $ withUserInfo userInfo opTx
@@ -395,7 +395,7 @@ onStart serverEnv wsConn (StartMsg opId q) = catchAndIgnore $ do
 
       -- if it's not a subscription, use HTTP to execute the query on the remote
       (runExceptT $ flip runReaderT execCtx $
-        E.execRemoteGQ reqId userInfo reqHdrs q rsi opDef) >>= \case
+        E.execRemoteGQ reqId userInfo reqHdrs q rsi (G._todType opDef)) >>= \case
           Left  err           -> postExecErr reqId err
           Right (telemTimeIO_DT, !val) -> do
             -- Telemetry. NOTE: don't time network IO:
@@ -418,31 +418,26 @@ onStart serverEnv wsConn (StartMsg opId q) = catchAndIgnore $ do
       _ enableAL = serverEnv
 
     WSConnData userInfoR opMap errRespTy = WS.getData wsConn
-
-    logOpEv opTy reqId =
-      logWSEvent logger wsConn $ EOperation opDet
+    logOpEv opTy reqId = logWSEvent logger wsConn $ EOperation opDet
       where
         opDet = OperationDetails opId reqId (_grOperationName q) opTy query
         -- log the query only in errors
-        query = case opTy of
-          ODQueryErr _ -> Just q
-          _            -> Nothing
-
+        query =
+          case opTy of
+            ODQueryErr _ -> Just q
+            _            -> Nothing
     getErrFn errTy =
       case errTy of
         ERTLegacy           -> encodeQErr
         ERTGraphqlCompliant -> encodeGQLErr
-
     sendStartErr e = do
       let errFn = getErrFn errRespTy
       sendMsg wsConn $
         SMErr $ ErrorMsg opId $ errFn False $ err400 StartFailed e
       logOpEv (ODProtoErr e) Nothing
-
     sendCompleted reqId = do
       liftIO $ sendMsg wsConn $ SMComplete $ CompletionMsg opId
       logOpEv ODCompleted reqId
-
     postExecErr reqId qErr = do
       let errFn = getErrFn errRespTy
       logOpEv (ODQueryErr qErr) (Just reqId)
@@ -537,7 +532,7 @@ logWSEvent (L.Logger logger) wsConn wsEv = do
       ERejected _ -> True
       EConnErr _  -> True
       EClosed     -> False
-      EOperation op -> case _odOperationType op of
+      EOperation operation -> case _odOperationType operation of
         ODStarted    -> False
         ODProtoErr _ -> True
         ODQueryErr _ -> True

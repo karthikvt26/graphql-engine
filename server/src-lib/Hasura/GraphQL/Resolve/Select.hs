@@ -112,6 +112,9 @@ processTableSelectionSet fldTy flds =
               return $ case riType relInfo of
                 ObjRel -> RS.FObj annRel
                 ArrRel -> RS.FArr $ RS.ASSimple annRel
+          RFRemoteRelationship (RemoteField relationship _ _ rsi) -> do
+            markNotReusable
+            pure $ RS.FRemote $ RS.RemoteSelect (_fArguments fld) (_fSelSet fld) relationship rsi
 
 type TableAggFlds = RS.TableAggFldsG UnresolvedVal
 
@@ -121,13 +124,11 @@ fromAggSelSet
      )
   => PGColGNameMap -> G.NamedType -> SelSet -> m TableAggFlds
 fromAggSelSet colGNameMap fldTy selSet = fmap toFields $
-  withSelSet selSet $ \f -> do
-    let fTy = _fType f
-        fSelSet = _fSelSet f
-    case _fName f of
+  withSelSet selSet $ \Field{..} ->
+    case _fName of
       "__typename" -> return $ RS.TAFExp $ G.unName $ G.unNamedType fldTy
-      "aggregate"  -> RS.TAFAgg <$> convertAggFld colGNameMap fTy fSelSet
-      "nodes"      -> RS.TAFNodes <$> processTableSelectionSet fTy fSelSet
+      "aggregate"  -> RS.TAFAgg <$> convertAggFld colGNameMap _fType _fSelSet
+      "nodes"      -> RS.TAFNodes <$> processTableSelectionSet _fType _fSelSet
       G.Name t     -> throw500 $ "unexpected field in _agg node: " <> t
 
 type TableArgs = RS.TableArgsG UnresolvedVal
@@ -383,14 +384,12 @@ convertAggFld
   :: (MonadReusability m, MonadError QErr m)
   => PGColGNameMap -> G.NamedType -> SelSet -> m RS.AggFlds
 convertAggFld colGNameMap ty selSet = fmap toFields $
-  withSelSet selSet $ \fld -> do
-    let fType = _fType fld
-        fSelSet = _fSelSet fld
-    case _fName fld of
+  withSelSet selSet $ \Field{..} ->
+    case _fName of
       "__typename" -> return $ RS.AFExp $ G.unName $ G.unNamedType ty
-      "count"      -> RS.AFCount <$> convertCount colGNameMap (_fArguments fld)
+      "count"      -> RS.AFCount <$> convertCount colGNameMap _fArguments
       n            -> do
-        colFlds <- convertColFlds colGNameMap fType fSelSet
+        colFlds <- convertColFlds colGNameMap _fType _fSelSet
         unless (isAggFld n) $ throwInvalidFld n
         return $ RS.AFOp $ RS.AggOp (G.unName n) colFlds
   where

@@ -113,9 +113,9 @@ module Hasura.RQL.Types.SchemaCache
   , FunctionCache
   , getFuncsOfTable
   , askFunctionInfo
-  ) where
 
-import qualified Hasura.GraphQL.Context            as GC
+  , mergeRemoteTypesWithGCtx
+  ) where
 
 import           Hasura.Db
 import           Hasura.Incremental                (Dependency, MonadDepend (..),
@@ -139,6 +139,8 @@ import           Data.Aeson
 import           Data.Aeson.Casing
 import           Data.Aeson.TH
 
+import qualified Hasura.GraphQL.Validate.Types     as VT
+import qualified Hasura.GraphQL.Context            as GC
 import qualified Data.HashMap.Strict               as M
 import qualified Data.HashSet                      as HS
 import qualified Data.Text                         as T
@@ -163,7 +165,7 @@ type WithDeps a = (a, [SchemaDependency])
 data RemoteSchemaCtx
   = RemoteSchemaCtx
   { rscName :: !RemoteSchemaName
-  , rscGCtx :: !GC.RemoteGCtx
+  , rscGCtx :: !GC.GCtx
   , rscInfo :: !RemoteSchemaInfo
   } deriving (Show, Eq)
 
@@ -190,16 +192,16 @@ type ActionCache = M.HashMap ActionName ActionInfo -- info of all actions
 
 data SchemaCache
   = SchemaCache
-  { scTables            :: !TableCache
-  , scActions           :: !ActionCache
-  , scFunctions         :: !FunctionCache
-  , scRemoteSchemas     :: !RemoteSchemaMap
-  , scAllowlist         :: !(HS.HashSet GQLQuery)
-  , scCustomTypes       :: !(NonObjectTypeMap, AnnotatedObjects)
-  , scGCtxMap           :: !GC.GCtxMap
-  , scDefaultRemoteGCtx :: !GC.GCtx
-  , scDepMap            :: !DepMap
-  , scInconsistentObjs  :: ![InconsistentMetadata]
+  { scTables              :: !TableCache
+  , scActions             :: !ActionCache
+  , scFunctions           :: !FunctionCache
+  , scRemoteSchemas       :: !RemoteSchemaMap
+  , scAllowlist           :: !(HS.HashSet GQLQuery)
+  , scCustomTypes         :: !(NonObjectTypeMap, AnnotatedObjects)
+  , scGCtxMap             :: !GC.GCtxMap
+  , scDefaultRemoteGCtx   :: !GC.GCtx
+  , scDepMap              :: !DepMap
+  , scInconsistentObjs    :: ![InconsistentMetadata]
   } deriving (Show, Eq)
 $(deriveToJSON (aesonDrop 2 snakeCase) ''SchemaCache)
 
@@ -277,3 +279,7 @@ getDependentObjsWith f sc objId =
     induces (SOTable tn1) (SOTableObj tn2 _) = tn1 == tn2
     induces objId1 objId2                    = objId1 == objId2
     -- allDeps = toList $ fromMaybe HS.empty $ M.lookup objId $ scDepMap sc
+
+mergeRemoteTypesWithGCtx :: VT.TypeMap -> GC.GCtx -> GC.GCtx
+mergeRemoteTypesWithGCtx remoteTypeMap gctx =
+  gctx {GC._gTypes = remoteTypeMap <> GC._gTypes gctx }

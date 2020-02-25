@@ -33,25 +33,26 @@ module Hasura.RQL.DDL.Metadata.Types
 
 import           Hasura.Prelude
 
-import           Control.Lens                   hiding (set, (.=))
+import           Control.Lens                        hiding (set, (.=))
 import           Data.Aeson
 import           Data.Aeson.Casing
 import           Data.Aeson.TH
-import           Language.Haskell.TH.Syntax     (Lift)
+import           Language.Haskell.TH.Syntax          (Lift)
 
-import qualified Data.Aeson.Ordered             as AO
-import qualified Data.HashMap.Strict            as HM
-import qualified Data.HashSet                   as HS
-import qualified Language.GraphQL.Draft.Syntax  as G
+import qualified Data.Aeson.Ordered                  as AO
+import qualified Data.HashMap.Strict                 as HM
+import qualified Data.HashSet                        as HS
+import qualified Language.GraphQL.Draft.Syntax       as G
 
 import           Hasura.RQL.Types
 import           Hasura.SQL.Types
 
-import qualified Hasura.RQL.DDL.ComputedField   as ComputedField
-import qualified Hasura.RQL.DDL.Permission      as Permission
-import qualified Hasura.RQL.DDL.QueryCollection as Collection
-import qualified Hasura.RQL.DDL.Relationship    as Relationship
-import qualified Hasura.RQL.DDL.Schema          as Schema
+import qualified Hasura.RQL.DDL.ComputedField        as ComputedField
+import qualified Hasura.RQL.DDL.Permission           as Permission
+import qualified Hasura.RQL.DDL.QueryCollection      as Collection
+import qualified Hasura.RQL.DDL.Relationship         as Relationship
+import qualified Hasura.RQL.DDL.Schema               as Schema
+import qualified Hasura.RQL.Types.RemoteRelationship as RemoteRelationship
 
 data MetadataVersion
   = MVVersion1
@@ -164,14 +165,15 @@ instance FromJSON ClearMetadata where
 
 data ReplaceMetadata
   = ReplaceMetadata
-  { aqVersion          :: !MetadataVersion
-  , aqTables           :: ![TableMeta]
-  , aqFunctions        :: !FunctionsMetadata
-  , aqRemoteSchemas    :: ![AddRemoteSchemaQuery]
-  , aqQueryCollections :: ![Collection.CreateCollection]
-  , aqAllowlist        :: ![Collection.CollectionReq]
-  , aqCustomTypes      :: !CustomTypes
-  , aqActions          :: ![ActionMetadata]
+  { aqVersion             :: !MetadataVersion
+  , aqTables              :: ![TableMeta]
+  , aqFunctions           :: !FunctionsMetadata
+  , aqRemoteSchemas       :: ![AddRemoteSchemaQuery]
+  , aqQueryCollections    :: ![Collection.CreateCollection]
+  , aqAllowlist           :: ![Collection.CollectionReq]
+  , aqCustomTypes         :: !CustomTypes
+  , aqActions             :: ![ActionMetadata]
+  , aqRemoteRelationships :: ![RemoteRelationship.RemoteRelationship]
   } deriving (Show, Eq, Lift)
 
 instance FromJSON ReplaceMetadata where
@@ -185,6 +187,7 @@ instance FromJSON ReplaceMetadata where
       <*> o .:? "allow_list" .!= []
       <*> o .:? "custom_types" .!= emptyCustomTypes
       <*> o .:? "actions" .!= []
+      <*> o .:? "remote_relationships" .!= []
     where
       parseFunctions version maybeValue =
         case version of
@@ -249,6 +252,7 @@ replaceMetadataToOrdJSON ( ReplaceMetadata
                                allowlist
                                customTypes
                                actions
+                               remoteRelationships
                              ) = AO.object $ [versionPair, tablesPair] <>
                                  catMaybes [ functionsPair
                                            , remoteSchemasPair
@@ -256,6 +260,7 @@ replaceMetadataToOrdJSON ( ReplaceMetadata
                                            , allowlistPair
                                            , actionsPair
                                            , customTypesPair
+                                           , remoteRelationshipsPair
                                            ]
   where
     versionPair = ("version", AO.toOrdered version)
@@ -270,6 +275,7 @@ replaceMetadataToOrdJSON ( ReplaceMetadata
     customTypesPair = if customTypes == emptyCustomTypes then Nothing
                       else Just ("custom_types", customTypesToOrdJSON customTypes)
     actionsPair = listToMaybeOrdPair "actions" actionMetadataToOrdJSON actions
+    remoteRelationshipsPair = listToMaybeOrdPair "remote_relationships" AO.toOrdered remoteRelationships
 
     tableMetaToOrdJSON :: TableMeta -> AO.Value
     tableMetaToOrdJSON ( TableMeta

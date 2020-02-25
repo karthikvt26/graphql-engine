@@ -8,7 +8,6 @@ import           Hasura.Prelude
 import           Hasura.RQL.DDL.Headers
 import           Hasura.RQL.DDL.Metadata.Types
 import           Hasura.RQL.Types
-import           Hasura.Server.Utils
 import           Hasura.SQL.Types
 
 import qualified Hasura.RQL.DDL.ComputedField       as ComputedField
@@ -28,6 +27,7 @@ import qualified Language.GraphQL.Draft.Syntax      as G
 import qualified Language.Haskell.TH.Syntax         as TH
 import qualified Network.URI                        as N
 
+import           Data.List.Extended                 (duplicates)
 import           Test.QuickCheck
 
 genReplaceMetadata :: Gen ReplaceMetadata
@@ -36,6 +36,7 @@ genReplaceMetadata = do
   ReplaceMetadata version
     <$> arbitrary
     <*> genFunctionsMetadata version
+    <*> arbitrary
     <*> arbitrary
     <*> arbitrary
     <*> arbitrary
@@ -292,4 +293,23 @@ instance Arbitrary ActionPermissionMetadata where
   arbitrary = genericArbitrary
 
 instance Arbitrary ActionMetadata where
+  arbitrary = genericArbitrary
+
+deriving instance Arbitrary G.StringValue
+deriving instance Arbitrary G.Variable
+deriving instance Arbitrary G.ListValue
+deriving instance Arbitrary G.ObjectValue
+
+instance Arbitrary G.Value where
+  arbitrary = genericArbitrary
+
+instance (Arbitrary a) => Arbitrary (G.ObjectFieldG a) where
+  arbitrary = genericArbitrary
+
+deriving instance Arbitrary RemoteArguments
+
+instance Arbitrary FieldCall where
+  arbitrary = genericArbitrary
+
+instance Arbitrary RemoteRelationship where
   arbitrary = genericArbitrary

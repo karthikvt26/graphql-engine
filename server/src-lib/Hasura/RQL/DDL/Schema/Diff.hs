@@ -24,7 +24,6 @@ module Hasura.RQL.DDL.Schema.Diff
 import           Hasura.Prelude
 import           Hasura.RQL.Types
 import           Hasura.RQL.Types.Catalog
-import           Hasura.Server.Utils      (duplicates)
 import           Hasura.SQL.Types
 
 import qualified Database.PG.Query        as Q
@@ -32,6 +31,7 @@ import qualified Database.PG.Query        as Q
 import           Control.Arrow            ((&&&))
 import           Data.Aeson.Casing
 import           Data.Aeson.TH
+import           Data.List.Extended       (duplicates)
 
 import qualified Data.HashMap.Strict      as M
 import qualified Data.HashSet             as HS
@@ -235,7 +235,7 @@ getFuncDiff oldMeta newMeta =
 getOverloadedFuncs
   :: [QualifiedFunction] -> [FunctionMeta] -> [QualifiedFunction]
 getOverloadedFuncs trackedFuncs newFuncMeta =
-  duplicates $ map fmFunction trackedMeta
+  toList $ duplicates $ map fmFunction trackedMeta
   where
     trackedMeta = flip filter newFuncMeta $ \fm ->
       fmFunction fm `elem` trackedFuncs
