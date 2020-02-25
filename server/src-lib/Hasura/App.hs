@@ -33,6 +33,7 @@ import           Hasura.Db
 import           Hasura.EncJSON
 import           Hasura.Events.Lib
 import           Hasura.GraphQL.Execute                 (GQLApiAuthorization (..))
+import           Hasura.GraphQL.Resolve.Action          (asyncActionsProcessor)
 import           Hasura.GraphQL.Transport.HTTP.Protocol (toParsed)
 import           Hasura.Logging
 import           Hasura.Prelude
@@ -74,6 +75,8 @@ parseHGECommand =
           ( progDesc "Clean graphql-engine's metadata to start afresh" ))
         <> command "execute" (info (pure  HCExecute)
           ( progDesc "Execute a query" ))
+        <> command "downgrade" (info (HCDowngrade <$> downgradeOptionsParser)
+          (progDesc "Downgrade the GraphQL Engine schema to the specified version"))
         <> command "version" (info (pure  HCVersion)
           (progDesc "Prints the version of GraphQL Engine"))
     )
@@ -187,7 +190,6 @@ initialiseCtx hgeCmd rci = do
       initRes <- runAsAdmin pool sqlGenCtx httpManager $ migrateCatalog currentTime
       either printErrJExit (\(result, schemaCache) -> logger result $> schemaCache) initRes
 
-
 runHGEServer
   :: ( HasVersion
      , MonadIO m
@@ -256,6 +258,9 @@ runHGEServer ServeOptions{..} InitCtx{..} initTime = do
   unLogger logger $ mkGenericStrLog LevelInfo "event_triggers" "starting workers"
   void $ liftIO $ C.forkIO $ processEventQueue logger logEnvHeaders
     _icHttpManager _icPgPool (getSCFromRef cacheRef) eventEngineCtx
+
+  -- start a backgroud thread to handle async actions
+  void $ liftIO $ C.forkIO $ asyncActionsProcessor (_scrCache cacheRef) _icPgPool _icHttpManager
 
   -- start a background thread to check for updates
   void $ liftIO $ C.forkIO $ checkForUpdates loggerCtx _icHttpManager

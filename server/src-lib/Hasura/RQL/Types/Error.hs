@@ -94,9 +94,15 @@ data Code
   | RemoteSchemaConflicts
   -- Websocket/Subscription errors
   | StartFailed
+
   -- API limits related TODO: parameterize this and move this to pro
   | RateLimitExceeded
   | DepthLimitExceeded
+
+  | InvalidCustomTypes
+  -- Actions Webhook code
+  | ActionWebhookCode !Text
+
   deriving (Eq)
 
 instance Show Code where
@@ -135,8 +141,13 @@ instance Show Code where
     RemoteSchemaError     -> "remote-schema-error"
     RemoteSchemaConflicts -> "remote-schema-conflicts"
     StartFailed           -> "start-failed"
+
     RateLimitExceeded     -> "rate-limit-exceeded"
     DepthLimitExceeded    -> "depth-limit-exceeded"
+
+    InvalidCustomTypes    -> "invalid-custom-types"
+    ActionWebhookCode t   -> T.unpack t
+
 
 data QErr
   = QErr
