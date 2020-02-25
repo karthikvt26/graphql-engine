@@ -221,7 +221,6 @@ class TestGraphqlInsertGeoJson(DefaultTestMutations):
 @pytest.mark.parametrize("transport", ['http', 'websocket'])
 class TestGraphqlNestedInserts(DefaultTestMutations):
 
-    @pytest.mark.xfail(reason="Incorrect ordering. Refer https://github.com/hasura/graphql-engine/issues/3271")
     def test_author_with_articles(self, hge_ctx, transport):
         check_query_f(hge_ctx, self.dir() + "/author_with_articles.yaml")
 
@@ -234,7 +233,6 @@ class TestGraphqlNestedInserts(DefaultTestMutations):
     def test_author_with_articles_author_id_fail(self, hge_ctx, transport):
         check_query_f(hge_ctx, self.dir() + "/author_with_articles_author_id_fail.yaml")
 
-    @pytest.mark.xfail(reason="Incorrect ordering. Refer https://github.com/hasura/graphql-engine/issues/3271")
     def test_articles_with_author(self, hge_ctx, transport):
         check_query_f(hge_ctx, self.dir() + "/articles_with_author.yaml")
 
@@ -293,6 +291,9 @@ class TestGraphqlUpdateBasic(DefaultTestMutations):
 
     def test_no_operator_err(self, hge_ctx, transport):
         check_query_f(hge_ctx, self.dir() + "/person_error_no_operator.yaml")
+
+    def test_column_in_multiple_operators(self, hge_ctx, transport):
+        check_query_f(hge_ctx, self.dir() + "/article_column_multiple_operators.yaml")
 
     @classmethod
     def dir(cls):
@@ -367,6 +368,9 @@ class TestGraphqlDeleteBasic(DefaultTestMutations):
 
     def test_article_delete_returning_author(self, hge_ctx, transport):
         check_query_f(hge_ctx, self.dir() + "/article_returning_author.yaml", transport)
+
+    def test_author_returning_empty_articles(self, hge_ctx, transport):
+        check_query_f(hge_ctx, self.dir() + "/author_returning_empty_articles.yaml", transport)
 
     @classmethod
     def dir(cls):
