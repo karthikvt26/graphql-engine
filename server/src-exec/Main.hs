@@ -47,7 +47,7 @@ runApp (HGEOptionsG rci hgeCmd) =
         execQuery queryBs
           & runHasSystemDefinedT (SystemDefined False)
           & runCacheRWT schemaCache
-          & fmap fst
+          & fmap (\(res, _, _) -> res)
       either printErrJExit (liftIO . BLC.putStrLn) res
 
     HCVersion -> liftIO $ putStrLn $ "Hasura GraphQL Engine: " ++ convertText currentVersion

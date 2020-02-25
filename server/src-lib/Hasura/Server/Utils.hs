@@ -125,13 +125,6 @@ fmapL :: (a -> a') -> Either a b -> Either a' b
 fmapL fn (Left e) = Left (fn e)
 fmapL _ (Right x) = pure x
 
--- diff time to micro seconds
-diffTimeToMicro :: NominalDiffTime -> Int
-diffTimeToMicro diff =
-  floor (realToFrac diff :: Double) * aSecond
-  where
-    aSecond = 1000 * 1000
-
 generateFingerprint :: IO Text
 generateFingerprint = UUID.toText <$> UUID.nextRandom
 
@@ -293,9 +286,9 @@ showSockAddr (SockAddrInet6 _ _ (0,0,0,1) _)              = "::1"
 showSockAddr (SockAddrInet6 _ _ addr6 _)                  = showIPv6 addr6
 showSockAddr _                                            = "unknownSocket"
 
-withElapsedTime :: MonadIO m => m a -> m (NominalDiffTime, a)
-withElapsedTime ma = do
-  t1 <- liftIO getCurrentTime
-  a <- ma
-  t2 <- liftIO getCurrentTime
-  return (diffUTCTime t2 t1, a)
+-- withElapsedTime :: MonadIO m => m a -> m (NominalDiffTime, a)
+-- withElapsedTime ma = do
+--   t1 <- liftIO getCurrentTime
+--   a <- ma
+--   t2 <- liftIO getCurrentTime
+--   return (diffUTCTime t2 t1, a)
