@@ -23,7 +23,7 @@ main = parseArgs >>= unAppM . runApp
 
 runApp :: HGEOptions Hasura -> AppM ()
 runApp (HGEOptionsG rci hgeCmd) =
-  withVersion $$(getVersionFromEnvironment) case hgeCmd of
+  withVersion $$(getVersionFromEnvironment) $ case hgeCmd of
     HCServe serveOptions -> do
       (initCtx, initTime) <- initialiseCtx hgeCmd rci
       runHGEServer serveOptions initCtx initTime

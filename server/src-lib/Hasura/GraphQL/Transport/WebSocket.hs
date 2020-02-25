@@ -222,12 +222,6 @@ onConn (L.Logger logger) corsPolicy wsId requestHead ipAddress = do
           CSNotInitialised _ _      -> STM.retry
           CSInitError _             -> STM.retry
           CSInitialised clientState -> maybe STM.retry return $ wscsJwtExpTime clientState
--- =======
---           CSNotInitialised _        -> STM.retry
---           CSInitError _              -> STM.retry
---           CSInitialised _ expTimeM _ ->
---             maybe STM.retry return expTimeM
--- >>>>>>> master
       currTime <- TC.getCurrentTime
       sleep $ fromUnits $ TC.diffUTCTime expTime currTime
 
