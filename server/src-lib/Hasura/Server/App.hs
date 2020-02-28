@@ -27,7 +27,7 @@ import qualified Database.PG.Query                      as Q
 import qualified Network.HTTP.Client                    as HTTP
 import qualified Network.HTTP.Types                     as HTTP
 import qualified Network.Wai                            as Wai
-import qualified Network.Wai.Handler.WebSockets         as WS
+import qualified Network.Wai.Handler.WebSockets.Custom  as WSC
 import qualified Network.WebSockets                     as WS
 import qualified System.Metrics                         as EKG
 import qualified System.Metrics.Json                    as EKG
@@ -89,10 +89,11 @@ data ServerCtx
 
 data HandlerCtx
   = HandlerCtx
-  { hcServerCtx  :: !ServerCtx
-  , hcUser       :: !UserInfo
-  , hcReqHeaders :: ![HTTP.Header]
-  , hcRequestId  :: !RequestId
+  { hcServerCtx       :: !ServerCtx
+  , hcUser            :: !UserInfo
+  , hcReqHeaders      :: ![HTTP.Header]
+  , hcSourceIpAddress :: !IpAddress
+  , hcRequestId       :: !RequestId
   }
 
 type Handler m = ExceptT QErr (ReaderT HandlerCtx m)
@@ -186,9 +187,13 @@ buildQCtx = do
   sqlGenCtx <- scSQLGenCtx . hcServerCtx <$> ask
   return $ QCtx userInfo cache sqlGenCtx
 
--- | Typeclass representing the metadata API authorization effect
+-- | Authorization rules to be applied on the metadata (`/v1/query`) API
 class MetadataApiAuthorization m where
-  authorizeMetadataApi :: RQLQuery -> UserInfo -> Handler m ()
+  authorizeMetadataApi :: HasVersion => RQLQuery -> UserInfo -> Handler m ()
+
+-- | The config API (/v1alpha1/config) handler
+class Monad m => ConfigApiHandler m where
+  runConfigApiHandler :: HasVersion => ServerCtx -> Spock.SpockCtxT () m ()
 
 mkSpockAction
   :: (HasVersion, MonadIO m, FromJSON a, ToJSON a, UserAuthentication m, HttpLog m)
@@ -206,6 +211,7 @@ mkSpockAction serverCtx qErrEncoder qErrModifier apiHandler = do
     let headers = Wai.requestHeaders req
         authMode = scAuthMode serverCtx
         manager = scManager serverCtx
+        ipAddress = getSourceFromFallback req
 
     requestId <- getRequestId headers
 
@@ -213,7 +219,7 @@ mkSpockAction serverCtx qErrEncoder qErrModifier apiHandler = do
     userInfo  <- either (logErrorAndResp Nothing requestId req (Left reqBody) False headers . qErrModifier)
                  return userInfoE
 
-    let handlerState = HandlerCtx serverCtx userInfo headers requestId
+    let handlerState = HandlerCtx serverCtx userInfo headers ipAddress requestId
         curRole = userRole userInfo
 
     (serviceTime, (result, q)) <- withElapsedTime $ case apiHandler of
@@ -295,12 +301,27 @@ v1QueryHandler query = do
       instanceId <- scInstanceId . hcServerCtx <$> ask
       runQuery pgExecCtx instanceId userInfo schemaCache httpMgr sqlGenCtx (SystemDefined False) query
 
-v1Alpha1GQHandler :: (HasVersion, MonadIO m) => GH.GQLBatchedReqs GH.GQLQueryText -> Handler m (HttpResponse EncJSON)
+v1Alpha1GQHandler
+  :: (HasVersion, E.GQLApiAuthorization m, MonadIO m)
+  => GH.GQLBatchedReqs GH.GQLQueryText -> Handler m (HttpResponse EncJSON)
 v1Alpha1GQHandler query = do
   userInfo <- asks hcUser
   reqHeaders <- asks hcReqHeaders
+  ipAddress <- asks hcSourceIpAddress
   manager <- scManager . hcServerCtx <$> ask
   scRef <- scCacheRef . hcServerCtx <$> ask
+
+  -- apply the 'E.GQLApiAuthorization' effect and get back parsed GQL queries
+  -- TODO: is this optimal? is there any better way of doing it?
+  res <- case query of
+    GH.GQLSingleRequest req -> do
+      r <- lift $ lift $ E.authorizeGQLApi userInfo (reqHeaders, ipAddress) req
+      return $ GH.GQLSingleRequest <$> r
+    GH.GQLBatchedReqs reqs -> do
+      r <- lift $ lift $ traverse (E.authorizeGQLApi userInfo (reqHeaders, ipAddress)) reqs
+      return $ fmap GH.GQLBatchedReqs $ sequence r
+
+  reqParsed <- either throwError return res
   (sc, scVer) <- liftIO $ readIORef $ _scrCache scRef
   pgExecCtx <- scPGExecCtx . hcServerCtx <$> ask
   sqlGenCtx <- scSQLGenCtx . hcServerCtx <$> ask
@@ -310,10 +331,10 @@ v1Alpha1GQHandler query = do
   requestId <- asks hcRequestId
   let execCtx = E.ExecutionCtx logger sqlGenCtx pgExecCtx planCache
                 (lastBuiltSchemaCache sc) scVer manager enableAL
-  flip runReaderT execCtx $ GH.runGQBatched requestId userInfo reqHeaders query
+  flip runReaderT execCtx $ GH.runGQBatched requestId userInfo reqHeaders (query, reqParsed)
 
 v1GQHandler
-  :: (HasVersion, MonadIO m)
+  :: (HasVersion, E.GQLApiAuthorization m, MonadIO m)
   => GH.GQLBatchedReqs GH.GQLQueryText
   -> Handler m (HttpResponse EncJSON)
 v1GQHandler = v1Alpha1GQHandler
@@ -405,11 +426,21 @@ legacyQueryHandler tn queryType req =
   where
     qt = QualifiedObject publicSchema tn
 
+configApiGetHandler
+  :: (HasVersion, MonadIO m, UserAuthentication m, HttpLog m)
+  => ServerCtx -> Spock.SpockCtxT () m ()
+configApiGetHandler serverCtx =
+  Spock.get "v1alpha1/config" $ mkSpockAction serverCtx encodeQErr id $
+    mkGetHandler $ do
+      onlyAdmin
+      let res = encJFromJValue $ runGetConfig (scAuthMode serverCtx)
+      return $ JSONResp $ HttpResponse res Nothing
+
 initErrExit :: QErr -> IO a
 initErrExit e = do
   putStrLn $
     "failed to build schema-cache because of inconsistent metadata: "
-    <> T.unpack (qeError e)
+    <> (show e)
   exitFailure
 
 data HasuraApp
@@ -429,22 +460,37 @@ mkWaiApp
      , HttpLog m
      , UserAuthentication m
      , MetadataApiAuthorization m
+     , E.GQLApiAuthorization m
+     , ConfigApiHandler m
      , LA.Forall (LA.Pure m)
      )
   => Q.TxIsolation
+  -- ^ postgres transaction isolation to be used in the entire app
   -> L.Logger L.Hasura
+  -- ^ a 'L.Hasura' specific logger
   -> SQLGenCtx
   -> Bool
+  -- ^ is AllowList enabled - TODO: change this boolean to sumtype
   -> Q.PGPool
+  -- ^ the postgres connection pool
   -> Q.ConnInfo
+  -- ^ postgres connection parameters
   -> HTTP.Manager
+  -- ^ HTTP manager so that we can re-use sessions
   -> AuthMode
+  -- ^ 'AuthMode' in which the application should operate in
   -> CorsConfig
   -> Bool
+  -- ^ is console enabled - TODO: better type
   -> Maybe Text
+  -- ^ filepath to the console static assets directory - TODO: better type
   -> Bool
+  -- ^ is telemetry enabled
   -> InstanceId
+  -- ^ each application, when run, gets an 'InstanceId'. this is used at various places including
+  -- schema syncing and telemetry
   -> S.HashSet API
+  -- ^ set of the enabled 'API's
   -> EL.LiveQueriesOptions
   -> E.PlanCacheOptions
   -> m HasuraApp
@@ -496,13 +542,14 @@ mkWaiApp isoLevel logger sqlGenCtx enableAL pool ci httpManager mode corsCfg ena
       liftIO $ EKG.registerCounter "ekg.server_timestamp_ms" getTimeMs ekgStore
 
     spockApp <- liftWithStateless $ \lowerIO ->
-      Spock.spockAsApp $ Spock.spockT lowerIO $ httpApp corsCfg serverCtx enableConsole consoleAssetsDir enableTelemetry
+      Spock.spockAsApp $ Spock.spockT lowerIO $
+        httpApp corsCfg serverCtx enableConsole consoleAssetsDir enableTelemetry
 
     let wsServerApp = WS.createWSServerApp mode wsServerEnv
         stopWSServer = WS.stopWSServerApp wsServerEnv
 
     waiApp <- liftWithStateless $ \lowerIO ->
-      pure $ WS.websocketsOr WS.defaultConnectionOptions (lowerIO . wsServerApp) spockApp
+      pure $ WSC.websocketsOr WS.defaultConnectionOptions (\ip pc -> lowerIO $ wsServerApp ip pc) spockApp
 
     return $ HasuraApp waiApp schemaCacheRef cacheBuiltTime stopWSServer
   where
@@ -511,7 +558,15 @@ mkWaiApp isoLevel logger sqlGenCtx enableAL pool ci httpManager mode corsCfg ena
 
 
 httpApp
-  :: (HasVersion, MonadIO m, ConsoleRenderer m, HttpLog m, UserAuthentication m, MetadataApiAuthorization m)
+  :: ( HasVersion
+     , MonadIO m
+     , ConsoleRenderer m
+     , HttpLog m
+     , UserAuthentication m
+     , MetadataApiAuthorization m
+     , E.GQLApiAuthorization m
+     , ConfigApiHandler m
+     )
   => CorsConfig
   -> ServerCtx
   -> Bool
@@ -559,12 +614,7 @@ httpApp corsCfg serverCtx enableConsole consoleAssetsDir enableTelemetry = do
       Spock.post "v1alpha1/pg_dump" $ spockAction encodeQErr id $
         mkPostHandler v1Alpha1PGDumpHandler
 
-    when enableConfig $
-      Spock.get "v1alpha1/config" $ spockAction encodeQErr id $
-        mkGetHandler $ do
-          onlyAdmin
-          let res = encJFromJValue $ runGetConfig (scAuthMode serverCtx)
-          return $ JSONResp $ HttpResponse res Nothing
+    when enableConfig $ runConfigApiHandler serverCtx
 
     when enableGraphQL $ do
       Spock.post "v1alpha1/graphql" $ spockAction GH.encodeGQErr id $

@@ -5,52 +5,55 @@ module Hasura.App where
 
 import           Control.Monad.Base
 import           Control.Monad.Stateless
-import           Control.Monad.STM                    (atomically)
-import           Control.Monad.Trans.Control          (MonadBaseControl (..))
-import           Data.Aeson                           ((.=))
-import           Data.Time.Clock                      (UTCTime, getCurrentTime)
+import           Control.Monad.STM                      (atomically)
+import           Control.Monad.Trans.Control            (MonadBaseControl (..))
+import           Data.Aeson                             ((.=))
+import           Data.Time.Clock                        (UTCTime, getCurrentTime)
 import           Options.Applicative
-import           System.Environment                   (getEnvironment, lookupEnv)
-import           System.Exit                          (exitFailure)
+import           System.Environment                     (getEnvironment, lookupEnv)
+import           System.Exit                            (exitFailure)
 
-import qualified Control.Concurrent                   as C
-import qualified Control.Concurrent.Async.Lifted.Safe as LA
-import qualified Data.Aeson                           as A
-import qualified Data.ByteString.Char8                as BC
-import qualified Data.ByteString.Lazy.Char8           as BLC
-import qualified Data.Text                            as T
-import qualified Data.Time.Clock                      as Clock
-import qualified Data.Yaml                            as Y
-import qualified Database.PG.Query                    as Q
-import qualified Network.HTTP.Client                  as HTTP
-import qualified Network.HTTP.Client.TLS              as HTTP
-import qualified Network.Wai.Handler.Warp             as Warp
-import qualified System.Posix.Signals                 as Signals
-import qualified Text.Mustache.Compile                as M
+
+import qualified Control.Concurrent                     as C
+import qualified Control.Concurrent.Async.Lifted.Safe   as LA
+import qualified Data.Aeson                             as A
+import qualified Data.ByteString.Char8                  as BC
+import qualified Data.ByteString.Lazy.Char8             as BLC
+import qualified Data.Text                              as T
+import qualified Data.Time.Clock                        as Clock
+import qualified Data.Yaml                              as Y
+import qualified Database.PG.Query                      as Q
+import qualified Network.HTTP.Client                    as HTTP
+import qualified Network.HTTP.Client.TLS                as HTTP
+import qualified Network.Wai.Handler.Warp               as Warp
+import qualified System.Posix.Signals                   as Signals
+import qualified Text.Mustache.Compile                  as M
 
 import           Hasura.Db
 import           Hasura.EncJSON
 import           Hasura.Events.Lib
+import           Hasura.GraphQL.Execute                 (GQLApiAuthorization (..))
+import           Hasura.GraphQL.Resolve.Action          (asyncActionsProcessor)
+import           Hasura.GraphQL.Transport.HTTP.Protocol (toParsed)
 import           Hasura.Logging
 import           Hasura.Prelude
-import           Hasura.RQL.Types                     (CacheRWM, Code (..), HasHttpManager,
-                                                       HasSQLGenCtx, HasSystemDefined, QErr (..),
-                                                       SQLGenCtx (..), SchemaCache (..), UserInfoM,
-                                                       adminRole, adminUserInfo,
-                                                       buildSchemaCacheStrict, decodeValue,
-                                                       throw400, userRole, withPathK)
+import           Hasura.RQL.Types                       (CacheRWM, Code (..), HasHttpManager,
+                                                         HasSQLGenCtx, HasSystemDefined, QErr (..),
+                                                         SQLGenCtx (..), SchemaCache (..),
+                                                         UserInfoM, adminRole, adminUserInfo,
+                                                         buildSchemaCacheStrict, decodeValue,
+                                                         throw400, userRole, withPathK)
 import           Hasura.RQL.Types.Run
 import           Hasura.Server.App
 import           Hasura.Server.Auth
-import           Hasura.Server.CheckUpdates           (checkForUpdates)
+import           Hasura.Server.CheckUpdates             (checkForUpdates)
 import           Hasura.Server.Init
 import           Hasura.Server.Logging
-import           Hasura.Server.Migrate                (migrateCatalog)
-import           Hasura.Server.Query                  (requiresAdmin, runQueryM)
+import           Hasura.Server.Migrate                  (migrateCatalog)
+import           Hasura.Server.Query                    (requiresAdmin, runQueryM)
 import           Hasura.Server.SchemaUpdate
 import           Hasura.Server.Telemetry
 import           Hasura.Server.Version
-
 
 printErrExit :: (MonadIO m) => forall a . String -> m a
 printErrExit = liftIO . (>> exitFailure) . putStrLn
@@ -71,6 +74,8 @@ parseHGECommand =
           ( progDesc "Clean graphql-engine's metadata to start afresh" ))
         <> command "execute" (info (pure  HCExecute)
           ( progDesc "Execute a query" ))
+        <> command "downgrade" (info (HCDowngrade <$> downgradeOptionsParser)
+          (progDesc "Downgrade the GraphQL Engine schema to the specified version"))
         <> command "version" (info (pure  HCVersion)
           (progDesc "Prints the version of GraphQL Engine"))
     )
@@ -184,15 +189,16 @@ initialiseCtx hgeCmd rci = do
       initRes <- runAsAdmin pool sqlGenCtx httpManager $ migrateCatalog currentTime
       either printErrJExit (\(result, schemaCache) -> logger result $> schemaCache) initRes
 
-
 runHGEServer
   :: ( HasVersion
      , MonadIO m
      , MonadStateless IO m
      , UserAuthentication m
      , MetadataApiAuthorization m
+     , GQLApiAuthorization m
      , HttpLog m
      , ConsoleRenderer m
+     , ConfigApiHandler m
      , LA.Forall (LA.Pure m)
      )
   => ServeOptions impl
@@ -251,6 +257,9 @@ runHGEServer ServeOptions{..} InitCtx{..} initTime = do
   unLogger logger $ mkGenericStrLog LevelInfo "event_triggers" "starting workers"
   void $ liftIO $ C.forkIO $ processEventQueue logger logEnvHeaders
     _icHttpManager _icPgPool (getSCFromRef cacheRef) eventEngineCtx
+
+  -- start a backgroud thread to handle async actions
+  void $ liftIO $ C.forkIO $ asyncActionsProcessor (_scrCache cacheRef) _icPgPool _icHttpManager
 
   -- start a background thread to check for updates
   void $ liftIO $ C.forkIO $ checkForUpdates loggerCtx _icHttpManager
@@ -355,6 +364,12 @@ instance MetadataApiAuthorization AppM where
       withPathK "args" $ throw400 AccessDenied errMsg
     where
       errMsg = "restricted access : admin only"
+
+instance GQLApiAuthorization AppM where
+  authorizeGQLApi _ _ query = runExceptT $ toParsed query
+
+instance ConfigApiHandler AppM where
+  runConfigApiHandler = configApiGetHandler
 
 instance ConsoleRenderer AppM where
   renderConsole path authMode enableTelemetry consoleAssetsDir =

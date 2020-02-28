@@ -1,7 +1,6 @@
 module Hasura.RQL.Types.RemoteSchema where
 
 import           Hasura.Prelude
-import           Hasura.RQL.Types.Common    (NonEmptyText)
 import           Language.Haskell.TH.Syntax (Lift)
 import           System.Environment         (lookupEnv)
 
@@ -14,8 +13,9 @@ import qualified Network.URI.Extended       as N
 
 import           Hasura.Incremental         (Cacheable)
 import           Hasura.RQL.DDL.Headers     (HeaderConf (..))
+import           Hasura.RQL.Types.Common    (NonEmptyText (..))
 import           Hasura.RQL.Types.Error
-import           Hasura.SQL.Types           (DQuote)
+import           Hasura.SQL.Types
 
 type UrlFromEnv = Text
 
@@ -27,6 +27,9 @@ newtype RemoteSchemaName
            , Generic, Cacheable, Arbitrary
            )
 
+remoteSchemaNameToTxt :: RemoteSchemaName -> Text
+remoteSchemaNameToTxt = unNonEmptyText . unRemoteSchemaName
+
 data RemoteSchemaInfo
   = RemoteSchemaInfo
   { rsUrl              :: !N.URI
@@ -34,7 +37,8 @@ data RemoteSchemaInfo
   , rsFwdClientHeaders :: !Bool
   , rsTimeoutSeconds   :: !Int
   } deriving (Show, Eq, Lift, Generic)
-
+instance NFData RemoteSchemaInfo
+instance Cacheable RemoteSchemaInfo
 instance Hashable RemoteSchemaInfo
 
 $(J.deriveJSON (J.aesonDrop 2 J.snakeCase) ''RemoteSchemaInfo)

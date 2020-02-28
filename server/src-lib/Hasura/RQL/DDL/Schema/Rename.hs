@@ -228,16 +228,18 @@ updateSelPermFlds refQT rename rn (SelPerm cols fltr limit aggAllwd computedFiel
 updateUpdPermFlds
   :: (MonadTx m, CacheRM m)
   => QualifiedTable -> Rename -> RoleName -> UpdPerm -> m ()
-updateUpdPermFlds refQT rename rn (UpdPerm cols preset fltr) = do
+updateUpdPermFlds refQT rename rn (UpdPerm cols preset fltr check) = do
   updatedPerm <- case rename of
     RTable rt -> do
       let updFltr = updateTableInBoolExp rt fltr
-      return $ UpdPerm cols preset updFltr
+          updCheck = fmap (updateTableInBoolExp rt) check
+      return $ UpdPerm cols preset updFltr updCheck
     RField rf -> do
       updFltr <- updateFieldInBoolExp refQT rf fltr
+      updCheck <- traverse (updateFieldInBoolExp refQT rf) check
       let updCols = updateCols refQT rf cols
           updPresetM = updatePreset refQT rf <$> preset
-      return $ UpdPerm updCols updPresetM updFltr
+      return $ UpdPerm updCols updPresetM updFltr updCheck
   liftTx $ updatePermDefInCatalog PTUpdate refQT rn updatedPerm
 
 updateDelPermFlds
@@ -322,6 +324,8 @@ updateColExp qt rf (ColExp fld val) =
           be <- decodeValue val
           ube <- updateFieldInBoolExp remTable rf be
           return $ toJSON ube
+        FIRemoteRelationship {} ->
+          throw500 "cannot update remote field" -- TODO: determine the proper behavior here.
 
     (oFld, nFld, opQT) = case rf of
       RFCol (RenameItem tn oCol nCol) -> (fromPGCol oCol, fromPGCol nCol, tn)

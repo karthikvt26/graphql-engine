@@ -1,5 +1,6 @@
 module Hasura.Server.Config
   ( runGetConfig
+  , ServerConfig (..)
   )
   where
 

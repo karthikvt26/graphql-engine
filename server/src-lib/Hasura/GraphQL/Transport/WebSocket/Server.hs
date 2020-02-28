@@ -16,6 +16,7 @@ module Hasura.GraphQL.Transport.WebSocket.Server
   , WSHandlers(..)
 
   , WSServer
+  , HasuraServerApp
   , WSEventInfo(..)
   , WSQueueResponse(..)
   , createWSServer
@@ -24,10 +25,16 @@ module Hasura.GraphQL.Transport.WebSocket.Server
   , shutdown
   ) where
 
+import           Control.Exception.Lifted             (try)
+import           Data.Word                            (Word16)
+import           GHC.Int                              (Int64)
+
+import           Hasura.Prelude
+import           Hasura.Server.Utils                  (IpAddress (..))
+
 import qualified Control.Concurrent.Async             as A
 import qualified Control.Concurrent.Async.Lifted.Safe as LA
 import qualified Control.Concurrent.STM               as STM
-import           Control.Exception.Lifted             (try)
 import qualified Control.Monad.Trans.Control          as MC
 import qualified Data.Aeson                           as J
 import qualified Data.Aeson.Casing                    as J
@@ -36,9 +43,6 @@ import qualified Data.ByteString.Lazy                 as BL
 import qualified Data.TByteString                     as TBS
 import qualified Data.UUID                            as UUID
 import qualified Data.UUID.V4                         as UUID
-import           Data.Word                            (Word16)
-import           GHC.Int                              (Int64)
-import           Hasura.Prelude
 import qualified ListT
 import qualified Network.WebSockets                   as WS
 import qualified StmContainers.Map                    as STMMap
@@ -194,9 +198,12 @@ data AcceptWith a
   , _awOnJwtExpiry :: !(Maybe (WSConn a -> IO ()))
   }
 
-type OnConnH m a    = WSId -> WS.RequestHead -> m (Either WS.RejectRequest (AcceptWith a))
+type OnConnH m a    = WSId -> WS.RequestHead -> IpAddress -> m (Either WS.RejectRequest (AcceptWith a))
 type OnCloseH m a   = WSConn a -> m ()
 type OnMessageH m a = WSConn a -> BL.ByteString -> m ()
+
+-- | aka generalized 'WS.ServerApp' over m and which takes an IPAddress
+type HasuraServerApp m = IpAddress -> WS.PendingConnection -> m ()
 
 data WSHandlers m a
   = WSHandlers
@@ -208,19 +215,19 @@ data WSHandlers m a
 createServerApp
   :: (MonadIO m, MC.MonadBaseControl IO m, LA.Forall (LA.Pure m))
   => WSServer a
-  -- user provided handlers
   -> WSHandlers m a
-  -- aka WS.ServerApp
-  -> WS.PendingConnection
-  -> m ()
-createServerApp (WSServer logger@(L.Logger writeLog) serverStatus) wsHandlers pendingConn = do
+  -- ^ user provided handlers
+  -- -> WS.PendingConnection
+  -- -> m ()
+  -> HasuraServerApp m
+createServerApp (WSServer logger@(L.Logger writeLog) serverStatus) wsHandlers ipAddress pendingConn = do
   wsId <- WSId <$> liftIO UUID.nextRandom
   writeLog $ WSLog wsId EConnectionRequest Nothing
   status <- liftIO $ STM.readTVarIO serverStatus
   case status of
     AcceptingConns _ -> do
       let reqHead = WS.pendingRequest pendingConn
-      onConnRes <- _hOnConn wsHandlers wsId reqHead
+      onConnRes <- _hOnConn wsHandlers wsId reqHead ipAddress
       either (onReject wsId) (onAccept wsId) onConnRes
 
     ShuttingDown ->

@@ -16,7 +16,9 @@ import qualified Network.HTTP.Client                as HTTP
 
 import           Hasura.EncJSON
 import           Hasura.Prelude
+import           Hasura.RQL.DDL.Action
 import           Hasura.RQL.DDL.ComputedField
+import           Hasura.RQL.DDL.CustomTypes
 import           Hasura.RQL.DDL.EventTrigger
 import           Hasura.RQL.DDL.Metadata
 import           Hasura.RQL.DDL.Permission
@@ -53,9 +55,12 @@ data RQLQueryV1
   | RQRenameRelationship !RenameRel
 
   -- computed fields related
-
   | RQAddComputedField !AddComputedField
   | RQDropComputedField !DropComputedField
+
+  | RQCreateRemoteRelationship !RemoteRelationship
+  | RQUpdateRemoteRelationship !RemoteRelationship
+  | RQDeleteRemoteRelationship !DeleteRemoteRelationship
 
   | RQCreateInsertPermission !CreateInsPerm
   | RQCreateSelectPermission !CreateSelPerm
@@ -82,6 +87,7 @@ data RQLQueryV1
   | RQAddRemoteSchema !AddRemoteSchemaQuery
   | RQRemoveRemoteSchema !RemoteSchemaNameQuery
   | RQReloadRemoteSchema !RemoteSchemaNameQuery
+  | RQIntrospectRemoteSchema !RemoteSchemaNameQuery
 
   | RQCreateEventTrigger !CreateEventTriggerQuery
   | RQDeleteEventTrigger !DeleteEventTriggerQuery
@@ -103,7 +109,14 @@ data RQLQueryV1
   | RQClearMetadata !ClearMetadata
   | RQReloadMetadata !ReloadMetadata
 
+  | RQCreateAction !CreateAction
+  | RQDropAction !DropAction
+  | RQUpdateAction !UpdateAction
+  | RQCreateActionPermission !CreateActionPermission
+  | RQDropActionPermission !DropActionPermission
+
   | RQDumpInternalState !DumpInternalState
+  | RQSetCustomTypes !CustomTypes
   deriving (Show, Eq, Lift)
 
 data RQLQueryV2
@@ -214,6 +227,10 @@ queryModifiesSchemaCache (RQV1 qi) = case qi of
   RQAddComputedField _            -> True
   RQDropComputedField _           -> True
 
+  RQCreateRemoteRelationship _    -> True
+  RQUpdateRemoteRelationship _    -> True
+  RQDeleteRemoteRelationship _    -> True
+
   RQCreateInsertPermission _      -> True
   RQCreateSelectPermission _      -> True
   RQCreateUpdatePermission _      -> True
@@ -237,6 +254,7 @@ queryModifiesSchemaCache (RQV1 qi) = case qi of
   RQAddRemoteSchema _             -> True
   RQRemoveRemoteSchema _          -> True
   RQReloadRemoteSchema _          -> True
+  RQIntrospectRemoteSchema _      -> False
 
   RQCreateEventTrigger _          -> True
   RQDeleteEventTrigger _          -> True
@@ -260,7 +278,14 @@ queryModifiesSchemaCache (RQV1 qi) = case qi of
   RQClearMetadata _               -> True
   RQReloadMetadata _              -> True
 
+  RQCreateAction _                -> True
+  RQDropAction _                  -> True
+  RQUpdateAction _                -> True
+  RQCreateActionPermission _      -> True
+  RQDropActionPermission _        -> True
+
   RQDumpInternalState _           -> False
+  RQSetCustomTypes _              -> True
 
   RQBulk qs                       -> any queryModifiesSchemaCache qs
 queryModifiesSchemaCache (RQV2 qi) = case qi of
@@ -355,6 +380,11 @@ runQueryM rq = withPathK "args" $ case rq of
       RQAddRemoteSchema    q       -> runAddRemoteSchema q
       RQRemoveRemoteSchema q       -> runRemoveRemoteSchema q
       RQReloadRemoteSchema q       -> runReloadRemoteSchema q
+      RQIntrospectRemoteSchema q   -> runIntrospectRemoteSchema q
+
+      RQCreateRemoteRelationship q -> runCreateRemoteRelationship q
+      RQUpdateRemoteRelationship q -> runUpdateRemoteRelationship q
+      RQDeleteRemoteRelationship q -> runDeleteRemoteRelationship q
 
       RQCreateEventTrigger q       -> runCreateEventTriggerQuery q
       RQDeleteEventTrigger q       -> runDeleteEventTriggerQuery q
@@ -373,9 +403,17 @@ runQueryM rq = withPathK "args" $ case rq of
       RQExportMetadata q           -> runExportMetadata q
       RQReloadMetadata q           -> runReloadMetadata q
 
+      RQCreateAction q           -> runCreateAction q
+      RQDropAction q             -> runDropAction q
+      RQUpdateAction q           -> runUpdateAction q
+      RQCreateActionPermission q -> runCreateActionPermission q
+      RQDropActionPermission q   -> runDropActionPermission q
+
       RQDumpInternalState q        -> runDumpInternalState q
 
       RQRunSql q                   -> runRunSQL q
+
+      RQSetCustomTypes q           -> runSetCustomTypes q
 
       RQBulk qs                    -> encJFromList <$> indexedMapM runQueryM qs
 
@@ -405,6 +443,10 @@ requiresAdmin = \case
     RQAddComputedField _            -> True
     RQDropComputedField _           -> True
 
+    RQCreateRemoteRelationship _    -> True
+    RQUpdateRemoteRelationship _    -> True
+    RQDeleteRemoteRelationship _    -> True
+
     RQCreateInsertPermission _      -> True
     RQCreateSelectPermission _      -> True
     RQCreateUpdatePermission _      -> True
@@ -429,6 +471,8 @@ requiresAdmin = \case
     RQRemoveRemoteSchema _          -> True
     RQReloadRemoteSchema _          -> True
 
+    RQIntrospectRemoteSchema _      -> True
+
     RQCreateEventTrigger _          -> True
     RQDeleteEventTrigger _          -> True
     RQRedeliverEvent _              -> True
@@ -446,7 +490,14 @@ requiresAdmin = \case
     RQExportMetadata _              -> True
     RQReloadMetadata _              -> True
 
+    RQCreateAction _                -> True
+    RQDropAction _                  -> True
+    RQUpdateAction _                -> True
+    RQCreateActionPermission _      -> True
+    RQDropActionPermission _        -> True
+
     RQDumpInternalState _           -> True
+    RQSetCustomTypes _              -> True
 
     RQRunSql _                      -> True
 

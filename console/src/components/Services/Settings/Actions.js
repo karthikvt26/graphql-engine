@@ -1,4 +1,5 @@
 import requestAction from '../../../utils/requestAction';
+import { clearIntrospectionSchemaCache } from '../RemoteSchema/graphqlUtils';
 import { push } from 'react-router-redux';
 import globals from '../../../Globals';
 import endpoints from '../../../Endpoints';
@@ -10,6 +11,7 @@ import {
   makeMigrationCall,
 } from '../Data/DataActions';
 import { setConsistentRemoteSchemas } from '../RemoteSchema/Actions';
+import { setActions } from '../Actions/reducer';
 import {
   showSuccessNotification,
   showErrorNotification,
@@ -183,6 +185,7 @@ const handleInconsistentObjects = inconsistentObjects => {
     const allSchemas = getState().tables.allSchemas;
     const functions = getState().tables.trackedFunctions;
     const remoteSchemas = getState().remoteSchemas.listData.remoteSchemas;
+    const actions = getState().actions.common.actions;
 
     dispatch({
       type: LOAD_INCONSISTENT_OBJECTS,
@@ -205,10 +208,16 @@ const handleInconsistentObjects = inconsistentObjects => {
         inconsistentObjects,
         'remote_schemas'
       );
+      const filteredActions = filterInconsistentMetadataObjects(
+        actions,
+        inconsistentObjects,
+        'actions'
+      );
 
       dispatch(setConsistentSchema(filteredSchema));
       dispatch(setConsistentFunctions(filteredFunctions));
       dispatch(setConsistentRemoteSchemas(filteredRemoteSchemas));
+      dispatch(setActions(filteredActions));
     }
   };
 };
@@ -242,6 +251,9 @@ export const loadInconsistentObjects = (
 
         if (successCb) {
           successCb();
+        }
+        if (shouldReloadCache) {
+          clearIntrospectionSchemaCache();
         }
       },
       error => {
@@ -277,6 +289,8 @@ export const reloadRemoteSchema = (remoteSchemaName, successCb, failureCb) => {
         const inconsistentObjects = data[1].inconsistent_objects;
 
         dispatch(handleInconsistentObjects(inconsistentObjects));
+
+        clearIntrospectionSchemaCache();
 
         if (successCb) {
           successCb();
@@ -314,6 +328,7 @@ export const dropInconsistentObjects = () => {
         dispatch({ type: DROPPED_INCONSISTENT_METADATA });
         dispatch(showSuccessNotification('Dropped inconsistent metadata'));
         dispatch(loadInconsistentObjects(false));
+        clearIntrospectionSchemaCache();
       },
       error => {
         console.error(error);

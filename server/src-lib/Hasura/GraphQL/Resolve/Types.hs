@@ -7,22 +7,26 @@ module Hasura.GraphQL.Resolve.Types
 import           Control.Lens.TH
 import           Hasura.Prelude
 
-import qualified Data.HashMap.Strict            as Map
-import qualified Data.Sequence                  as Seq
-import qualified Data.Text                      as T
-import qualified Language.GraphQL.Draft.Syntax  as G
+import qualified Data.HashMap.Strict                 as Map
+import qualified Data.Sequence                       as Seq
+import qualified Data.Text                           as T
+import qualified Language.GraphQL.Draft.Syntax       as G
 
 import           Hasura.GraphQL.Validate.Types
+import           Hasura.RQL.DDL.Headers              (HeaderConf)
+import           Hasura.RQL.Types.Action
 import           Hasura.RQL.Types.BoolExp
 import           Hasura.RQL.Types.Column
 import           Hasura.RQL.Types.Common
 import           Hasura.RQL.Types.ComputedField
+import           Hasura.RQL.Types.CustomTypes
 import           Hasura.RQL.Types.Function
 import           Hasura.RQL.Types.Permission
+import           Hasura.RQL.Types.RemoteRelationship
 import           Hasura.SQL.Types
 import           Hasura.SQL.Value
 
-import qualified Hasura.SQL.DML                 as S
+import qualified Hasura.SQL.DML                      as S
 
 data QueryCtx
   = QCSelect !SelOpCtx
@@ -30,12 +34,17 @@ data QueryCtx
   | QCSelectAgg !SelOpCtx
   | QCFuncQuery !FuncQOpCtx
   | QCFuncAggQuery !FuncQOpCtx
+  | QCActionFetch !ActionSelectOpContext
   deriving (Show, Eq)
 
 data MutationCtx
   = MCInsert !InsOpCtx
+  | MCInsertOne !InsOpCtx
   | MCUpdate !UpdOpCtx
+  | MCUpdateByPk !UpdOpCtx
   | MCDelete !DelOpCtx
+  | MCDeleteByPk !DelOpCtx
+  | MCAction !ActionExecutionContext
   deriving (Show, Eq)
 
 type OpCtxMap a = Map.HashMap G.Name a
@@ -56,6 +65,8 @@ data SelOpCtx
   , _socFilter  :: !AnnBoolExpPartialSQL
   , _socLimit   :: !(Maybe Int)
   } deriving (Show, Eq)
+
+type PGColArgMap = Map.HashMap G.Name PGColumnInfo
 
 data SelPkOpCtx
   = SelPkOpCtx
@@ -83,6 +94,7 @@ data UpdOpCtx
   , _uocHeaders    :: ![T.Text]
   , _uocAllCols    :: !PGColGNameMap
   , _uocFilter     :: !AnnBoolExpPartialSQL
+  , _uocCheck      :: !(Maybe AnnBoolExpPartialSQL)
   , _uocPresetCols :: !PreSetColsPartial
   } deriving (Show, Eq)
 
@@ -90,20 +102,30 @@ data DelOpCtx
   = DelOpCtx
   { _docTable   :: !QualifiedTable
   , _docHeaders :: ![T.Text]
+  , _docAllCols :: !PGColGNameMap
   , _docFilter  :: !AnnBoolExpPartialSQL
-  , _docAllCols :: ![PGColumnInfo]
   } deriving (Show, Eq)
 
-data OpCtx
-  = OCSelect !SelOpCtx
-  | OCSelectPkey !SelPkOpCtx
-  | OCSelectAgg !SelOpCtx
-  | OCFuncQuery !FuncQOpCtx
-  | OCFuncAggQuery !FuncQOpCtx
-  | OCInsert !InsOpCtx
-  | OCUpdate !UpdOpCtx
-  | OCDelete !DelOpCtx
+data SyncActionExecutionContext
+  = SyncActionExecutionContext
+  { _saecName                 :: !ActionName
+  , _saecOutputType           :: !GraphQLType
+  , _saecDefinitionList       :: ![(PGCol, PGScalarType)]
+  , _saecWebhook              :: !ResolvedWebhook
+  , _saecHeaders              :: ![HeaderConf]
+  , _saecForwardClientHeaders :: !Bool
+  } deriving (Show, Eq)
+
+data ActionExecutionContext
+  = ActionExecutionSyncWebhook !SyncActionExecutionContext
+  | ActionExecutionAsync
   deriving (Show, Eq)
+
+data ActionSelectOpContext
+  = ActionSelectOpContext
+  { _asocOutputType     :: !GraphQLType
+  , _asocDefinitionList :: ![(PGCol, PGScalarType)]
+  } deriving (Show, Eq)
 
 -- (custom name | generated name) -> PG column info
 -- used in resolvers
@@ -145,6 +167,7 @@ data ResolveField
   = RFPGColumn !PGColumnInfo
   | RFRelationship !RelationshipField
   | RFComputedField !ComputedField
+  | RFRemoteRelationship !RemoteField
   deriving (Show, Eq)
 
 type FieldMap = Map.HashMap (G.NamedType, G.Name) ResolveField
@@ -173,6 +196,7 @@ type RelationInfoMap = Map.HashMap RelName RelInfo
 data UpdPermForIns
   = UpdPermForIns
   { upfiCols   :: ![PGCol]
+  , upfiCheck  :: !(Maybe AnnBoolExpPartialSQL)
   , upfiFilter :: !AnnBoolExpPartialSQL
   , upfiSet    :: !PreSetColsPartial
   } deriving (Show, Eq)
@@ -187,8 +211,6 @@ data InsCtx
   } deriving (Show, Eq)
 
 type InsCtxMap = Map.HashMap QualifiedTable InsCtx
-
-type PGColArgMap = Map.HashMap G.Name PGColumnInfo
 
 data AnnPGVal
   = AnnPGVal
@@ -218,13 +240,13 @@ data UnresolvedVal
 
 type AnnBoolExpUnresolved = AnnBoolExp UnresolvedVal
 
--- template haskell related
-$(makePrisms ''ResolveField)
-$(makeLenses ''ComputedField)
-$(makePrisms ''ComputedFieldType)
-
 data InputFunctionArgument
   = IFAKnown !FunctionArgName !UnresolvedVal -- ^ Known value
   | IFAUnknown !FunctionArgItem -- ^ Unknown value, need to be parsed
   deriving (Show, Eq)
+
+-- template haskell related
+$(makePrisms ''ResolveField)
+$(makeLenses ''ComputedField)
+$(makePrisms ''ComputedFieldType)
 $(makePrisms ''InputFunctionArgument)

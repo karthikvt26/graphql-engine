@@ -2,9 +2,15 @@
 module Hasura.GraphQL.Transport.HTTP
   ( runGQ
   , runGQBatched
+  , GQLReq(..)
+  , GQLReqUnparsed
+  , GQLReqParsed
+  , GQLExecDoc(..)
+  , OperationName(..)
+  , GQLQueryText(..)
   ) where
 
-import qualified Network.HTTP.Types                     as N
+import qualified Network.HTTP.Types                     as HTTP
 
 import           Hasura.EncJSON
 import           Hasura.GraphQL.Logging
@@ -29,25 +35,48 @@ runGQ
      )
   => RequestId
   -> UserInfo
-  -> [N.Header]
-  -> GQLReq GQLQueryText
+  -> [HTTP.Header]
+  -> (GQLReqUnparsed, GQLReqParsed)
   -> m (HttpResponse EncJSON)
-runGQ reqId userInfo reqHdrs req = do
+-- <<<<<<< HEAD
+-- runGQ reqId userInfo reqHdrs req@(reqUnparsed, _) = do
+--   E.ExecutionCtx _ sqlGenCtx pgExecCtx planCache sc scVer _ enableAL <- ask
+--   execPlan <- E.getResolvedExecPlan pgExecCtx planCache userInfo sqlGenCtx enableAL sc scVer req
+--   case execPlan of
+--     E.GExPHasura resolvedOp ->
+--       flip HttpResponse Nothing <$> runHasuraGQ reqId reqUnparsed userInfo resolvedOp
+--     E.GExPRemote rsi opDef  ->
+--       E.execRemoteGQ reqId userInfo reqHdrs reqUnparsed rsi opDef
+-- =======
+runGQ reqId userInfo reqHdrs req@(reqUnparsed, _) = do
   -- The response and misc telemetry data:
   let telemTransport = Telem.HTTP
   (telemTimeTot_DT, (telemCacheHit, telemLocality, (telemTimeIO_DT, telemQueryType, !resp))) <- withElapsedTime $ do
-    E.ExecutionCtx _ sqlGenCtx pgExecCtx planCache sc scVer _ enableAL <- ask
+    E.ExecutionCtx _ sqlGenCtx pgExecCtx planCache sc scVer httpManager enableAL <- ask
     (telemCacheHit, execPlan) <- E.getResolvedExecPlan pgExecCtx planCache
-                userInfo sqlGenCtx enableAL sc scVer req
+                                 userInfo sqlGenCtx enableAL sc scVer httpManager reqHdrs req
+-- <<<<<<< HEAD
+--                 -- userInfo sqlGenCtx enableAL sc scVer httpManager reqHdrs req
+--     case execPlan of
+--       E.GExPHasura resolvedOp -> do
+--         (telemTimeIO, telemQueryType, resp) <- runHasuraGQ reqId reqUnparsed userInfo resolvedOp
+--         return (telemCacheHit, Telem.Local, (telemTimeIO, telemQueryType, HttpResponse resp Nothing))
+--       E.GExPRemote rsi opDef  -> do
+--         let telemQueryType | G._todType opDef == G.OperationTypeMutation = Telem.Mutation
+--                             | otherwise = Telem.Query
+--         (telemTimeIO, resp) <- E.execRemoteGQ reqId userInfo reqHdrs reqUnparsed rsi opDef
+--         return (telemCacheHit, Telem.Remote, (telemTimeIO, telemQueryType, resp))
+-- =======
     case execPlan of
-      E.GExPHasura resolvedOp -> do
-        (telemTimeIO, telemQueryType, resp) <- runHasuraGQ reqId req userInfo resolvedOp
-        return (telemCacheHit, Telem.Local, (telemTimeIO, telemQueryType, HttpResponse resp Nothing))
+      E.GExPHasura execOp -> do
+        (telemTimeIO, telemQueryType, resp) <- runHasuraGQ reqId reqUnparsed userInfo execOp
+        pure $ (telemCacheHit, Telem.Local, (telemTimeIO, telemQueryType, HttpResponse resp Nothing))
       E.GExPRemote rsi opDef  -> do
         let telemQueryType | G._todType opDef == G.OperationTypeMutation = Telem.Mutation
-                            | otherwise = Telem.Query
-        (telemTimeIO, resp) <- E.execRemoteGQ reqId userInfo reqHdrs req rsi opDef
-        return (telemCacheHit, Telem.Remote, (telemTimeIO, telemQueryType, resp))
+                           | otherwise = Telem.Query
+        (telemTimeIO, resp) <- E.execRemoteGQ reqId userInfo reqHdrs reqUnparsed rsi $ G._todType opDef
+        pure (telemCacheHit, Telem.Remote, (telemTimeIO, telemQueryType, resp))
+
   let telemTimeIO = fromUnits telemTimeIO_DT
       telemTimeTot = fromUnits telemTimeTot_DT
   Telem.recordTimingMetric Telem.RequestDimensions{..} Telem.RequestTimings{..}
@@ -61,24 +90,24 @@ runGQBatched
      )
   => RequestId
   -> UserInfo
-  -> [N.Header]
-  -> GQLBatchedReqs GQLQueryText
+  -> [HTTP.Header]
+  -> (GQLBatchedReqs GQLQueryText, GQLBatchedReqs GQLExecDoc)
   -> m (HttpResponse EncJSON)
 runGQBatched reqId userInfo reqHdrs reqs =
   case reqs of
-    GQLSingleRequest req ->
-      runGQ reqId userInfo reqHdrs req
-    GQLBatchedReqs batch -> do
+    (GQLSingleRequest req, GQLSingleRequest reqParsed) ->
+      runGQ reqId userInfo reqHdrs (req, reqParsed)
+    (GQLBatchedReqs batch, GQLBatchedReqs batchParsed) -> do
       -- It's unclear what we should do if we receive multiple
       -- responses with distinct headers, so just do the simplest thing
       -- in this case, and don't forward any.
-      let removeHeaders =
-            flip HttpResponse Nothing
-            . encJFromList
-            . map (either (encJFromJValue . encodeGQErr False) _hrBody)
+      let removeHeaders = flip HttpResponse Nothing
+                          . encJFromList
+                          . map (either (encJFromJValue . encodeGQErr False) _hrBody)
           try = flip catchError (pure . Left) . fmap Right
-      fmap removeHeaders $
-        traverse (try . runGQ reqId userInfo reqHdrs) batch
+      fmap removeHeaders $ traverse (try . runGQ reqId userInfo reqHdrs) $ zip batch batchParsed
+    -- TODO: is this correct?
+    _ -> throw500 "runGQBatched received different kinds of GQLBatchedReqs"
 
 runHasuraGQ
   :: ( MonadIO m
@@ -93,19 +122,22 @@ runHasuraGQ
   -- ^ Also return 'Mutation' when the operation was a mutation, and the time
   -- spent in the PG query; for telemetry.
 runHasuraGQ reqId query userInfo resolvedOp = do
-  E.ExecutionCtx logger _ pgExecCtx _ _ _ _ _ <- ask
+  (E.ExecutionCtx logger _ pgExecCtx _ _ _ _ _) <- ask
   (telemTimeIO, respE) <- withElapsedTime $ liftIO $ runExceptT $ case resolvedOp of
-    E.ExOpQuery tx genSql  -> do
+    E.ExOpQuery tx genSql -> do
       -- log the generated SQL and the graphql query
       L.unLogger logger $ QueryLog query genSql reqId
       runLazyTx' pgExecCtx tx
+
     E.ExOpMutation tx -> do
       -- log the graphql query
       L.unLogger logger $ QueryLog query Nothing reqId
       runLazyTx pgExecCtx Q.ReadWrite $ withUserInfo userInfo tx
+
     E.ExOpSubs _ ->
       throw400 UnexpectedPayload
       "subscriptions are not supported over HTTP, use websockets instead"
+
   resp <- liftEither respE
   let !json = encodeGQResp $ GQSuccess $ encJToLBS resp
       telemQueryType = case resolvedOp of E.ExOpMutation{} -> Telem.Mutation ; _ -> Telem.Query

@@ -9,6 +9,7 @@ module Hasura.GraphQL.Schema.Select
   , mkAggSelFld
   , mkSelFldPKey
 
+  , mkRemoteRelationshipName
   , mkSelArgs
   ) where
 
@@ -171,13 +172,29 @@ mkTableObj
 mkTableObj tn descM allowedFlds =
   mkObjTyInfo (Just desc) (mkTableTy tn) Set.empty (mapFromL _fiName flds) TLHasuraType
   where
-    flds = pgColFlds <> relFlds <> computedFlds
-    pgColFlds = map mkPGColFld $ getPGColumnFields allowedFlds
-    relFlds = concatMap mkRelationshipField' $ getRelationshipFields allowedFlds
-    computedFlds = map mkComputedFieldFld $ getComputedFields allowedFlds
+    flds = flip concatMap allowedFlds $ \case
+      SFPGColumn info -> pure $ mkPGColFld info
+      SFRelationship info -> mkRelationshipField' info
+      SFComputedField info -> pure $ mkComputedFieldFld info
+      SFRemoteRelationship info -> pure $ mkRemoteRelationshipFld info
+
     mkRelationshipField' (RelationshipFieldInfo relInfo allowAgg _ _ _ isNullable) =
       mkRelationshipField allowAgg relInfo isNullable
     desc = mkDescriptionWith descM $ "columns and relationships of " <>> tn
+
+mkRemoteRelationshipName :: RemoteRelationshipName -> G.Name
+mkRemoteRelationshipName =
+  G.Name . remoteRelationshipNameToText
+
+mkRemoteRelationshipFld :: RemoteField -> ObjFldInfo
+mkRemoteRelationshipFld remoteField =
+  mkHsraObjFldInfo description fieldName paramMap gType
+  where
+    description = Just "Remote relationship field"
+    remoteRelationship = rmfRemoteRelationship remoteField
+    fieldName = mkRemoteRelationshipName $ rtrName remoteRelationship
+    paramMap = rmfParamMap remoteField
+    gType = rmfGType remoteField
 
 {-
 type table_aggregate {
@@ -295,11 +312,8 @@ mkSelFldPKey mCustomName tn cols =
     desc = G.Description $ "fetch data from the table: " <> tn
            <<> " using primary key columns"
     fldName = fromMaybe (mkTableByPkName tn) mCustomName
-    args = fromInpValL $ map colInpVal cols
+    args = fromInpValL $ map mkColumnInputVal cols
     ty = G.toGT $ mkTableTy tn
-    colInpVal ci =
-      InpValInfo (mkDescription <$> pgiDescription ci) (pgiName ci)
-      Nothing $ G.toGT $ G.toNT $ mkColumnType $ pgiType ci
 
 {-
 

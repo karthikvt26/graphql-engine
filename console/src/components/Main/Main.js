@@ -64,7 +64,6 @@ class Main extends React.Component {
 
     dispatch(loadServerVersion()).then(() => {
       dispatch(featureCompatibilityInit());
-
       dispatch(loadInconsistentObjects()).then(() => {
         this.handleMetadataRedirect();
       });
@@ -86,7 +85,7 @@ class Main extends React.Component {
   setShowUpdateNotification() {
     const {
       latestStableServerVersion,
-      latestServerVersion,
+      latestPreReleaseServerVersion,
       serverVersion,
       console_opts,
     } = this.props;
@@ -94,9 +93,15 @@ class Main extends React.Component {
     const allowPreReleaseNotifications =
       !console_opts || !console_opts.disablePreReleaseUpdateNotifications;
 
-    const latestServerVersionToCheck = allowPreReleaseNotifications
-      ? latestServerVersion
-      : latestStableServerVersion;
+    let latestServerVersionToCheck;
+    if (
+      allowPreReleaseNotifications &&
+      versionGT(latestPreReleaseServerVersion, latestStableServerVersion)
+    ) {
+      latestServerVersionToCheck = latestPreReleaseServerVersion;
+    } else {
+      latestServerVersionToCheck = latestStableServerVersion;
+    }
 
     try {
       const lastUpdateCheckClosed = getLocalStorageItem(
@@ -656,6 +661,12 @@ class Main extends React.Component {
                   'fa-database',
                   tooltips.data,
                   getSchemaBaseRoute(currentSchema)
+                )}
+                {getSidebarItem(
+                  'Actions',
+                  'fa-cogs',
+                  tooltips.actions,
+                  '/actions/manage/actions'
                 )}
                 {getSidebarItem(
                   'Remote Schemas',

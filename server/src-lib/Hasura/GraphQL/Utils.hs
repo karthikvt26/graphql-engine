@@ -7,6 +7,7 @@ module Hasura.GraphQL.Utils
   , groupListWith
   , mkMapWith
   , showNames
+  , unwrapTy
   , simpleGraphQLQuery
   ) where
 
@@ -34,6 +35,12 @@ getBaseTy = \case
   G.TypeList _ lt     -> getBaseTyL lt
   where
     getBaseTyL = getBaseTy . G.unListType
+
+unwrapTy :: G.GType -> G.GType
+unwrapTy =
+  \case
+    G.TypeList _ lt -> G.unListType lt
+    nt -> nt
 
 groupListWith
   :: (Eq k, Hashable k, Foldable t, Functor t)

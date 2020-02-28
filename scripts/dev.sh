@@ -357,8 +357,18 @@ elif [ "$MODE" = "test" ]; then
     done
     echo " Ok"
 
-    ### Check for and install dependencies in venv
     cd "$PROJECT_ROOT/server/tests-py"
+
+    ## Install misc test dependencies:
+    if [ ! -d "node_modules" ]; then
+      npm_config_loglevel=error npm install remote_schemas/nodejs/
+    else
+      echo_pretty "It looks like node dependencies have been installed already. Skipping."
+      echo_pretty "If things fail please run this and try again"
+      echo_pretty "  $ rm -r \"$PROJECT_ROOT/server/tests-py/node_modules\""
+    fi
+
+    ### Check for and install dependencies in venv
     PY_VENV=.hasura-dev-python-venv
     DEVSH_VERSION_FILE=.devsh_version
     # Do we need to force reinstall?
@@ -411,9 +421,9 @@ elif [ "$MODE" = "test" ]; then
   fi  # RUN_INTEGRATION_TESTS
 
   # TODO generate coverage report when we CTRL-C from 'dev.sh graphql-engine'.
-  # If hpc available, combine any tix from haskell/unit tests:		
+  # If hpc available, combine any tix from haskell/unit tests:
   if command -v hpc >/dev/null; then
-    if [ "$RUN_UNIT_TESTS" = true ] && [ "$RUN_INTEGRATION_TESTS" = true ]; then		
+    if [ "$RUN_UNIT_TESTS" = true ] && [ "$RUN_INTEGRATION_TESTS" = true ]; then
       # As below, it seems we variously get errors related to having two Main
       # modules, so exclude:
       hpc combine --exclude=Main graphql-engine-tests.tix graphql-engine.tix --union > graphql-engine-combined.tix
@@ -439,7 +449,7 @@ elif [ "$MODE" = "test" ]; then
       --exclude=Main \
       --hpcdir dist-newstyle/build/*/ghc-*/graphql-engine-*/noopt/hpc/vanilla/mix/graphql-engine-* \
       --hpcdir dist-newstyle/build/*/ghc-*/graphql-engine-*/t/graphql-engine-tests/noopt/hpc/vanilla/mix/graphql-engine-tests \
-      --reset-hpcdirs graphql-engine-combined.tix 
+      --reset-hpcdirs graphql-engine-combined.tix
     echo_pretty "To view full coverage report open:"
     echo_pretty "  file://$(pwd)/$COVERAGE_DIR/hpc_index.html"
 

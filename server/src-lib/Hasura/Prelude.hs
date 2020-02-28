@@ -1,3 +1,4 @@
+{-# OPTIONS_GHC -fno-warn-redundant-constraints #-}
 {-# OPTIONS_GHC -fno-warn-orphans #-}
 module Hasura.Prelude
   ( module M
@@ -9,6 +10,9 @@ module Hasura.Prelude
   , bsToTxt
   , txtToBs
   , spanMaybeM
+  -- * Efficient coercions
+  , coerce
+  , coerceSet
   , findWithIndex
   , mapFromL
   -- * Measuring and working with moments and durations
@@ -42,7 +46,7 @@ import           Data.HashSet                      as M (HashSet)
 import           Data.List                         as M (find, findIndex, foldl', group,
                                                          intercalate, intersect, lookup, sort,
                                                          sortBy, sortOn, union, unionBy, (\\))
-import           Data.List.NonEmpty                as M (NonEmpty(..))
+import           Data.List.NonEmpty                as M (NonEmpty (..))
 import           Data.Maybe                        as M (catMaybes, fromMaybe, isJust, isNothing,
                                                          listToMaybe, mapMaybe, maybeToList)
 import           Data.Ord                          as M (comparing)
@@ -52,21 +56,24 @@ import           Data.String                       as M (IsString)
 import           Data.Text                         as M (Text)
 import           Data.These                        as M (These (..), fromThese, mergeThese,
                                                          mergeTheseWith, these)
+import           Data.Time.Clock.Units
 import           Data.Traversable                  as M (for)
 import           Data.Word                         as M (Word64)
 import           GHC.Generics                      as M (Generic)
 import           Prelude                           as M hiding (fail, init, lookup)
 import           Test.QuickCheck.Arbitrary.Generic as M
 import           Text.Read                         as M (readEither, readMaybe)
-import           Data.Time.Clock.Units
 
 import qualified Data.ByteString                   as B
+import           Data.Coerce
 import qualified Data.HashMap.Strict               as Map
+import qualified Data.Set                          as Set
 import qualified Data.Text                         as T
 import qualified Data.Text.Encoding                as TE
 import qualified Data.Text.Encoding.Error          as TE
 import qualified GHC.Clock                         as Clock
 import qualified Test.QuickCheck                   as QC
+import           Unsafe.Coerce
 
 alphaNumerics :: String
 alphaNumerics = ['a'..'z'] ++ ['A'..'Z'] ++ "0123456789 "
@@ -102,6 +109,16 @@ spanMaybeM f = go . toList
     go l@(x:xs) = f x >>= \case
       Just y  -> first (y:) <$> go xs
       Nothing -> pure ([], l)
+
+-- | Efficiently coerce a set from one type to another.
+--
+-- This has the same safety properties as 'Set.mapMonotonic', and is equivalent
+-- to @Set.mapMonotonic coerce@ but is more efficient. This is safe to use when
+-- both @a@ and @b@ have automatically derived @Ord@ instances.
+--
+-- https://stackoverflow.com/q/57963881/176841
+coerceSet :: Coercible a b=> Set.Set a -> Set.Set b
+coerceSet = unsafeCoerce
 
 findWithIndex :: (a -> Bool) -> [a] -> Maybe (a, Int)
 findWithIndex p l = do
@@ -140,5 +157,3 @@ startTimer = do
   return $ do
     aft <- liftIO Clock.getMonotonicTimeNSec
     return $ nanoseconds $ fromIntegral (aft - bef)
-
-

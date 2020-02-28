@@ -1,5 +1,6 @@
 Package history
 
+0.0.5-rj - Contains changes from https://github.com/hasura/graphql-engine-internal/blob/rate-limit-changes-rj
 0.0.5-1 - Merges v1.1.0 of upstream into ex-bundle and release
 0.0.4-2 - Merges schema/table filtering changes from cisco branch and merges with main (ex-bundle)
 0.0.4-ros3 - Add ability to filter by table based on the input

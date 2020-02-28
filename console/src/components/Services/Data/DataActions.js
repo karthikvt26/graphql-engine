@@ -26,10 +26,12 @@ import {
   fetchTrackedTableFkQuery,
   fetchTableListQuery,
   fetchTrackedTableListQuery,
+  fetchTrackedTableRemoteRelationshipQuery,
   mergeLoadSchemaData,
 } from './utils';
 
 import _push from './push';
+import { getFetchAllRolesQuery } from '../../Common/utils/v1QueryUtils';
 
 import { fetchColumnTypesQuery, fetchColumnDefaultFunctions } from './utils';
 
@@ -61,6 +63,23 @@ const REQUEST_SUCCESS = 'ModifyTable/REQUEST_SUCCESS';
 const REQUEST_ERROR = 'ModifyTable/REQUEST_ERROR';
 const SET_FILTER_SCHEMA = 'Data/SET_FILTER_SCHEMA';
 const SET_FILTER_TABLES = 'Data/SET_FILTER_TABLES';
+
+export const SET_ALL_ROLES = 'Data/SET_ALL_ROLES';
+export const setAllRoles = roles => ({
+  type: SET_ALL_ROLES,
+  roles,
+});
+
+/*
+const initQueries = {
+  schemaList: {
+    type: 'select',
+    args: {
+      table: {
+        name: 'schemata',
+        schema: 'information_schema',
+>>>>>>> internal-hge-repo/rate-limit-changes-rj
+*/
 
 const initQueries = (schemaFilter = []) => {
   if (schemaFilter.length > 0) {
@@ -349,6 +368,30 @@ const initQueries = (schemaFilter = []) => {
   };
 };
 
+export const mergeRemoteRelationshipsWithSchema = (
+  remoteRelationships,
+  table
+) => {
+  return (dispatch, getState) => {
+    const { allSchemas } = getState().tables;
+    const t = allSchemas.find(s => {
+      return s.table_name === table.name && s.table_schema === table.schema;
+    });
+    if (!t) return;
+    const newAllSchemas = allSchemas.filter(
+      s => !(s.table_name === table.name && s.table_schema === table.schema)
+    );
+    newAllSchemas.push({
+      ...t,
+      remote_relationships: remoteRelationships,
+    });
+    dispatch({
+      type: LOAD_SCHEMA,
+      allSchemas: newAllSchemas,
+    });
+  };
+};
+
 const fetchTrackedFunctions = () => {
   return (dispatch, getState) => {
     const url = Endpoints.getSchema;
@@ -449,6 +492,7 @@ const loadSchema = configOptions => {
         fetchTrackedTableListQuery(configOptions), // v1/query
         fetchTrackedTableFkQuery(configOptions),
         fetchTrackedTableReferencedFkQuery(configOptions),
+        fetchTrackedTableRemoteRelationshipQuery(configOptions),
       ],
     };
 
@@ -461,11 +505,17 @@ const loadSchema = configOptions => {
 
     return dispatch(requestAction(url, options)).then(
       data => {
+        const tableList = JSON.parse(data[0].result[1]);
+        const fkList = JSON.parse(data[2].result[1]);
+        const refFkList = JSON.parse(data[3].result[1]);
+        const remoteRelationships = data[4];
+
         const mergedData = mergeLoadSchemaData(
-          JSON.parse(data[0].result[1]),
+          tableList,
           data[1],
-          JSON.parse(data[2].result[1]),
-          JSON.parse(data[3].result[1])
+          fkList,
+          refFkList,
+          remoteRelationships
         );
 
         const { inconsistentObjects } = getState().metadata;
@@ -801,6 +851,38 @@ const fetchColumnTypeInfo = () => {
   };
 };
 
+export const fetchRoleList = () => (dispatch, getState) => {
+  const query = getFetchAllRolesQuery();
+  const options = {
+    credentials: globalCookiePolicy,
+    method: 'POST',
+    headers: dataHeaders(getState),
+    body: JSON.stringify(query),
+  };
+
+  return dispatch(requestAction(Endpoints.query, options)).then(
+    data => {
+      const allRoles = [...new Set(data.map(r => r.role_name))];
+      const { inconsistentObjects } = getState().metadata;
+
+      let consistentRoles = [...allRoles];
+
+      if (inconsistentObjects.length > 0) {
+        consistentRoles = filterInconsistentMetadataObjects(
+          allRoles,
+          inconsistentObjects,
+          'roles'
+        );
+      }
+
+      dispatch(setAllRoles(consistentRoles));
+    },
+    error => {
+      console.error('Failed to load roles ' + JSON.stringify(error));
+    }
+  );
+};
+
 /* ******************************************************* */
 const dataReducer = (state = defaultState, action) => {
   // eslint-disable-line no-unused-vars
@@ -942,6 +1024,11 @@ const dataReducer = (state = defaultState, action) => {
         tableFilter: {
           ...action.data,
         },
+      };
+    case SET_ALL_ROLES:
+      return {
+        ...state,
+        allRoles: action.roles,
       };
     default:
       return state;

@@ -118,7 +118,7 @@ convOrderByElem sessVarBldr (flds, spi) = \case
            [ fldName <<> " has type 'geometry'"
            , " and cannot be used in order_by"
            ]
-          else return $ AOCPG colInfo
+          else return $ AOCPG $ pgiColumn colInfo
       FIRelationship _ -> throw400 UnexpectedPayload $ mconcat
         [ fldName <<> " is a"
         , " relationship and should be expanded"
@@ -127,6 +127,9 @@ convOrderByElem sessVarBldr (flds, spi) = \case
         [ fldName <<> " is a"
         , " computed field and can't be used in 'order_by'"
         ]
+      -- TODO Rakesh
+      FIRemoteRelationship {} ->
+        throw400 UnexpectedPayload (mconcat [ fldName <<> " is a remote field" ])
   OCRel fldName rest -> do
     fldInfo <- askFieldInfo flds fldName
     case fldInfo of
@@ -148,6 +151,8 @@ convOrderByElem sessVarBldr (flds, spi) = \case
         resolvedSelFltr <- convAnnBoolExpPartialSQL sessVarBldr $ spiFilter relSpi
         AOCObj relInfo resolvedSelFltr <$>
           convOrderByElem sessVarBldr (relFim, relSpi) rest
+      FIRemoteRelationship {} ->
+        throw400 UnexpectedPayload (mconcat [ fldName <<> " is a remote field" ])
 
 convSelectQ
   :: (UserInfoM m, QErrM m, CacheRM m, HasSQLGenCtx m)
@@ -268,16 +273,16 @@ convSelectQuery sessVarBldr prepArgBuilder (DMLQuery qt selQ) = do
   convSelectQ fieldInfo selPermInfo
     extSelQ sessVarBldr prepArgBuilder
 
-selectP2 :: Bool -> (AnnSimpleSel, DS.Seq Q.PrepArg) -> Q.TxE QErr EncJSON
-selectP2 asSingleObject (sel, p) =
+selectP2 :: JsonAggSelect -> (AnnSimpleSel, DS.Seq Q.PrepArg) -> Q.TxE QErr EncJSON
+selectP2 jsonAggSelect (sel, p) =
   encJFromBS . runIdentity . Q.getRow
   <$> Q.rawQE dmlTxErrorHandler (Q.fromBuilder selectSQL) (toList p) True
   where
-    selectSQL = toSQL $ mkSQLSelect asSingleObject sel
+    selectSQL = toSQL $ mkSQLSelect jsonAggSelect sel
 
-selectQuerySQL :: Bool -> AnnSimpleSel -> Q.Query
-selectQuerySQL asSingleObject sel =
-  Q.fromBuilder $ toSQL $ mkSQLSelect asSingleObject sel
+selectQuerySQL :: JsonAggSelect -> AnnSimpleSel -> Q.Query
+selectQuerySQL jsonAggSelect sel =
+  Q.fromBuilder $ toSQL $ mkSQLSelect jsonAggSelect sel
 
 selectAggQuerySQL :: AnnAggSel -> Q.Query
 selectAggQuerySQL =
@@ -296,7 +301,7 @@ phaseOne =
 
 phaseTwo :: (MonadTx m) => (AnnSimpleSel, DS.Seq Q.PrepArg) -> m EncJSON
 phaseTwo =
-  liftTx . selectP2 False
+  liftTx . selectP2 JASMultipleRows
 
 runSelect
   :: (QErrM m, UserInfoM m, CacheRM m, HasSQLGenCtx m, MonadTx m)

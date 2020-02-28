@@ -3,20 +3,28 @@
 
 module Hasura.RQL.DML.Select.Types where
 
+import           Control.Lens                  hiding ((.=))
 import           Data.Aeson.Types
-import           Language.Haskell.TH.Syntax (Lift)
+import           Language.Haskell.TH.Syntax    (Lift)
 
-import qualified Data.HashMap.Strict        as HM
-import qualified Data.List.NonEmpty         as NE
-import qualified Data.Sequence              as Seq
-import qualified Data.Text                  as T
+import qualified Data.HashMap.Strict           as HM
+import qualified Data.List.NonEmpty            as NE
+import qualified Data.Sequence                 as Seq
+import qualified Data.Text                     as T
 
+import           Hasura.GraphQL.Validate.Field
 import           Hasura.Prelude
 import           Hasura.RQL.Types
-import qualified Hasura.SQL.DML             as S
+import qualified Hasura.SQL.DML                as S
 import           Hasura.SQL.Types
 
 type SelectQExt = SelectG ExtCol BoolExp Int
+
+data JsonAggSelect
+  = JASMultipleRows
+  | JASSingleObject
+  deriving (Show, Eq)
+
 -- Columns in RQL
 data ExtCol
   = ECSimple !PGCol
@@ -50,7 +58,7 @@ data AnnAggOrdBy
   deriving (Show, Eq)
 
 data AnnObColG v
-  = AOCPG !PGColumnInfo
+  = AOCPG !PGCol
   | AOCObj !RelInfo !(AnnBoolExp v) !(AnnObColG v)
   | AOCAgg !RelInfo !(AnnBoolExp v) !AnnAggOrdBy
   deriving (Show, Eq)
@@ -105,7 +113,7 @@ data ComputedFieldScalarSel v
 
 data ComputedFieldSel v
   = CFSScalar !(ComputedFieldScalarSel v)
-  | CFSTable !(AnnSimpleSelG v)
+  | CFSTable !JsonAggSelect !(AnnSimpleSelG v)
   deriving (Show, Eq)
 
 traverseComputedFieldSel
@@ -114,7 +122,7 @@ traverseComputedFieldSel
   -> ComputedFieldSel v -> f (ComputedFieldSel w)
 traverseComputedFieldSel fv = \case
   CFSScalar scalarSel -> CFSScalar <$> traverse fv scalarSel
-  CFSTable tableSel   -> CFSTable <$> traverseAnnSimpleSel fv tableSel
+  CFSTable b tableSel -> CFSTable b <$> traverseAnnSimpleSel fv tableSel
 
 type Fields a = [(FieldName, a)]
 
@@ -152,11 +160,20 @@ data AnnColField
   , _acfOp     :: !(Maybe ColOp)
   } deriving (Show, Eq)
 
+data RemoteSelect
+  = RemoteSelect
+  { _rselArgs         :: !ArgsMap
+  , _rselSelection    :: !SelSet
+  , _rselRelationship :: !RemoteRelationship
+  , _rselInfo         :: !RemoteSchemaInfo
+  } deriving (Show, Eq)
+
 data AnnFldG v
   = FCol !AnnColField
   | FObj !(ObjSelG v)
   | FArr !(ArrSelG v)
   | FComputedField !(ComputedFieldSel v)
+  | FRemote !RemoteSelect
   | FExp !T.Text
   deriving (Show, Eq)
 
@@ -177,6 +194,7 @@ traverseAnnFld f = \case
   FArr sel -> FArr <$> traverseArrSel f sel
   FComputedField sel -> FComputedField <$> traverseComputedFieldSel f sel
   FExp t -> FExp <$> pure t
+  FRemote s -> pure $ FRemote s
 
 type AnnFld = AnnFldG S.SQLExp
 
@@ -228,6 +246,11 @@ data AggFld
 type AggFlds = Fields AggFld
 type AnnFldsG v = Fields (AnnFldG v)
 
+traverseAnnFlds
+  :: (Applicative f)
+  => (a -> f b) -> AnnFldsG a -> f (AnnFldsG b)
+traverseAnnFlds f = traverse (traverse (traverseAnnFld f))
+
 type AnnFlds = AnnFldsG S.SQLExp
 
 data TableAggFldG v
@@ -241,8 +264,7 @@ traverseTableAggFld
   => (a -> f b) -> TableAggFldG a -> f (TableAggFldG b)
 traverseTableAggFld f = \case
   TAFAgg aggFlds -> pure $ TAFAgg aggFlds
-  TAFNodes annFlds ->
-    TAFNodes <$> traverse (traverse (traverseAnnFld f)) annFlds
+  TAFNodes annFlds -> TAFNodes <$> traverseAnnFlds f annFlds
   TAFExp t -> pure $ TAFExp t
 
 type TableAggFld = TableAggFldG S.SQLExp
@@ -250,7 +272,7 @@ type TableAggFldsG v = Fields (TableAggFldG v)
 type TableAggFlds = TableAggFldsG S.SQLExp
 
 data ArgumentExp a
-  = AETableRow
+  = AETableRow !(Maybe Iden) -- ^ table row accessor
   | AEInput !a
   deriving (Show, Eq, Functor, Foldable, Traversable)
 
@@ -259,7 +281,9 @@ type FunctionArgsExpTableRow v = FunctionArgsExpG (ArgumentExp v)
 data SelectFromG v
   = FromTable !QualifiedTable
   | FromIden !Iden
-  | FromFunction !QualifiedFunction !(FunctionArgsExpTableRow v)
+  | FromFunction !QualifiedFunction
+                 !(FunctionArgsExpTableRow v)
+                 !(Maybe [(PGCol, PGScalarType)])
   deriving (Show, Eq, Functor, Foldable, Traversable)
 
 type SelectFrom = SelectFromG S.SQLExp
@@ -280,6 +304,10 @@ traverseTablePerm f (TablePerm boolExp limit) =
   <$> traverseAnnBoolExp f boolExp
   <*> pure limit
 
+noTablePermissions :: TablePermG v
+noTablePermissions =
+  TablePerm annBoolExpTrue Nothing
+
 type TablePerm = TablePermG S.SQLExp
 
 data AnnSelG a v
@@ -298,8 +326,7 @@ traverseAnnSimpleSel
   :: (Applicative f)
   => (a -> f b)
   -> AnnSimpleSelG a -> f (AnnSimpleSelG b)
-traverseAnnSimpleSel f =
-  traverseAnnSel (traverse (traverse (traverseAnnFld f))) f
+traverseAnnSimpleSel f = traverseAnnSel (traverseAnnFlds f) f
 
 traverseAnnAggSel
   :: (Applicative f)
@@ -345,9 +372,9 @@ insertFunctionArg
   -> a
   -> FunctionArgsExpG a
   -> FunctionArgsExpG a
-insertFunctionArg argName index value (FunctionArgsExp positional named) =
-  if (index + 1) <= length positional then
-    FunctionArgsExp (insertAt index value positional) named
+insertFunctionArg argName idx value (FunctionArgsExp positional named) =
+  if (idx + 1) <= length positional then
+    FunctionArgsExp (insertAt idx value positional) named
   else FunctionArgsExp positional $
     HM.insert (getFuncArgNameTxt argName) value named
   where
@@ -366,7 +393,7 @@ data BaseNode
   , _bnExtrs               :: !(HM.HashMap S.Alias S.SQLExp)
   , _bnObjs                :: !(HM.HashMap RelName ObjNode)
   , _bnArrs                :: !(HM.HashMap S.Alias ArrNode)
-  , _bnComputedFieldTables :: !(HM.HashMap FieldName BaseNode)
+  , _bnComputedFieldTables :: !(HM.HashMap FieldName CFTableNode)
   } deriving (Show, Eq)
 
 mergeBaseNodes :: BaseNode -> BaseNode -> BaseNode
@@ -375,11 +402,11 @@ mergeBaseNodes lNodeDet rNodeDet =
   (HM.union lExtrs rExtrs)
   (HM.unionWith mergeObjNodes lObjs rObjs)
   (HM.unionWith mergeArrNodes lArrs rArrs)
-  (HM.unionWith mergeBaseNodes lCompCols rCompCols)
+  (HM.unionWith mergeCFTableNodes lCFTables rCFTables)
   where
-    BaseNode pfx dExp f whr ordBy limit offset lExtrs lObjs lArrs lCompCols
+    BaseNode pfx dExp f whr ordBy limit offset lExtrs lObjs lArrs lCFTables
       = lNodeDet
-    BaseNode _   _    _ _   _     _     _      rExtrs rObjs rArrs rCompCols
+    BaseNode _   _    _ _   _     _     _      rExtrs rObjs rArrs rCFTables
       = rNodeDet
 
 data OrderByNode
@@ -443,8 +470,24 @@ data ArrNodeInfo
   , _aniSubQueryRequired :: !Bool
   } deriving (Show, Eq)
 
+-- | Node for computed field returning setof <table>
+data CFTableNode
+  = CFTableNode
+  { _ctnSelectType :: !JsonAggSelect
+  , _ctnNode       :: !BaseNode
+  } deriving (Show, Eq)
+
+mergeCFTableNodes :: CFTableNode -> CFTableNode -> CFTableNode
+mergeCFTableNodes lNode rNode =
+  CFTableNode
+  (_ctnSelectType rNode)
+  (mergeBaseNodes (_ctnNode lNode) (_ctnNode rNode))
+
 data Prefixes
   = Prefixes
   { _pfThis :: !Iden -- Current node prefix
   , _pfBase :: !Iden -- Base table row identifier for computed field function
   } deriving (Show, Eq)
+
+$(makeLenses ''AnnSelG)
+$(makePrisms ''AnnFldG)

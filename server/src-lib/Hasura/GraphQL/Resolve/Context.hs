@@ -7,7 +7,6 @@ module Hasura.GraphQL.Resolve.Context
   , LazyRespTx
   , AnnPGVal(..)
   , UnresolvedVal(..)
-  , resolveValPrep
   , resolveValTxt
   , InsertTxConflictCtx(..)
   , getFldInfo
@@ -66,9 +65,10 @@ getPGColInfo
 getPGColInfo nt n = do
   fldInfo <- getFldInfo nt n
   case fldInfo of
-    RFPGColumn pgColInfo -> return pgColInfo
-    RFRelationship _     -> throw500 $ mkErrMsg "relation"
-    RFComputedField _    -> throw500 $ mkErrMsg "computed field"
+    RFPGColumn pgColInfo   -> return pgColInfo
+    RFRelationship _       -> throw500 $ mkErrMsg "relation"
+    RFComputedField _      -> throw500 $ mkErrMsg "computed field"
+    RFRemoteRelationship _ -> throw500 $ mkErrMsg "remote relationship"
   where
     mkErrMsg ty =
       "found " <> ty <> " when expecting pgcolinfo for "
@@ -118,15 +118,6 @@ type PrepArgs = Seq.Seq Q.PrepArg
 
 prepare :: (MonadState PrepArgs m) => AnnPGVal -> m S.SQLExp
 prepare (AnnPGVal _ _ scalarValue) = prepareColVal scalarValue
-
-resolveValPrep
-  :: (MonadState PrepArgs m)
-  => UnresolvedVal -> m S.SQLExp
-resolveValPrep = \case
-  UVPG annPGVal -> prepare annPGVal
-  UVSessVar colTy sessVar -> sessVarFromCurrentSetting colTy sessVar
-  UVSQL sqlExp -> pure sqlExp
-  UVSession -> pure currentSession
 
 resolveValTxt :: (Applicative f) => UnresolvedVal -> f S.SQLExp
 resolveValTxt = \case

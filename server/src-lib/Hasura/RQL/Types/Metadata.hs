@@ -5,10 +5,12 @@ import qualified Data.HashMap.Strict.Extended   as M
 import           Data.Aeson
 import           Hasura.Prelude
 
+import           Hasura.RQL.Types.Action
 import           Hasura.RQL.Types.Common
 import           Hasura.RQL.Types.ComputedField
 import           Hasura.RQL.Types.EventTrigger
 import           Hasura.RQL.Types.Permission
+import           Hasura.RQL.Types.RemoteRelationship
 import           Hasura.RQL.Types.RemoteSchema
 import           Hasura.SQL.Types
 
@@ -17,6 +19,7 @@ data TableMetadataObjId
   | MTOComputedField !ComputedFieldName
   | MTOPerm !RoleName !PermType
   | MTOTrigger !TriggerName
+  | MTORemoteRelationship !RemoteRelationshipName
   deriving (Show, Eq, Generic)
 instance Hashable TableMetadataObjId
 
@@ -25,6 +28,9 @@ data MetadataObjId
   | MOFunction !QualifiedFunction
   | MORemoteSchema !RemoteSchemaName
   | MOTableObj !QualifiedTable !TableMetadataObjId
+  | MOCustomTypes
+  | MOAction !ActionName
+  | MOActionPermission !ActionName !RoleName
   deriving (Show, Eq, Generic)
 instance Hashable MetadataObjId
 
@@ -38,6 +44,10 @@ moiTypeName = \case
     MTOPerm _ permType -> permTypeToCode permType <> "_permission"
     MTOTrigger _       -> "event_trigger"
     MTOComputedField _ -> "computed_field"
+    MTORemoteRelationship _ -> "remote_relationship"
+  MOCustomTypes -> "custom_types"
+  MOAction _ -> "action"
+  MOActionPermission _ _ -> "action_permission"
 
 moiName :: MetadataObjId -> Text
 moiName objectId = moiTypeName objectId <> " " <> case objectId of
@@ -48,9 +58,13 @@ moiName objectId = moiTypeName objectId <> " " <> case objectId of
     let tableObjectName = case tableObjectId of
           MTORel name _         -> dquoteTxt name
           MTOComputedField name -> dquoteTxt name
+          MTORemoteRelationship name -> dquoteTxt name
           MTOPerm name _        -> dquoteTxt name
           MTOTrigger name       -> dquoteTxt name
     in tableObjectName <> " in " <> moiName (MOTable tableName)
+  MOCustomTypes -> "custom_types"
+  MOAction name -> dquoteTxt name
+  MOActionPermission name role -> dquoteTxt role <> " permission in " <> dquoteTxt name
 
 data MetadataObject
   = MetadataObject
