@@ -15,7 +15,6 @@ const webpackIsomorphicToolsPlugin = new WebpackIsomorphicToolsPlugin(
 
 const TerserPlugin = require('terser-webpack-plugin');
 const OptimizeCssAssetsPlugin = require('optimize-css-assets-webpack-plugin');
-const ForkTsCheckerWebpackPlugin = require('fork-ts-checker-webpack-plugin');
 
 const cleanOptions = {
   root: process.cwd(),
@@ -49,7 +48,7 @@ module.exports = {
         type: 'javascript/auto',
       },
       {
-        test: /\.(j|t)sx?$/,
+        test: /\.jsx?$/,
         exclude: /node_modules/,
         use: 'babel-loader',
       },
@@ -125,7 +124,7 @@ module.exports = {
   },
   resolve: {
     modules: ['src', 'node_modules'],
-    extensions: ['.json', '.js', '.jsx', '.mjs', '.ts', '.tsx'],
+    extensions: ['.json', '.js', '.jsx', '.mjs'],
   },
   optimization: {
     minimize: true,
@@ -196,12 +195,6 @@ module.exports = {
         NODE_ENV: JSON.stringify('production'),
       },
       CONSOLE_ASSET_VERSION: Date.now().toString(),
-    }),
-    new ForkTsCheckerWebpackPlugin({
-      compilerOptions: {
-        allowJs: false,
-        checkJs: false,
-      },
     }),
   ],
 };
