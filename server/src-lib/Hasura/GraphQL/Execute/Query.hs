@@ -28,10 +28,10 @@ import qualified Hasura.GraphQL.Validate.Field          as V
 import qualified Hasura.SQL.DML                         as S
 
 import           Hasura.EncJSON
-import           Hasura.GraphQL.Resolve.RemoteJoin
 import           Hasura.GraphQL.Resolve.Types
 import           Hasura.GraphQL.Validate.Types
 import           Hasura.Prelude
+import           Hasura.RQL.DML.RemoteJoin
 import           Hasura.RQL.DML.Select
 import           Hasura.RQL.Types
 import           Hasura.Server.Version                  (HasVersion)
@@ -49,7 +49,7 @@ data PGPlan
   { _ppQuery       :: !Q.Query
   , _ppVariables   :: !PlanVariables
   , _ppPrepared    :: !PrepArgMap
-  , _ppRemoteJoins :: !RemoteJoinMap
+  , _ppRemoteJoins :: !(Maybe RemoteJoins)
   }
 
 instance J.ToJSON PGPlan where
@@ -247,7 +247,7 @@ data PreparedSql
   , _psPrepArgs    :: ![(Q.PrepArg, PGScalarValue)]
     -- ^ The value is (Q.PrepArg, PGScalarValue) because we want to log the human-readable value of the
     -- prepared argument (PGScalarValue) and not the binary encoding in PG format (Q.PrepArg)
-  , _psRemoteJoins :: !RemoteJoinMap
+  , _psRemoteJoins :: !(Maybe RemoteJoins)
   }
   deriving Show
 
@@ -278,9 +278,11 @@ mkLazyRespTx manager reqHdrs userInfo resolved =
   fmap encJFromAssocList $ forM resolved $ \(alias, node) -> do
     resp <- case node of
       RRRaw bs                      -> return $ encJFromBS bs
-      RRSql (PreparedSql q args remoteJoinMap) -> do
-        if remoteJoinMap == mempty then liftTx $ asSingleRowJsonResp q (map fst args)
-        else selectWithRemoteJoins manager reqHdrs userInfo q (map fst args) remoteJoinMap
+      RRSql (PreparedSql q args maybeRemoteJoins) -> do
+        let prepArgs = map fst args
+        case maybeRemoteJoins of
+          Nothing -> liftTx $ asSingleRowJsonResp q prepArgs
+          Just remoteJoins -> executeQueryWithRemoteJoins manager reqHdrs userInfo q prepArgs remoteJoins
     return (G.unName $ G.unAlias alias, resp)
 
 mkGeneratedSqlMap :: [(G.Alias, ResolvedQuery)] -> GeneratedSqlMap

@@ -14,6 +14,7 @@ import {
   saveRemoteRelationship,
   dropRemoteRelationship,
 } from '../Actions';
+import { showErrorNotification } from '../../../Common/Notification';
 
 const RemoteRelationshipEditor = ({
   relationship,
@@ -33,6 +34,16 @@ const RemoteRelationshipEditor = ({
     const newRelationships = JSON.parse(JSON.stringify(allRelationships));
     newRelationships[index].name = e.target.value;
     dispatch(setRemoteRelationships(newRelationships));
+  };
+
+  const throwError = message => {
+    const errorHeading = 'Could not save the remote relationship';
+    if (message) {
+      return dispatch(showErrorNotification(errorHeading, message));
+    }
+    return dispatch(
+      showErrorNotification(errorHeading, 'Unexpected error. Please try again')
+    );
   };
 
   // handle remote schema selection change
@@ -74,7 +85,8 @@ const RemoteRelationshipEditor = ({
     argName,
     argNesting,
     checked,
-    parentArg
+    parentArg,
+    argType
   ) => {
     const newRelationships = JSON.parse(JSON.stringify(allRelationships));
     const concernedRemoteField = newRelationships[index].remoteField.find(
@@ -104,6 +116,7 @@ const RemoteRelationshipEditor = ({
         name: argName,
         argNesting,
         parentArg,
+        type: argType,
       });
     }
     concernedRemoteField.arguments = concernedArgs;
@@ -144,6 +157,7 @@ const RemoteRelationshipEditor = ({
       static: undefined,
       column: undefined,
       [isColumn ? 'column' : 'static']: value,
+      type: arg.type,
     });
     concernedRemoteField.arguments = concernedArgs;
     newRelationships[index].remoteField = newRelationships[
@@ -265,17 +279,21 @@ const RemoteRelationshipEditor = ({
   };
 
   const saveFunc = toggle => {
-    const successCallback = () => {
-      if (isLast) {
+    try {
+      const successCallback = () => {
         toggle();
-        const newRelationships = JSON.parse(JSON.stringify(allRelationships));
-        newRelationships.push({
-          ...defaultRemoteRelationship,
-        });
-        dispatch(setRemoteRelationships(newRelationships));
-      }
-    };
-    dispatch(saveRemoteRelationship(index, isLast, successCallback));
+        if (isLast) {
+          const newRelationships = JSON.parse(JSON.stringify(allRelationships));
+          newRelationships.push({
+            ...defaultRemoteRelationship,
+          });
+          dispatch(setRemoteRelationships(newRelationships));
+        }
+      };
+      dispatch(saveRemoteRelationship(index, isLast, successCallback));
+    } catch (e) {
+      throwError(e.message);
+    }
   };
 
   let removeFunc;
