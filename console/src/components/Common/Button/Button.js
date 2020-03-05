@@ -1,5 +1,4 @@
 import React from 'react';
-
 import styles from '../Common.scss';
 
 /*
@@ -10,12 +9,7 @@ import styles from '../Common.scss';
                and not the ones that change the appearance (color, font, size) of the button
 */
 
-export interface ButtonProps extends React.ComponentProps<'button'> {
-  size: string;
-  color: 'yellow' | 'red' | 'green' | 'gray' | 'white' | 'black';
-}
-
-const Button: React.FC<ButtonProps> = props => {
+const Button = props => {
   const { children, size, color, className, type = 'button' } = props;
   let extendedClassName = `${className || ''} btn ${
     size ? `btn-${size} ` : 'button '
