@@ -1,5 +1,7 @@
 Package history
 
+1.2.0-beta.2oss - Republish the .2 one below with fix to bundle.config.js
+1.2.0-beta.2 - Merges v1.2.0-beta.2 of upstream into ex-bundle and released -- Broken
 0.0.5-1 - Merges v1.1.0 of upstream into ex-bundle and release
 0.0.4-2 - Merges schema/table filtering changes from cisco branch and merges with main (ex-bundle)
 0.0.4-ros3 - Add ability to filter by table based on the input
