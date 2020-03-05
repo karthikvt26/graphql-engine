@@ -1,6 +1,6 @@
 {
   "name": "@vksci123/console-oss",
-  "version": "0.0.5-1remotejoins",
+  "version": "0.0.5-remotejoins.78e058df",
   "description": "Contains modules from open-source console",
   "main": "index.js",
   "scripts": {

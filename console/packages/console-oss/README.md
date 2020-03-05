@@ -1,5 +1,6 @@
 Package history
 
+0.0.5-remotejoins.78e058df - Contains changes from https://github.com/hasura/graphql-engine-internal/blob/rate-limit-changes-rj at 78e058df
 0.0.5-1remotejoins - Contains changes from https://github.com/hasura/graphql-engine-internal/blob/rate-limit-changes-rj at c52b3610c
 0.0.5-remotejoins - Contains changes from https://github.com/hasura/graphql-engine-internal/blob/rate-limit-changes-rj
 0.0.5-1 - Merges v1.1.0 of upstream into ex-bundle and release
