@@ -5,10 +5,14 @@
 module Hasura.Db
   ( MonadTx(..)
   , LazyTx
+  , RunLazyTx
 
   , PGExecCtx(..)
+  , IsPGExecCtx(..)
+  , withTxIsolation
   , runLazyTx
-  , runLazyTx'
+  , runLazyROTx'
+  , runLazyRWTx'
   , withUserInfo
   , sessionInfoJsonExp
 
@@ -42,6 +46,43 @@ data PGExecCtx
   , _pecTxIsolation :: !Q.TxIsolation
   }
 
+data IsPGExecCtx
+  = IsPGExecCtx
+  { getPGExecCtx :: Q.TxAccess -> IO PGExecCtx
+  , getPGPools   :: [Q.PGPool]
+  }
+
+withTxIsolation :: Q.TxIsolation -> IsPGExecCtx -> IsPGExecCtx
+withTxIsolation txIso isPGExecCtx = isPGExecCtx { getPGExecCtx = getPGCtx' }
+  where
+    getPGCtx' txAccess = fmap (flip PGExecCtx txIso . _pecPool) $
+      getPGExecCtx isPGExecCtx txAccess
+
+type RunLazyTx m a = IsPGExecCtx -> LazyTx QErr a -> ExceptT QErr m a
+
+runLazyTx :: (MonadIO m) => Q.TxAccess -> RunLazyTx m a
+runLazyTx txAccess = \isPGCtx -> \case
+  LTErr e -> throwError e
+  LTNoTx a -> return a
+  LTTx tx -> do
+    PGExecCtx pgPool txIso <- liftIO $ getPGExecCtx isPGCtx txAccess
+    ExceptT <$> liftIO $ runExceptT $ Q.runTx pgPool (txIso, Just txAccess) tx
+
+runLazyTx' :: MonadIO m => Q.TxAccess -> RunLazyTx m a
+runLazyTx' txAccess = \isPGCtx -> \case
+  LTErr e  -> throwError e
+  LTNoTx a -> return a
+  LTTx tx  -> do
+    PGExecCtx pgPool _ <- liftIO $ getPGExecCtx isPGCtx txAccess
+    ExceptT <$> liftIO $ runExceptT $ Q.runTx' pgPool tx
+
+runLazyRWTx' :: MonadIO m => RunLazyTx m a
+runLazyRWTx' = runLazyTx' Q.ReadWrite
+
+runLazyROTx' :: MonadIO m => RunLazyTx m a
+runLazyROTx' = runLazyTx' Q.ReadOnly
+
+
 class (MonadError QErr m) => MonadTx m where
   liftTx :: Q.TxE QErr a -> m a
 
@@ -72,23 +113,6 @@ lazyTxToQTx = \case
   LTErr e  -> throwError e
   LTNoTx r -> return r
   LTTx tx  -> tx
-
-runLazyTx
-  :: (MonadIO m)
-  => PGExecCtx
-  -> Q.TxAccess
-  -> LazyTx QErr a -> ExceptT QErr m a
-runLazyTx (PGExecCtx pgPool txIso) txAccess = \case
-  LTErr e  -> throwError e
-  LTNoTx a -> return a
-  LTTx tx  -> ExceptT <$> liftIO $ runExceptT $ Q.runTx pgPool (txIso, Just txAccess) tx
-
-runLazyTx'
-  :: MonadIO m => PGExecCtx -> LazyTx QErr a -> ExceptT QErr m a
-runLazyTx' (PGExecCtx pgPool _) = \case
-  LTErr e  -> throwError e
-  LTNoTx a -> return a
-  LTTx tx  -> ExceptT <$> liftIO $ runExceptT $ Q.runTx' pgPool tx
 
 type RespTx = Q.TxE QErr EncJSON
 type LazyRespTx = LazyTx QErr EncJSON

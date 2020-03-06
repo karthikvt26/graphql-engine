@@ -31,6 +31,7 @@ import qualified Data.HashMap.Strict                    as Map
 import qualified Data.HashSet                           as Set
 import qualified Data.String.Conversions                as CS
 import qualified Data.Text                              as T
+import qualified Database.PG.Query                      as Q
 import qualified Language.GraphQL.Draft.Syntax          as G
 import qualified Network.HTTP.Client                    as HTTP
 import qualified Network.HTTP.Types                     as HTTP
@@ -75,7 +76,7 @@ data ExecutionCtx
   = ExecutionCtx
   { _ecxLogger          :: !(L.Logger L.Hasura)
   , _ecxSqlGenCtx       :: !SQLGenCtx
-  , _ecxPgExecCtx       :: !PGExecCtx
+  , _ecxPgExecCtx       :: !IsPGExecCtx
   , _ecxPlanCache       :: !EP.PlanCache
   , _ecxSchemaCache     :: !SchemaCache
   , _ecxSchemaCacheVer  :: !SchemaCacheVer
@@ -130,7 +131,7 @@ gatherTypeLocs gCtx nodes =
       in maybe qr (Map.union qr) mr
 
 -- This is for when the graphql query is validated
-type ExecPlanPartial = GQExecPlan (GCtx, VQ.RootSelSet)
+type ExecPlanPartial = GQExecPlan (GCtx, VQ.RootSelSet, Q.TxAccess)
 
 getExecPlanPartial
   :: (MonadReusability m, MonadError QErr m)
@@ -158,13 +159,22 @@ getExecPlanPartial userInfo sc enableAL req = do
   case typeLoc of
     VT.TLHasuraType -> do
       rootSelSet <- runReaderT (VQ.validateGQ queryParts) gCtx
-      return $ GExPHasura (gCtx, rootSelSet)
+      txAccess <- getTxAccess rootSelSet
+      return $ GExPHasura (gCtx, rootSelSet, txAccess)
     VT.TLRemoteType _ rsi ->
       return $ GExPRemote rsi opDef
   where
     role = userRole userInfo
     gCtxRoleMap = scGCtxMap sc
+    getTxAccess rootSelSet = case rootSelSet of
+      VQ.RQuery{}        -> getGQLQueryTxAccess rootSelSet
+      VQ.RMutation{}     -> return Q.ReadWrite
+      VQ.RSubscription{} -> return Q.ReadOnly
 
+    -- TODO: This function should ideally read a configuration
+    -- in the schema cache to get the transaction access to be used to
+    -- for executing the query. For now, we default to Q.readOnly
+    getGQLQueryTxAccess _ = return Q.ReadOnly
     checkQueryInAllowlist =
       -- only for non-admin roles
       when (role /= adminRole) $ do
@@ -187,11 +197,11 @@ data ExecOp
 
 -- The graphql query is resolved into an execution operation
 type ExecPlanResolved
-  = GQExecPlan ExecOp
+  = GQExecPlan (ExecOp, Q.TxAccess)
 
 getResolvedExecPlan
   :: (MonadError QErr m, MonadIO m)
-  => PGExecCtx
+  => IsPGExecCtx
   -> EP.PlanCache
   -> UserInfo
   -> SQLGenCtx
@@ -200,7 +210,7 @@ getResolvedExecPlan
   -> SchemaCacheVer
   -> (GQLReqUnparsed, GQLReqParsed)
   -> m (Telem.CacheHit, ExecPlanResolved)
-getResolvedExecPlan pgExecCtx planCache userInfo sqlGenCtx
+getResolvedExecPlan isPgCtx planCache userInfo sqlGenCtx
   enableAL sc scVer (reqUnparsed, reqParsed) = do
 
   planM <- liftIO $ EP.getPlan scVer (userRole userInfo)
@@ -209,11 +219,11 @@ getResolvedExecPlan pgExecCtx planCache userInfo sqlGenCtx
   case planM of
     -- plans are only for queries and subscriptions
     Just plan -> (Telem.Hit,) . GExPHasura <$> case plan of
-      EP.RPQuery queryPlan -> do
+      EP.RPQuery queryPlan txAccess -> do
         (tx, genSql) <- EQ.queryOpFromPlan usrVars queryVars queryPlan
-        return $ ExOpQuery tx (Just genSql)
-      EP.RPSubs subsPlan ->
-        ExOpSubs <$> EL.reuseLiveQueryPlan pgExecCtx usrVars queryVars subsPlan
+        return (ExOpQuery tx $ Just genSql, txAccess)
+      EP.RPSubs subsPlan txAccess ->
+        (, txAccess) . ExOpSubs <$> EL.reuseLiveQueryPlan isPgCtx usrVars queryVars subsPlan
     Nothing -> (Telem.Miss,) <$> noExistingPlan
   where
     GQLReq opNameM queryStr queryVars = reqUnparsed
@@ -223,18 +233,18 @@ getResolvedExecPlan pgExecCtx planCache userInfo sqlGenCtx
     noExistingPlan = do
       (partialExecPlan, queryReusability) <- runReusabilityT $
         getExecPlanPartial userInfo sc enableAL reqParsed
-      forM partialExecPlan $ \(gCtx, rootSelSet) ->
+      forM partialExecPlan $ \(gCtx, rootSelSet, txAccess) ->
         case rootSelSet of
           VQ.RMutation selSet ->
-            ExOpMutation <$> getMutOp gCtx sqlGenCtx userInfo selSet
+            (, Q.ReadWrite) . ExOpMutation <$> getMutOp gCtx sqlGenCtx userInfo selSet
           VQ.RQuery selSet -> do
             (queryTx, plan, genSql) <- getQueryOp gCtx sqlGenCtx userInfo queryReusability selSet
-            traverse_ (addPlanToCache . EP.RPQuery) plan
-            return $ ExOpQuery queryTx (Just genSql)
+            traverse_ (addPlanToCache . flip EP.RPQuery txAccess) plan
+            return (ExOpQuery queryTx $ Just genSql, txAccess)
           VQ.RSubscription fld -> do
-            (lqOp, plan) <- getSubsOp pgExecCtx gCtx sqlGenCtx userInfo queryReusability fld
-            traverse_ (addPlanToCache . EP.RPSubs) plan
-            return $ ExOpSubs lqOp
+            (lqOp, plan) <- getSubsOp isPgCtx gCtx sqlGenCtx userInfo queryReusability fld
+            traverse_ (addPlanToCache . flip EP.RPSubs txAccess) plan
+            return $ (ExOpSubs lqOp, txAccess)
 
 -- Monad for resolving a hasura query/mutation
 type E m =
@@ -332,11 +342,11 @@ getSubsOpM
      , Has UserInfo r
      , MonadIO m
      )
-  => PGExecCtx
+  => IsPGExecCtx
   -> QueryReusability
   -> VQ.Field
   -> m (EL.LiveQueryPlan, Maybe EL.ReusableLiveQueryPlan)
-getSubsOpM pgExecCtx initialReusability fld =
+getSubsOpM isPgCtx initialReusability fld =
   case VQ._fName fld of
     "__typename" ->
       throwVE "you cannot create a subscription on '__typename' field"
@@ -344,21 +354,21 @@ getSubsOpM pgExecCtx initialReusability fld =
       (astUnresolved, finalReusability) <- runReusabilityTWith initialReusability $
         GR.queryFldToPGAST fld
       let varTypes = finalReusability ^? _Reusable
-      EL.buildLiveQueryPlan pgExecCtx (VQ._fAlias fld) astUnresolved varTypes
+      EL.buildLiveQueryPlan isPgCtx (VQ._fAlias fld) astUnresolved varTypes
 
 getSubsOp
   :: ( MonadError QErr m
      , MonadIO m
      )
-  => PGExecCtx
+  => IsPGExecCtx
   -> GCtx
   -> SQLGenCtx
   -> UserInfo
   -> QueryReusability
   -> VQ.Field
   -> m (EL.LiveQueryPlan, Maybe EL.ReusableLiveQueryPlan)
-getSubsOp pgExecCtx gCtx sqlGenCtx userInfo queryReusability fld =
-  runE gCtx sqlGenCtx userInfo $ getSubsOpM pgExecCtx queryReusability fld
+getSubsOp isPgCtx gCtx sqlGenCtx userInfo queryReusability fld =
+  runE gCtx sqlGenCtx userInfo $ getSubsOpM isPgCtx queryReusability fld
 
 execRemoteGQ
   :: ( HasVersion

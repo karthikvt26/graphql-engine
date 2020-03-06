@@ -108,29 +108,29 @@ explainField userInfo gCtx sqlGenCtx fld =
 
 explainGQLQuery
   :: (MonadError QErr m, MonadIO m)
-  => PGExecCtx
+  => IsPGExecCtx
   -> SchemaCache
   -> SQLGenCtx
   -> Bool
   -> GQLExplain
   -> m EncJSON
-explainGQLQuery pgExecCtx sc sqlGenCtx enableAL (GQLExplain query userVarsRaw) = do
+explainGQLQuery isPgCtx sc sqlGenCtx enableAL (GQLExplain query userVarsRaw) = do
   (execPlan, queryReusability) <- runReusabilityT $
     E.getExecPlanPartial userInfo sc enableAL query
-  (gCtx, rootSelSet) <- case execPlan of
-    E.GExPHasura (gCtx, rootSelSet) ->
-      return (gCtx, rootSelSet)
+  (gCtx, rootSelSet, txAccess) <- case execPlan of
+    E.GExPHasura (gCtx, rootSelSet, txAccess) ->
+      return (gCtx, rootSelSet, txAccess)
     E.GExPRemote _ _  ->
       throw400 InvalidParams "only hasura queries can be explained"
   case rootSelSet of
     GV.RQuery selSet ->
-      runInTx $ encJFromJValue <$> traverse (explainField userInfo gCtx sqlGenCtx) (toList selSet)
+      runInTx txAccess $ encJFromJValue <$> traverse (explainField userInfo gCtx sqlGenCtx) (toList selSet)
     GV.RMutation _ ->
       throw400 InvalidParams "only queries can be explained"
     GV.RSubscription rootField -> do
-      (plan, _) <- E.getSubsOp pgExecCtx gCtx sqlGenCtx userInfo queryReusability rootField
-      runInTx $ encJFromJValue <$> E.explainLiveQueryPlan plan
+      (plan, _) <- E.getSubsOp isPgCtx gCtx sqlGenCtx userInfo queryReusability rootField
+      runInTx txAccess $ encJFromJValue <$> E.explainLiveQueryPlan plan
   where
     usrVars = mkUserVars $ maybe [] Map.toList userVarsRaw
     userInfo = mkUserInfo (fromMaybe adminRole $ roleFromVars usrVars) usrVars
-    runInTx = liftEither <=< liftIO . runExceptT . runLazyTx pgExecCtx Q.ReadOnly
+    runInTx txAccess = liftEither <=< liftIO . runExceptT . runLazyTx txAccess isPgCtx

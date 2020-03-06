@@ -188,7 +188,7 @@ mkWsErrorLog uv ci ev =
 data WSServerEnv
   = WSServerEnv
   { _wseLogger          :: !(L.Logger L.Hasura)
-  , _wseRunTx           :: !PGExecCtx
+  , _wseRunTx           :: !IsPGExecCtx
   , _wseLiveQMap        :: !LQ.LiveQueriesState
   , _wseGCtxMap         :: !(IO (SchemaCache, SchemaCacheVer))
   -- ^ an action that always returns the latest version of the schema cache
@@ -314,8 +314,8 @@ onStart serverEnv wsConn (StartMsg opId q) = catchAndIgnore $ do
   let execCtx = E.ExecutionCtx logger sqlGenCtx pgExecCtx planCache sc scVer httpMgr enableAL
 
   case execPlan of
-    E.GExPHasura resolvedOp ->
-      runHasuraGQ timerTot telemCacheHit requestId q userInfo resolvedOp
+    E.GExPHasura (resolvedOp, txAccess) ->
+      runHasuraGQ timerTot telemCacheHit requestId q userInfo txAccess resolvedOp
     E.GExPRemote rsi opDef  ->
       runRemoteGQ timerTot telemCacheHit execCtx requestId userInfo reqHdrs opDef rsi
   where
@@ -326,14 +326,14 @@ onStart serverEnv wsConn (StartMsg opId q) = catchAndIgnore $ do
 -- =======
     telemTransport = Telem.HTTP
     runHasuraGQ :: ExceptT () m DiffTime
-                -> Telem.CacheHit -> RequestId -> GQLReqUnparsed -> UserInfo -> E.ExecOp
-                -> ExceptT () m ()
-    runHasuraGQ timerTot telemCacheHit reqId query userInfo = \case
+                -> Telem.CacheHit -> RequestId -> GQLReqUnparsed -> UserInfo -> Q.TxAccess
+                -> E.ExecOp -> ExceptT () m ()
+    runHasuraGQ timerTot telemCacheHit reqId query userInfo txAccess = \case
       E.ExOpQuery opTx genSql ->
         execQueryOrMut Telem.Query genSql $ runLazyTx' pgExecCtx opTx
       E.ExOpMutation opTx ->
         execQueryOrMut Telem.Mutation Nothing $
-          runLazyTx pgExecCtx Q.ReadWrite $ withUserInfo userInfo opTx
+          runLazyTx Q.ReadWrite pgExecCtx $ withUserInfo userInfo opTx
       E.ExOpSubs lqOp -> do
         -- log the graphql query
         L.unLogger logger $ QueryLog query Nothing reqId
@@ -353,6 +353,7 @@ onStart serverEnv wsConn (StartMsg opId q) = catchAndIgnore $ do
     --   sendCompleted (Just reqId)
 
       where
+        runLazyTx' = bool runLazyROTx' runLazyRWTx' $ txAccess == Q.ReadWrite
         telemLocality = Telem.Local
         execQueryOrMut telemQueryType genSql action = do
           logOpEv ODStarted (Just reqId)
@@ -606,7 +607,7 @@ onClose logger lqMap wsConn = do
 createWSServerEnv
   :: (MonadIO m)
   => L.Logger L.Hasura
-  -> PGExecCtx
+  -> IsPGExecCtx
   -> LQ.LiveQueriesState
   -> IO (SchemaCache, SchemaCacheVer)
   -> H.Manager
@@ -615,11 +616,11 @@ createWSServerEnv
   -> Bool
   -> E.PlanCache
   -> m WSServerEnv
-createWSServerEnv logger pgExecCtx lqState getSchemaCache httpManager
+createWSServerEnv logger isPgCtx lqState getSchemaCache httpManager
   corsPolicy sqlGenCtx enableAL planCache = do
   wsServer <- liftIO $ STM.atomically $ WS.createWSServer logger
   return $
-    WSServerEnv logger pgExecCtx lqState getSchemaCache httpManager corsPolicy
+    WSServerEnv logger isPgCtx lqState getSchemaCache httpManager corsPolicy
     sqlGenCtx planCache wsServer enableAL
 
 createWSServerApp

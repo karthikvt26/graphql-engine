@@ -168,15 +168,15 @@ recordSchemaUpdate instanceId invalidations =
 
 runQuery
   :: (HasVersion, MonadIO m, MonadError QErr m)
-  => PGExecCtx -> InstanceId
+  => IsPGExecCtx -> InstanceId
   -> UserInfo -> RebuildableSchemaCache Run -> HTTP.Manager
   -> SQLGenCtx -> SystemDefined -> RQLQuery -> m (EncJSON, RebuildableSchemaCache Run)
-runQuery pgExecCtx instanceId userInfo sc hMgr sqlGenCtx systemDefined query = do
+runQuery isPgCtx instanceId userInfo sc hMgr sqlGenCtx systemDefined query = do
   accessMode <- getQueryAccessMode query
   resE <- runQueryM query
     & runHasSystemDefinedT systemDefined
     & runCacheRWT sc
-    & peelRun runCtx pgExecCtx accessMode
+    & peelRun runCtx isPgCtx (runLazyTx accessMode)
     & runExceptT
     & liftIO
   either throwError withReload resE
@@ -184,7 +184,7 @@ runQuery pgExecCtx instanceId userInfo sc hMgr sqlGenCtx systemDefined query = d
     runCtx = RunCtx userInfo hMgr sqlGenCtx
     withReload (result, updatedCache, invalidations) = do
       when (queryModifiesSchemaCache query) $ do
-        e <- liftIO $ runExceptT $ runLazyTx pgExecCtx Q.ReadWrite $ liftTx $
+        e <- liftIO $ runExceptT $ runLazyTx Q.ReadWrite isPgCtx $ liftTx $
           recordSchemaUpdate instanceId invalidations
         liftEither e
       return (result, updatedCache)

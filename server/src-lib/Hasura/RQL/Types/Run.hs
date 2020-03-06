@@ -8,7 +8,6 @@ module Hasura.RQL.Types.Run
 
 import           Hasura.Prelude
 
-import qualified Database.PG.Query           as Q
 import qualified Network.HTTP.Client         as HTTP
 
 import           Control.Monad.Trans.Control (MonadBaseControl)
@@ -45,11 +44,10 @@ instance HasSQLGenCtx Run where
   askSQLGenCtx = asks _rcSqlGenCtx
 
 peelRun
-  :: (MonadIO m)
-  => RunCtx
-  -> PGExecCtx
-  -> Q.TxAccess
+  :: RunCtx
+  -> IsPGExecCtx
+  -> RunLazyTx m a
   -> Run a
   -> ExceptT QErr m a
-peelRun runCtx@(RunCtx userInfo _ _) pgExecCtx txAccess (Run m) =
-  runLazyTx pgExecCtx txAccess $ withUserInfo userInfo $ runReaderT m runCtx
+peelRun runCtx@(RunCtx userInfo _ _) isPGCtx runLazyTxF (Run m) =
+  runLazyTxF isPGCtx $ withUserInfo userInfo $ runReaderT m runCtx

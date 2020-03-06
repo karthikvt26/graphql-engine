@@ -56,8 +56,8 @@ runGQ reqId userInfo reqHdrs req@(reqUnparsed, _) = do
     (telemCacheHit, execPlan) <- E.getResolvedExecPlan pgExecCtx planCache
                                  userInfo sqlGenCtx enableAL sc scVer req
     case execPlan of
-      E.GExPHasura resolvedOp -> do
-        (telemTimeIO, telemQueryType, resp) <- runHasuraGQ reqId reqUnparsed userInfo resolvedOp
+      E.GExPHasura (resolvedOp, txAccess) -> do
+        (telemTimeIO, telemQueryType, resp) <- runHasuraGQ reqId reqUnparsed userInfo txAccess resolvedOp
         return (telemCacheHit, Telem.Local, (telemTimeIO, telemQueryType, HttpResponse resp Nothing))
       E.GExPRemote rsi opDef  -> do
         let telemQueryType | G._todType opDef == G.OperationTypeMutation = Telem.Mutation
@@ -104,21 +104,23 @@ runHasuraGQ
   => RequestId
   -> GQLReqUnparsed
   -> UserInfo
+  -> Q.TxAccess
   -> E.ExecOp
   -> m (DiffTime, Telem.QueryType, EncJSON)
   -- ^ Also return 'Mutation' when the operation was a mutation, and the time
   -- spent in the PG query; for telemetry.
-runHasuraGQ reqId query userInfo resolvedOp = do
-  E.ExecutionCtx logger _ pgExecCtx _ _ _ _ _ <- ask
+runHasuraGQ reqId query userInfo txAccess resolvedOp = do
+  E.ExecutionCtx logger _ isPgCtx _ _ _ _ _ <- ask
   (telemTimeIO, respE) <- withElapsedTime $ liftIO $ runExceptT $ case resolvedOp of
+    -- TODO How can we run this query with read-write access
     E.ExOpQuery tx genSql  -> do
       -- log the generated SQL and the graphql query
       L.unLogger logger $ QueryLog query genSql reqId
-      runLazyTx' pgExecCtx tx
+      runLazyTx' isPgCtx tx
     E.ExOpMutation tx -> do
       -- log the graphql query
       L.unLogger logger $ QueryLog query Nothing reqId
-      runLazyTx pgExecCtx Q.ReadWrite $ withUserInfo userInfo tx
+      runLazyTx Q.ReadWrite isPgCtx $ withUserInfo userInfo tx
     E.ExOpSubs _ ->
       throw400 UnexpectedPayload
       "subscriptions are not supported over HTTP, use websockets instead"
@@ -126,3 +128,4 @@ runHasuraGQ reqId query userInfo resolvedOp = do
   let !json = encodeGQResp $ GQSuccess $ encJToLBS resp
       telemQueryType = case resolvedOp of E.ExOpMutation{} -> Telem.Mutation ; _ -> Telem.Query
   return (telemTimeIO, telemQueryType, json)
+  where runLazyTx' = bool runLazyROTx' runLazyRWTx' $ txAccess == Q.ReadWrite

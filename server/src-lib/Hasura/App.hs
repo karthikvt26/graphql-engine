@@ -111,7 +111,7 @@ data InitCtx
   , _icDbUid       :: !Text
   , _icLoggers     :: !Loggers
   , _icConnInfo    :: !Q.ConnInfo
-  , _icPgPool      :: !Q.PGPool
+  , _icPgExecCtx   :: !IsPGExecCtx
   }
 
 -- | Collection of the LoggerCtx, the regular Logger and the PGLogger
@@ -142,7 +142,7 @@ initialiseCtx hgeCmd rci = do
   httpManager <- liftIO $ HTTP.newManager HTTP.tlsManagerSettings
   instanceId <- liftIO generateInstanceId
   connInfo <- liftIO procConnInfo
-  (loggers, pool) <- case hgeCmd of
+  (loggers, pool, isPGCtx) <- case hgeCmd of
     -- for server command generate a proper pool
     HCServe so@ServeOptions{..} -> do
       l@(Loggers _ logger pgLogger) <- mkLoggers soEnabledLogTypes soLogLevel
@@ -151,23 +151,25 @@ initialiseCtx hgeCmd rci = do
       -- log postgres connection info
       unLogger logger $ connInfoToLog connInfo
       pool <- liftIO $ Q.initPGPool connInfo soConnParams pgLogger
+      let isPgCtx = mkIsPgCtx pool soTxIso
       -- safe init catalog
-      initialiseCatalog pool (SQLGenCtx soStringifyNum) httpManager logger
+      initialiseCatalog isPgCtx (SQLGenCtx soStringifyNum) httpManager logger
 
-      return (l, pool)
+      return (l, pool, isPgCtx)
 
     -- for other commands generate a minimal pool
     _ -> do
       l@(Loggers _ _ pgLogger) <- mkLoggers defaultEnabledLogTypes LevelInfo
       pool <- getMinimalPool pgLogger connInfo
-      return (l, pool)
+      return (l, pool, mkIsPgCtx pool Q.Serializable)
 
   -- get the unique db id
   eDbId <- liftIO $ runExceptT $ Q.runTx pool (Q.Serializable, Nothing) getDbId
   dbId <- either printErrJExit return eDbId
 
-  return (InitCtx httpManager instanceId dbId loggers connInfo pool, initTime)
+  return (InitCtx httpManager instanceId dbId loggers connInfo isPGCtx, initTime)
   where
+    mkIsPgCtx pool txIso = IsPGExecCtx (const $ pure $ PGExecCtx pool txIso) [pool]
     procConnInfo =
       either (printErrExit . connInfoErrModifier) return $ mkConnInfo rci
 
@@ -214,11 +216,11 @@ runHGEServer ServeOptions{..} InitCtx{..} initTime = do
 
   authMode <- either (printErrExit . T.unpack) return authModeRes
 
-  HasuraApp app cacheRef cacheInitTime shutdownApp <- mkWaiApp soTxIso
+  HasuraApp app cacheRef cacheInitTime shutdownApp <- mkWaiApp
                                                                logger
                                                                sqlGenCtx
                                                                soEnableAllowlist
-                                                               _icPgPool
+                                                               _icPgExecCtx
                                                                _icConnInfo
                                                                _icHttpManager
                                                                authMode
@@ -236,7 +238,7 @@ runHGEServer ServeOptions{..} InitCtx{..} initTime = do
   liftIO $ logInconsObjs logger inconsObjs
 
   -- start a background thread for schema sync
-  startSchemaSync sqlGenCtx _icPgPool logger _icHttpManager
+  startSchemaSync sqlGenCtx _icPgExecCtx logger _icHttpManager
                   cacheRef _icInstanceId cacheInitTime
 
   let warpSettings = Warp.setPort soPort
@@ -251,11 +253,11 @@ runHGEServer ServeOptions{..} InitCtx{..} initTime = do
   logEnvHeaders <- liftIO $ getFromEnv False "LOG_HEADERS_FROM_ENV"
 
   -- prepare event triggers data
-  prepareEvents _icPgPool logger
+  prepareEvents _icPgExecCtx logger
   eventEngineCtx <- liftIO $ atomically $ initEventEngineCtx maxEvThrds fetchI
   unLogger logger $ mkGenericStrLog LevelInfo "event_triggers" "starting workers"
   void $ liftIO $ C.forkIO $ processEventQueue logger logEnvHeaders
-    _icHttpManager _icPgPool (getSCFromRef cacheRef) eventEngineCtx
+    _icHttpManager _icPgExecCtx (getSCFromRef cacheRef) eventEngineCtx
 
   -- start a background thread to check for updates
   void $ liftIO $ C.forkIO $ checkForUpdates loggerCtx _icHttpManager
@@ -273,9 +275,9 @@ runHGEServer ServeOptions{..} InitCtx{..} initTime = do
   liftIO $ Warp.runSettings warpSettings app
 
   where
-    prepareEvents pool (Logger logger) = do
+    prepareEvents isPGCtx (Logger logger) = do
       liftIO $ logger $ mkGenericStrLog LevelInfo "event_triggers" "preparing data"
-      res <- runTx pool unlockAllEvents
+      res <- runExceptT $ runLazyTx Q.ReadWrite isPGCtx $ liftTx unlockAllEvents
       either printErrJExit return res
 
     getFromEnv :: (Read a) => a -> String -> IO a
@@ -286,9 +288,6 @@ runHGEServer ServeOptions{..} InitCtx{..} initTime = do
             Just val -> readMaybe val
           eRes = maybe (Left $ "Wrong expected type for environment variable: " <> env) Right mRes
       either printErrExit return eRes
-
-    runTx pool tx =
-      liftIO $ runExceptT $ Q.runTx pool (Q.Serializable, Nothing) tx
 
     -- | Catches the SIGTERM signal and initiates a graceful shutdown. Graceful shutdown for regular HTTP
     -- requests is already implemented in Warp, and is triggered by invoking the 'closeSocket' callback.
@@ -310,15 +309,15 @@ runHGEServer ServeOptions{..} InitCtx{..} initTime = do
 
 runAsAdmin
   :: (MonadIO m)
-  => Q.PGPool
+  => IsPGExecCtx
   -> SQLGenCtx
   -> HTTP.Manager
   -> Run a
   -> m (Either QErr a)
-runAsAdmin pool sqlGenCtx httpManager m = do
+runAsAdmin isPgCtx sqlGenCtx httpManager m = do
   let runCtx = RunCtx adminUserInfo httpManager sqlGenCtx
-      pgCtx = PGExecCtx pool Q.Serializable
-  runExceptT $ peelRun runCtx pgCtx Q.ReadWrite m
+  runExceptT $ peelRun runCtx isPgCtx' (runLazyTx Q.ReadWrite) m
+  where isPgCtx' = withTxIsolation Q.Serializable isPgCtx
 
 execQuery
   :: ( HasVersion

@@ -72,7 +72,7 @@ data SchemaCacheRef
 
 data ServerCtx
   = ServerCtx
-  { scPGExecCtx       :: !PGExecCtx
+  { scPGExecCtx       :: !IsPGExecCtx
   , scConnInfo        :: !Q.ConnInfo
   , scLogger          :: !(L.Logger L.Hasura)
   , scCacheRef        :: !SchemaCacheRef
@@ -464,15 +464,14 @@ mkWaiApp
      , ConfigApiHandler m
      , LA.Forall (LA.Pure m)
      )
-  => Q.TxIsolation
   -- ^ postgres transaction isolation to be used in the entire app
-  -> L.Logger L.Hasura
+  => L.Logger L.Hasura
   -- ^ a 'L.Hasura' specific logger
   -> SQLGenCtx
   -> Bool
   -- ^ is AllowList enabled - TODO: change this boolean to sumtype
-  -> Q.PGPool
-  -- ^ the postgres connection pool
+  -> IsPGExecCtx
+  -- ^ the postgres execution context
   -> Q.ConnInfo
   -- ^ postgres connection parameters
   -> HTTP.Manager
@@ -494,15 +493,14 @@ mkWaiApp
   -> EL.LiveQueriesOptions
   -> E.PlanCacheOptions
   -> m HasuraApp
-mkWaiApp isoLevel logger sqlGenCtx enableAL pool ci httpManager mode corsCfg enableConsole consoleAssetsDir
+mkWaiApp logger sqlGenCtx enableAL isPgCtx ci httpManager mode corsCfg enableConsole consoleAssetsDir
          enableTelemetry instanceId apis lqOpts planCacheOptions = do
 
-    let pgExecCtx = PGExecCtx pool isoLevel
-        pgExecCtxSer = PGExecCtx pool Q.Serializable
+    let isPgSerCtx = withTxIsolation Q.Serializable isPgCtx
         runCtx = RunCtx adminUserInfo httpManager sqlGenCtx
 
     (cacheRef, cacheBuiltTime) <- do
-      pgResp <- runExceptT $ peelRun runCtx pgExecCtxSer Q.ReadWrite $
+      pgResp <- runExceptT $ peelRun runCtx isPgSerCtx (runLazyTx Q.ReadWrite) $
         (,) <$> buildRebuildableSchemaCache <*> liftTx fetchLastUpdate
       (schemaCache, event) <- liftIO $ either initErrExit return pgResp
       scRef <- liftIO $ newIORef (schemaCache, initSchemaCacheVer)
@@ -514,15 +512,15 @@ mkWaiApp isoLevel logger sqlGenCtx enableAL pool ci httpManager mode corsCfg ena
     let corsPolicy = mkDefaultCorsPolicy corsCfg
         getSchemaCache = first lastBuiltSchemaCache <$> readIORef cacheRef
 
-    lqState <- liftIO $ EL.initLiveQueriesState lqOpts pgExecCtx
-    wsServerEnv <- WS.createWSServerEnv logger pgExecCtx lqState getSchemaCache httpManager
+    lqState <- liftIO $ EL.initLiveQueriesState lqOpts isPgCtx
+    wsServerEnv <- WS.createWSServerEnv logger isPgCtx lqState getSchemaCache httpManager
                                         corsPolicy sqlGenCtx enableAL planCache
 
     ekgStore <- liftIO EKG.newStore
 
     let schemaCacheRef = SchemaCacheRef cacheLock cacheRef (E.clearPlanCache planCache)
         serverCtx = ServerCtx
-                    { scPGExecCtx       =  pgExecCtx
+                    { scPGExecCtx       =  isPgCtx
                     , scConnInfo        =  ci
                     , scLogger          =  logger
                     , scCacheRef        =  schemaCacheRef
@@ -585,8 +583,8 @@ httpApp corsCfg serverCtx enableConsole consoleAssetsDir enableTelemetry = do
     -- Health check endpoint
     Spock.get "healthz" $ do
       sc <- getSCFromRef $ scCacheRef serverCtx
-      dbOk <- checkDbConnection
-      if dbOk
+      dbOk <- liftIO $ mapM checkDbConnection pools
+      if all id dbOk
         then Spock.setStatus HTTP.status200 >> (Spock.text $ if null (scInconsistentObjs sc)
                                                  then "OK"
                                                  else "WARN: inconsistent objects in schema")
@@ -672,11 +670,12 @@ httpApp corsCfg serverCtx enableConsole consoleAssetsDir enableTelemetry = do
     enablePGDump = isPGDumpEnabled serverCtx
     enableConfig = isConfigEnabled serverCtx
 
-    checkDbConnection = do
-      e <- liftIO $ runExceptT $ runLazyTx' (scPGExecCtx serverCtx) select1Query
+    pools = getPGPools $ scPGExecCtx serverCtx
+    checkDbConnection pool = do
+      e <- runExceptT $ Q.runTx' pool select1Query
       pure $ isRight e
       where
-        select1Query :: (MonadTx m) => m Int
+        select1Query :: Q.TxE QErr Int
         select1Query =   liftTx $ runIdentity . Q.getRow <$> Q.withQE defaultTxErrorHandler
                          [Q.sql| SELECT 1 |] () False
 

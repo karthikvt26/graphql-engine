@@ -302,11 +302,11 @@ dumpPollerMap extended lqMap =
 pollQuery
   :: RefetchMetrics
   -> BatchSize
-  -> PGExecCtx
+  -> IsPGExecCtx
   -> MultiplexedQuery
   -> Poller
   -> IO ()
-pollQuery metrics batchSize pgExecCtx pgQuery handler = do
+pollQuery metrics batchSize isPgCtx pgQuery handler = do
   procInit <- Clock.getCurrentTime
 
   -- get a snapshot of all the cohorts
@@ -321,7 +321,8 @@ pollQuery metrics batchSize pgExecCtx pgQuery handler = do
     realToFrac $ Clock.diffUTCTime snapshotFinish procInit
   flip A.mapConcurrently_ queryVarsBatches $ \queryVars -> do
     queryInit <- Clock.getCurrentTime
-    mxRes <- runExceptT . runLazyTx' pgExecCtx $ executeMultiplexedQuery pgQuery queryVars
+    -- Running multiplexed query for subscription with read-only access
+    mxRes <- runExceptT . runLazyROTx' isPgCtx $ executeMultiplexedQuery pgQuery queryVars
     queryFinish <- Clock.getCurrentTime
     let dt = Clock.diffUTCTime queryFinish queryInit
         queryTime = realToFrac dt

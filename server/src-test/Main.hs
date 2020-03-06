@@ -17,7 +17,7 @@ import qualified Network.HTTP.Client          as HTTP
 import qualified Network.HTTP.Client.TLS      as HTTP
 import qualified Test.Hspec.Runner            as Hspec
 
-import           Hasura.Db                    (PGExecCtx (..))
+import           Hasura.Db                    (PGExecCtx (..), IsPGExecCtx(..), runLazyTx)
 import           Hasura.RQL.Types             (SQLGenCtx (..), adminUserInfo)
 import           Hasura.RQL.Types.Run
 import           Hasura.Server.Init          (RawConnInfo, mkConnInfo,
@@ -70,14 +70,14 @@ buildPostgresSpecs pgConnOptions = do
 
   let setupCacheRef = do
         pgPool <- Q.initPGPool pgConnInfo Q.defaultConnParams { Q.cpConns = 1 } print
-
+        let pgContext = PGExecCtx pgPool Q.Serializable
+            isPgCtx = IsPGExecCtx (const $ return pgContext) [pgPool]
         httpManager <- HTTP.newManager HTTP.tlsManagerSettings
         let runContext = RunCtx adminUserInfo httpManager (SQLGenCtx False)
-            pgContext = PGExecCtx pgPool Q.Serializable
 
             runAsAdmin :: Run a -> IO a
             runAsAdmin =
-                  peelRun runContext pgContext Q.ReadWrite
+                  peelRun runContext isPgCtx (runLazyTx Q.ReadWrite)
               >>> runExceptT
               >=> flip onLeft printErrJExit
 
