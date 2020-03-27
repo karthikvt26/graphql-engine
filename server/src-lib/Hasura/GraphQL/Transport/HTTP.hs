@@ -12,6 +12,8 @@ module Hasura.GraphQL.Transport.HTTP
 
 import qualified Network.HTTP.Types                     as HTTP
 
+import           Control.Monad.Trans.Control            (MonadBaseControl)
+
 import           Hasura.EncJSON
 import           Hasura.GraphQL.Transport.HTTP.Protocol
 import           Hasura.HTTP
@@ -22,6 +24,7 @@ import           Hasura.Server.Logging                  (QueryLogger (..))
 import           Hasura.Server.Utils                    (RequestId)
 import           Hasura.Server.Version                  (HasVersion)
 import           Hasura.Session
+import           Hasura.Tracing                         (MonadTrace)
 
 import qualified Database.PG.Query                      as Q
 import qualified Hasura.GraphQL.Execute                 as E
@@ -34,6 +37,7 @@ runGQ
      , MonadError QErr m
      , MonadReader E.ExecutionCtx m
      , QueryLogger m
+     , MonadTrace m
      )
   => RequestId
   -> UserInfo
@@ -67,6 +71,7 @@ runGQBatched
      , MonadError QErr m
      , MonadReader E.ExecutionCtx m
      , QueryLogger m
+     , MonadTrace m
      )
   => RequestId
   -> ResponseInternalErrorsConfig

@@ -196,6 +196,9 @@ library
                      , ghc-heap-view == 0.6.0
 
                      , directory
+                     
+                     , random
+                     , mmorph
 
                      -- 0.6.1 is supposedly not okay for ghc 8.6:
                      --   https://github.com/nomeata/ghc-heap-view/issues/27
@@ -225,9 +228,11 @@ library
                      , Hasura.HTTP
                      , Hasura.EncJSON
                      , Hasura.Incremental
+                     , Hasura.Tracing
 
                      , Hasura.Server.App
                      , Hasura.Server.Auth
+                     , Hasura.Server.Cors
                      , Hasura.Server.Init
                      , Hasura.Server.Init.Config
                      , Hasura.Server.API.Query
@@ -274,7 +279,6 @@ library
                      , Hasura.Server.Auth.JWT
                      , Hasura.Server.Auth.WebHook
                      , Hasura.Server.Middleware
-                     , Hasura.Server.Cors
                      , Hasura.Server.CheckUpdates
                      , Hasura.Server.SchemaUpdate
                      , Hasura.Server.Migrate.Version
@@ -411,6 +415,7 @@ executable graphql-engine
                    , pg-client
                    , text
                    , text-conversions
+                   , unix
 
 test-suite graphql-engine-tests
   import: common-all, common-exe

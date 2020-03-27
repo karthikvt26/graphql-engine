@@ -2,6 +2,7 @@
 module Hasura.Server.Init.Config where
 
 import qualified Data.Aeson                       as J
+import qualified Data.Aeson.Casing                as J
 import qualified Data.Aeson.TH                    as J
 import qualified Data.HashSet                     as Set
 import qualified Data.String                      as DataString
@@ -132,10 +133,13 @@ data API
   | DEVELOPER
   | CONFIG
   deriving (Show, Eq, Read, Generic)
+  
 $(J.deriveJSON (J.defaultOptions { J.constructorTagModifier = map toLower })
   ''API)
 
 instance Hashable API
+
+$(J.deriveJSON (J.aesonDrop 4 J.camelCase){J.omitNothingFields=True} ''RawConnInfo)
 
 type HGECommand impl = HGECommandG (ServeOptions impl)
 type RawHGECommand impl = HGECommandG (RawServeOptions impl)

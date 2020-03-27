@@ -24,6 +24,7 @@ module Hasura.GraphQL.Execute
 import           Control.Exception                      (try)
 import           Control.Lens
 import           Data.Has
+import           Data.String                            (fromString)
 
 import qualified Data.Aeson                             as J
 import qualified Data.HashMap.Strict                    as Map
@@ -60,6 +61,7 @@ import qualified Hasura.GraphQL.Validate                as VQ
 import qualified Hasura.GraphQL.Validate.Types          as VT
 import qualified Hasura.Logging                         as L
 import qualified Hasura.Server.Telemetry.Counters       as Telem
+import qualified Hasura.Tracing                         as Tracing
 
 -- The current execution plan of a graphql operation, it is
 -- currently, either local pg execution or a remote execution
@@ -96,6 +98,9 @@ class Monad m => GQLApiAuthorization m where
     -- ^ the unparsed GraphQL query string (and related values)
     -> m (Either QErr GQLReqParsed)
     -- ^ after enforcing authorization, it should return the parsed GraphQL query
+
+instance GQLApiAuthorization m => GQLApiAuthorization (Tracing.TraceT m) where
+  authorizeGQLApi ui hs q = lift $ authorizeGQLApi ui hs q
 
 -- Enforces the current limitation
 assertSameLocationNodes
@@ -410,6 +415,7 @@ execRemoteGQ
      , MonadError QErr m
      , MonadReader ExecutionCtx m
      , QueryLogger m
+     , Tracing.MonadTrace m
      )
   => RequestId
   -> UserInfo
@@ -419,7 +425,7 @@ execRemoteGQ
   -> G.TypedOperationDefinition
   -> m (DiffTime, HttpResponse EncJSON)
   -- ^ Also returns time spent in http request, for telemetry.
-execRemoteGQ reqId userInfo reqHdrs q rsi opDef = do
+execRemoteGQ reqId userInfo reqHdrs q rsi opDef = Tracing.traceHttpRequest (fromString (show url)) do
   execCtx <- ask
   let logger  = _ecxLogger execCtx
       manager = _ecxHttpManager execCtx
@@ -444,12 +450,12 @@ execRemoteGQ reqId userInfo reqHdrs q rsi opDef = do
            , HTTP.requestBody = HTTP.RequestBodyLBS (J.encode q)
            , HTTP.responseTimeout = HTTP.responseTimeoutMicro (timeout * 1000000)
            }
-
-  logQuery logger q Nothing reqId
-  (time, res)  <- withElapsedTime $ liftIO $ try $ HTTP.httpLbs req manager
-  resp <- either httpThrow return res
-  let !httpResp = HttpResponse (encJFromLBS $ resp ^. Wreq.responseBody) $ mkSetCookieHeaders resp
-  return (time, httpResp)
+  pure $ Tracing.SuspendedRequest req \req' -> do
+    logQuery logger q Nothing reqId
+    (time, res)  <- withElapsedTime $ liftIO $ try $ HTTP.httpLbs req' manager
+    resp <- either httpThrow return res
+    let !httpResp = HttpResponse (encJFromLBS $ resp ^. Wreq.responseBody) $ mkSetCookieHeaders resp
+    return (time, httpResp)
 
   where
     RemoteSchemaInfo url hdrConf fwdClientHdrs timeout = rsi

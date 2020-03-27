@@ -38,6 +38,7 @@ import           Hasura.RQL.Types
 import           Hasura.Server.Compression
 import           Hasura.Server.Utils
 import           Hasura.Session
+import           Hasura.Tracing                              (TraceT)
 
 data StartupLog
   = StartupLog
@@ -134,6 +135,9 @@ instance QueryLogger m => QueryLogger (ExceptT e m) where
 
 instance QueryLogger m => QueryLogger (ReaderT r m) where
   logQuery l req sqlMap reqId = lift $ logQuery l req sqlMap reqId
+  
+instance QueryLogger m => QueryLogger (TraceT m) where
+  logQuery l req sqlMap reqId = lift $ logQuery l req sqlMap reqId
 
 class (Monad m) => HttpLog m where
   logHttpError
@@ -177,6 +181,9 @@ class (Monad m) => HttpLog m where
     -- ^ list of request headers
     -> m ()
 
+instance HttpLog m => HttpLog (TraceT m) where
+  logHttpError a b c d e f g = lift $ logHttpError a b c d e f g
+  logHttpSuccess a b c d e f g h i j = lift $ logHttpSuccess a b c d e f g h i j
 
 -- | Log information about the HTTP request
 data HttpInfoLog

@@ -1,4 +1,7 @@
-{-# LANGUAGE RecordWildCards #-}
+{-# LANGUAGE RecordWildCards            #-}
+{-# LANGUAGE DerivingStrategies         #-}
+{-# LANGUAGE GeneralizedNewtypeDeriving #-}
+{-# LANGUAGE RecordWildCards            #-}
 
 module Hasura.Server.Auth
   ( getUserInfo
@@ -21,6 +24,7 @@ module Hasura.Server.Auth
   ) where
 
 import           Control.Concurrent.Extended (forkImmortal)
+import           Data.Aeson                  (ToJSON, FromJSON)
 import           Data.IORef                  (newIORef)
 import           Data.Time.Clock             (UTCTime)
 import           Hasura.Server.Version       (HasVersion)
@@ -36,6 +40,7 @@ import           Hasura.Server.Auth.JWT
 import           Hasura.Server.Auth.WebHook
 import           Hasura.Server.Utils
 import           Hasura.Session
+import           Hasura.Tracing              (TraceT)
 
 -- | Typeclass representing the @UserInfo@ authorization and resolving effect
 class (Monad m) => UserAuthentication m where
@@ -48,9 +53,13 @@ class (Monad m) => UserAuthentication m where
     -> AuthMode
     -> m (Either QErr (UserInfo, Maybe UTCTime))
 
+instance UserAuthentication m => UserAuthentication (TraceT m) where
+  resolveUserInfo a b c d = lift $ resolveUserInfo a b c d
+
 newtype AdminSecret
   = AdminSecret { getAdminSecret :: T.Text }
   deriving (Show, Eq)
+  deriving newtype (ToJSON, FromJSON)
 
 
 data AuthMode

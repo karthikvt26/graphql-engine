@@ -28,7 +28,6 @@ import qualified Database.PG.Query                         as Q
 import qualified Network.HTTP.Client                       as HTTP
 import qualified Network.HTTP.Client.TLS                   as HTTP
 import qualified Network.Wai.Handler.Warp                  as Warp
-import qualified System.Posix.Signals                      as Signals
 import qualified Text.Mustache.Compile                     as M
 
 import           Hasura.Db
@@ -59,6 +58,7 @@ import           Hasura.Server.SchemaUpdate
 import           Hasura.Server.Telemetry
 import           Hasura.Server.Version
 import           Hasura.Session
+import qualified Hasura.Tracing                            as Tracing
 
 printErrExit :: (MonadIO m) => forall a . String -> m a
 printErrExit = liftIO . (>> exitFailure) . putStrLn
@@ -216,6 +216,7 @@ runHGEServer
      , WSServerLogger m
      , ConsoleRenderer m
      , ConfigApiHandler m
+     , Tracing.HasReporter m
      , LA.Forall (LA.Pure m)
      , Telemetry m
      )
@@ -223,8 +224,10 @@ runHGEServer
   -> InitCtx
   -> UTCTime
   -- ^ start time
+  -> C.MVar ()
+  -- ^ shutdown latch
   -> m ()
-runHGEServer serveOpts@ServeOptions{..} initCtx@InitCtx{..} initTime = do
+runHGEServer serveOpts@ServeOptions{..} initCtx@InitCtx{..} initTime shutdownLatch = do
   -- Comment this to enable expensive assertions from "GHC.AssertNF". These will log lines to
   -- STDOUT containing "not in normal form". In the future we could try to integrate this into
   -- our tests. For now this is a development tool.
@@ -351,25 +354,18 @@ runHGEServer serveOpts@ServeOptions{..} initCtx@InitCtx{..} initTime = do
     runTx pool txLevel tx =
       liftIO $ runExceptT $ runLazyTx txLevel pool $ liftTx tx
 
-    -- | Catches the SIGTERM signal and initiates a graceful shutdown. Graceful shutdown for regular HTTP
-    -- requests is already implemented in Warp, and is triggered by invoking the 'closeSocket' callback.
-    -- We only catch the SIGTERM signal once, that is, if we catch another SIGTERM signal then the process
-    -- is terminated immediately.
-    -- If the user hits CTRL-C (SIGINT), then the process is terminated immediately
+    -- | Waits for the shutdown latch 'MVar' to be filled, and then
+    -- shuts down the server and associated resources.
+    -- Structuring things this way lets us decide elsewhere exactly how
+    -- we want to control shutdown. 
     shutdownHandler :: Logger Hasura -> IO () -> EventEngineCtx -> IsPGExecCtx -> IO () -> IO ()
     shutdownHandler (Logger logger) shutdownApp eeCtx pool closeSocket =
-      void $ Signals.installHandler
-        Signals.sigTERM
-        (Signals.CatchOnce shutdownSequence)
-        Nothing
-     where
-      shutdownSequence = do
+      LA.link =<< LA.async do
+        _ <- C.takeMVar shutdownLatch
+        logger $ mkGenericStrLog LevelInfo "server" "gracefully shutting down server"
         shutdownEvents pool (Logger logger) eeCtx
         closeSocket
         shutdownApp
-        logShutdown
-
-      logShutdown = logger $ mkGenericStrLog LevelInfo "server" "gracefully shutting down server"
 
 runAsAdmin
   :: (MonadIO m)
@@ -408,6 +404,8 @@ instance QueryLogger AppM where
 
 instance WSServerLogger AppM where
   logWSServer = unLogger
+
+instance Tracing.HasReporter AppM
 
 instance HttpLog AppM where
   logHttpError logger userInfoM reqId httpReq req qErr headers =

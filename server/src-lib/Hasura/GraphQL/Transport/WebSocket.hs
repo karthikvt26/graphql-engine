@@ -61,6 +61,7 @@ import qualified Hasura.GraphQL.Execute.LiveQuery.Poll       as LQ
 import qualified Hasura.GraphQL.Transport.WebSocket.Server   as WS
 import qualified Hasura.Logging                              as L
 import qualified Hasura.Server.Telemetry.Counters            as Telem
+import qualified Hasura.Tracing                              as Tracing
 
 -- | 'LQ.LiveQueryId' comes from 'Hasura.GraphQL.Execute.LiveQuery.State.addLiveQuery'. We use
 -- this to track a connection's operations so we can remove them from 'LiveQueryState', and
@@ -302,7 +303,7 @@ onConn (L.Logger logger) corsPolicy wsId requestHead ipAddress = do
             <> "HASURA_GRAPHQL_WS_READ_COOKIE to force read cookie when CORS is disabled."
 
 
-onStart :: forall m. (HasVersion, MonadIO m, E.GQLApiAuthorization m, QueryLogger m)
+onStart :: forall m. (HasVersion, MonadIO m, E.GQLApiAuthorization m, QueryLogger m, Tracing.MonadTrace m)
         => WSServerEnv -> WSConn -> StartMsg -> m ()
 onStart serverEnv wsConn (StartMsg opId q) = catchAndIgnore $ do
   timerTot <- startTimer
@@ -491,11 +492,11 @@ onStart serverEnv wsConn (StartMsg opId q) = catchAndIgnore $ do
     catchAndIgnore m = void $ runExceptT m
 
 onMessage
-  :: (HasVersion, MonadIO m, UserAuthentication m, E.GQLApiAuthorization m, QueryLogger m)
+  :: (HasVersion, MonadIO m, UserAuthentication m, E.GQLApiAuthorization m, QueryLogger m, Tracing.HasReporter m)
   => AuthMode
   -> WSServerEnv
   -> WSConn -> BL.ByteString -> m ()
-onMessage authMode serverEnv wsConn msgRaw =
+onMessage authMode serverEnv wsConn msgRaw = Tracing.runTraceT "websocket" do
   case J.eitherDecode msgRaw of
     Left e    -> do
       let err = ConnErrMsg $ "parsing ClientMessage failed: " <> T.pack e
@@ -699,6 +700,7 @@ createWSServerApp
      , E.GQLApiAuthorization m
      , QueryLogger m
      , WS.WSServerLogger m
+     , Tracing.HasReporter m
      )
   => AuthMode
   -> WSServerEnv
