@@ -302,7 +302,7 @@ v1QueryHandler query = do
       runQuery pgExecCtx instanceId userInfo schemaCache httpMgr sqlGenCtx (SystemDefined False) query
 
 v1Alpha1GQHandler
-  :: (HasVersion, E.GQLApiAuthorization m, MonadIO m)
+  :: (HasVersion, E.GQLApiAuthorization m, MonadIO m, QueryLogger m)
   => GH.GQLBatchedReqs GH.GQLQueryText -> Handler m (HttpResponse EncJSON)
 v1Alpha1GQHandler query = do
   userInfo <- asks hcUser
@@ -334,7 +334,7 @@ v1Alpha1GQHandler query = do
   flip runReaderT execCtx $ GH.runGQBatched requestId userInfo reqHeaders (query, reqParsed)
 
 v1GQHandler
-  :: (HasVersion, E.GQLApiAuthorization m, MonadIO m)
+  :: (HasVersion, E.GQLApiAuthorization m, QueryLogger m, MonadIO m)
   => GH.GQLBatchedReqs GH.GQLQueryText
   -> Handler m (HttpResponse EncJSON)
 v1GQHandler = v1Alpha1GQHandler
@@ -458,6 +458,7 @@ mkWaiApp
      , MonadStateless IO m
      , ConsoleRenderer m
      , HttpLog m
+     , QueryLogger m
      , UserAuthentication m
      , MetadataApiAuthorization m
      , E.GQLApiAuthorization m
@@ -560,6 +561,7 @@ httpApp
      , MonadIO m
      , ConsoleRenderer m
      , HttpLog m
+     , QueryLogger m
      , UserAuthentication m
      , MetadataApiAuthorization m
      , E.GQLApiAuthorization m

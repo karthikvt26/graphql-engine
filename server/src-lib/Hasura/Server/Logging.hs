@@ -8,6 +8,7 @@ module Hasura.Server.Logging
   , mkHttpErrorLogContext
   , mkHttpLog
   , HttpInfoLog(..)
+  , QueryLogger(..)
   , OperationLog(..)
   , HttpLogContext(..)
   , WebHookLog(..)
@@ -20,14 +21,16 @@ module Hasura.Server.Logging
 import           Data.Aeson
 import           Data.Aeson.Casing
 import           Data.Aeson.TH
-import           Data.Int                  (Int64)
+import           Data.Int                               (Int64)
 import           Data.Time.Clock
 
-import qualified Data.ByteString.Lazy      as BL
-import qualified Data.Text                 as T
-import qualified Network.HTTP.Types        as HTTP
-import qualified Network.Wai               as Wai
+import qualified Data.ByteString.Lazy                   as BL
+import qualified Data.Text                              as T
+import qualified Network.HTTP.Types                     as HTTP
+import qualified Network.Wai                            as Wai
 
+import           Hasura.GraphQL.Execute.Query           (GeneratedSqlMap)
+import           Hasura.GraphQL.Transport.HTTP.Protocol (GQLReqUnparsed)
 import           Hasura.HTTP
 import           Hasura.Logging
 import           Hasura.Prelude
@@ -111,6 +114,23 @@ instance ToJSON WebHookLog where
            , "response" .= whlResponse whl
            ]
 
+class (Monad m) => QueryLogger m where
+  logQuery
+    :: Logger Hasura
+    -- ^ logger
+    -> GQLReqUnparsed
+    -- ^ GraphQL request
+    -> (Maybe GeneratedSqlMap)
+    -- ^ Generated SQL if any
+    -> RequestId
+    -- ^ Id of the request
+    -> m ()
+
+instance QueryLogger m => QueryLogger (ExceptT e m) where
+  logQuery l req sqlMap reqId = lift $ logQuery l req sqlMap reqId
+
+instance QueryLogger m => QueryLogger (ReaderT r m) where
+  logQuery l req sqlMap reqId = lift $ logQuery l req sqlMap reqId
 
 class (Monad m) => HttpLog m where
   logHttpError

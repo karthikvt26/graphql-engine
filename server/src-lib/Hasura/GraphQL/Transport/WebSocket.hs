@@ -32,7 +32,6 @@ import           Control.Concurrent.Extended                 (sleep)
 import qualified ListT
 
 import           Hasura.EncJSON
-import           Hasura.GraphQL.Logging
 import           Hasura.GraphQL.Transport.HTTP.Protocol
 import           Hasura.GraphQL.Transport.WebSocket.Protocol
 import           Hasura.Prelude
@@ -42,6 +41,7 @@ import           Hasura.Server.Auth                          (AuthMode, UserAuth
                                                               resolveUserInfo)
 import           Hasura.Server.Context
 import           Hasura.Server.Cors
+import           Hasura.Server.Logging                       (QueryLogger (..))
 import           Hasura.Server.Utils                         (IpAddress (..), RequestId,
                                                               getRequestId)
 import           Hasura.Server.Version                       (HasVersion)
@@ -284,7 +284,7 @@ onConn (L.Logger logger) corsPolicy wsId requestHead ipAddress = do
             <> "HASURA_GRAPHQL_WS_READ_COOKIE to force read cookie when CORS is disabled."
 
 
-onStart :: forall m. (HasVersion, MonadIO m, E.GQLApiAuthorization m)
+onStart :: forall m. (HasVersion, MonadIO m, E.GQLApiAuthorization m, QueryLogger m)
         => WSServerEnv -> WSConn -> StartMsg -> m ()
 onStart serverEnv wsConn (StartMsg opId q) = catchAndIgnore $ do
   timerTot <- startTimer
@@ -336,7 +336,7 @@ onStart serverEnv wsConn (StartMsg opId q) = catchAndIgnore $ do
           runLazyTx Q.ReadWrite pgExecCtx $ withUserInfo userInfo opTx
       E.ExOpSubs lqOp -> do
         -- log the graphql query
-        L.unLogger logger $ QueryLog query Nothing reqId
+        logQuery logger query Nothing reqId
         lqId <- liftIO $ LQ.addLiveQuery lqMap lqOp liveQOnChange
         liftIO $ STM.atomically $
           STMMap.insert (lqId, _grOperationName q) opId opMap
@@ -358,7 +358,7 @@ onStart serverEnv wsConn (StartMsg opId q) = catchAndIgnore $ do
         execQueryOrMut telemQueryType genSql action = do
           logOpEv ODStarted (Just reqId)
           -- log the generated SQL and the graphql query
-          L.unLogger logger $ QueryLog query genSql reqId
+          logQuery logger query genSql reqId
           (withElapsedTime $ liftIO $ runExceptT action) >>= \case
             (_,      Left err) -> postExecErr reqId err
             (telemTimeIO_DT, Right encJson) -> do
@@ -479,7 +479,7 @@ onStart serverEnv wsConn (StartMsg opId q) = catchAndIgnore $ do
     catchAndIgnore m = void $ runExceptT m
 
 onMessage
-  :: (HasVersion, MonadIO m, UserAuthentication m, E.GQLApiAuthorization m)
+  :: (HasVersion, MonadIO m, UserAuthentication m, E.GQLApiAuthorization m, QueryLogger m)
   => AuthMode
   -> WSServerEnv
   -> WSConn -> BL.ByteString -> m ()
@@ -630,6 +630,7 @@ createWSServerApp
      , LA.Forall (LA.Pure m)
      , UserAuthentication m
      , E.GQLApiAuthorization m
+     , QueryLogger m
      )
   => AuthMode
   -> WSServerEnv

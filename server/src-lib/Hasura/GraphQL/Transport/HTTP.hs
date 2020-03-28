@@ -13,17 +13,16 @@ module Hasura.GraphQL.Transport.HTTP
 import qualified Network.HTTP.Types                     as HTTP
 
 import           Hasura.EncJSON
-import           Hasura.GraphQL.Logging
 import           Hasura.GraphQL.Transport.HTTP.Protocol
 import           Hasura.Prelude
 import           Hasura.RQL.Types
 import           Hasura.Server.Context
+import           Hasura.Server.Logging                  (QueryLogger (..))
 import           Hasura.Server.Utils                    (RequestId)
 import           Hasura.Server.Version                  (HasVersion)
 
 import qualified Database.PG.Query                      as Q
 import qualified Hasura.GraphQL.Execute                 as E
-import qualified Hasura.Logging                         as L
 import qualified Hasura.Server.Telemetry.Counters       as Telem
 import qualified Language.GraphQL.Draft.Syntax          as G
 
@@ -32,6 +31,7 @@ runGQ
      , MonadIO m
      , MonadError QErr m
      , MonadReader E.ExecutionCtx m
+     , QueryLogger m
      )
   => RequestId
   -> UserInfo
@@ -74,6 +74,7 @@ runGQBatched
      , MonadIO m
      , MonadError QErr m
      , MonadReader E.ExecutionCtx m
+     , QueryLogger m
      )
   => RequestId
   -> UserInfo
@@ -100,6 +101,7 @@ runHasuraGQ
   :: ( MonadIO m
      , MonadError QErr m
      , MonadReader E.ExecutionCtx m
+     , QueryLogger m
      )
   => RequestId
   -> GQLReqUnparsed
@@ -111,21 +113,25 @@ runHasuraGQ
   -- spent in the PG query; for telemetry.
 runHasuraGQ reqId query userInfo txAccess resolvedOp = do
   E.ExecutionCtx logger _ isPgCtx _ _ _ _ _ <- ask
-  (telemTimeIO, respE) <- withElapsedTime $ liftIO $ runExceptT $ case resolvedOp of
-    -- TODO How can we run this query with read-write access
-    E.ExOpQuery tx genSql  -> do
-      -- log the generated SQL and the graphql query
-      L.unLogger logger $ QueryLog query genSql reqId
-      runLazyTx' isPgCtx tx
-    E.ExOpMutation tx -> do
-      -- log the graphql query
-      L.unLogger logger $ QueryLog query Nothing reqId
-      runLazyTx Q.ReadWrite isPgCtx $ withUserInfo userInfo tx
-    E.ExOpSubs _ ->
-      throw400 UnexpectedPayload
-      "subscriptions are not supported over HTTP, use websockets instead"
+  logQuery' logger
+  (telemTimeIO, respE) <- withElapsedTime $ liftIO $ runExceptT $
+    executeTx isPgCtx
   resp <- liftEither respE
   let !json = encodeGQResp $ GQSuccess $ encJToLBS resp
       telemQueryType = case resolvedOp of E.ExOpMutation{} -> Telem.Mutation ; _ -> Telem.Query
   return (telemTimeIO, telemQueryType, json)
-  where runLazyTx' = bool runLazyROTx' runLazyRWTx' $ txAccess == Q.ReadWrite
+  where
+    runLazyTx' = bool runLazyROTx' runLazyRWTx' $ txAccess == Q.ReadWrite
+    executeTx isPgCtx = case resolvedOp of
+      E.ExOpQuery tx _  -> runLazyTx' isPgCtx tx
+      E.ExOpMutation tx -> runLazyTx Q.ReadWrite isPgCtx $
+        withUserInfo userInfo tx
+      E.ExOpSubs _ ->
+        throw400 UnexpectedPayload
+        "subscriptions are not supported over HTTP, use websockets instead"
+    logQuery' logger = case resolvedOp of
+      -- log the generated SQL and the graphql query
+      E.ExOpQuery _ genSql -> logQuery logger query genSql reqId
+      -- log the graphql query
+      E.ExOpMutation _ -> logQuery logger query Nothing reqId
+      E.ExOpSubs _ -> return ()

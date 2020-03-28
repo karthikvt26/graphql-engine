@@ -33,6 +33,7 @@ import           Hasura.Db
 import           Hasura.EncJSON
 import           Hasura.Events.Lib
 import           Hasura.GraphQL.Execute                 (GQLApiAuthorization (..))
+import           Hasura.GraphQL.Logging                 (QueryLog (..))
 import           Hasura.GraphQL.Transport.HTTP.Protocol (toParsed)
 import           Hasura.Logging
 import           Hasura.Prelude
@@ -198,6 +199,7 @@ runHGEServer
      , MetadataApiAuthorization m
      , GQLApiAuthorization m
      , HttpLog m
+     , QueryLogger m
      , ConsoleRenderer m
      , ConfigApiHandler m
      , LA.Forall (LA.Pure m)
@@ -338,6 +340,9 @@ execQuery queryBs = do
   buildSchemaCacheStrict
   encJToLBS <$> runQueryM query
 
+instance QueryLogger AppM where
+  logQuery logger query genSqlM reqId =
+    unLogger logger $ QueryLog query genSqlM reqId
 
 instance HttpLog AppM where
   logHttpError logger userInfoM reqId httpReq req qErr headers =

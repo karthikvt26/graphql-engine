@@ -49,6 +49,7 @@ import           Hasura.Prelude
 import           Hasura.RQL.DDL.Headers
 import           Hasura.RQL.Types
 import           Hasura.Server.Context
+import           Hasura.Server.Logging                  (QueryLogger (..))
 import           Hasura.Server.Utils                    (IpAddress, RequestId, filterRequestHeaders)
 import           Hasura.Server.Version                  (HasVersion)
 
@@ -375,6 +376,7 @@ execRemoteGQ
      , MonadIO m
      , MonadError QErr m
      , MonadReader ExecutionCtx m
+     , QueryLogger m
      )
   => RequestId
   -> UserInfo
@@ -412,7 +414,7 @@ execRemoteGQ reqId userInfo reqHdrs q rsi opDef = do
            , HTTP.responseTimeout = HTTP.responseTimeoutMicro (timeout * 1000000)
            }
 
-  L.unLogger logger $ QueryLog q Nothing reqId
+  logQuery logger q Nothing reqId
   (time, res)  <- withElapsedTime $ liftIO $ try $ HTTP.httpLbs req manager
   resp <- either httpThrow return res
   let cookieHdrs = getCookieHdr (resp ^.. Wreq.responseHeader "Set-Cookie")
