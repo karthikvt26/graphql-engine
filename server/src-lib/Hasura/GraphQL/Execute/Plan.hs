@@ -15,6 +15,7 @@ import           Hasura.Prelude
 import qualified Data.Aeson                             as J
 import qualified Data.Aeson.Casing                      as J
 import qualified Data.Aeson.TH                          as J
+import qualified Database.PG.Query                      as Q
 
 import qualified Hasura.Cache                           as Cache
 import qualified Hasura.GraphQL.Execute.LiveQuery       as LQ
@@ -45,13 +46,13 @@ newtype PlanCache
   = PlanCache {_unPlanCache :: Cache.Cache PlanId ReusablePlan}
 
 data ReusablePlan
-  = RPQuery !EQ.ReusableQueryPlan
-  | RPSubs !LQ.ReusableLiveQueryPlan
+  = RPQuery !EQ.ReusableQueryPlan !Q.TxAccess
+  | RPSubs !LQ.ReusableLiveQueryPlan !Q.TxAccess
 
 instance J.ToJSON ReusablePlan where
   toJSON = \case
-    RPQuery queryPlan -> J.toJSON queryPlan
-    RPSubs subsPlan -> J.toJSON subsPlan
+    RPQuery queryPlan _ -> J.toJSON queryPlan
+    RPSubs subsPlan _ -> J.toJSON subsPlan
 
 newtype PlanCacheOptions
   = PlanCacheOptions { unPlanCacheSize :: Maybe Cache.CacheSize }

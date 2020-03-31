@@ -105,7 +105,7 @@ resolveMultiplexedValue = \case
   where
     fromResVars ty jPath =
       flip S.SETyAnn (S.mkTypeAnn ty) $ S.SEOpApp (S.SQLOp "#>>")
-      [ S.SEQIden $ S.QIden (S.QualIden $ Iden "_subs") (Iden "result_vars")
+      [ S.SEQIden $ S.QIden (S.QualIden (Iden "_subs") Nothing) (Iden "result_vars")
       , S.SEArray $ map S.SELit jPath
       ]
 
@@ -196,10 +196,10 @@ type ValidatedSyntheticVariables = ValidatedVariables []
 -- Generates SQL of the format "select 'v1'::t1, 'v2'::t2 ..."
 validateVariables
   :: (Traversable f, MonadError QErr m, MonadIO m)
-  => PGExecCtx
+  => IsPGExecCtx
   -> f (WithScalarType PGScalarValue)
   -> m (ValidatedVariables f)
-validateVariables pgExecCtx variableValues = do
+validateVariables isPgCtx variableValues = do
   let valSel = mkValidationSel $ toList variableValues
   Q.Discard () <- runTx' $ liftTx $
     Q.rawQE dataExnErrHandler (Q.fromBuilder $ toSQL valSel) [] False
@@ -209,7 +209,8 @@ validateVariables pgExecCtx variableValues = do
     mkValidationSel vars =
       S.mkSelect { S.selExtr = mkExtrs vars }
     runTx' tx = do
-      res <- liftIO $ runExceptT (runLazyTx' pgExecCtx tx)
+      -- Running as a read-only query since the query is a select query
+      res <- liftIO $ runExceptT (runLazyROTx' isPgCtx tx)
       liftEither res
 
     -- Explicitly look for the class of errors raised when the format of a value provided
@@ -251,12 +252,12 @@ buildLiveQueryPlan
      , Has UserInfo r
      , MonadIO m
      )
-  => PGExecCtx
+  => IsPGExecCtx
   -> G.Alias
   -> GR.QueryRootFldUnresolved
   -> Maybe GV.ReusableVariableTypes
   -> m (LiveQueryPlan, Maybe ReusableLiveQueryPlan)
-buildLiveQueryPlan pgExecCtx fieldAlias astUnresolved varTypes = do
+buildLiveQueryPlan isPgCtx fieldAlias astUnresolved varTypes = do
   userInfo <- asks getter
 
   (astResolved, (queryVariableValues, syntheticVariableValues)) <- flip runStateT mempty $
@@ -268,8 +269,8 @@ buildLiveQueryPlan pgExecCtx fieldAlias astUnresolved varTypes = do
   -- are correct according to Postgres. Without this check
   -- an invalid value for a variable for one instance of the
   -- subscription will take down the entire multiplexed query
-  validatedQueryVars <- validateVariables pgExecCtx queryVariableValues
-  validatedSyntheticVars <- validateVariables pgExecCtx (toList syntheticVariableValues)
+  validatedQueryVars <- validateVariables isPgCtx queryVariableValues
+  validatedSyntheticVars <- validateVariables isPgCtx (toList syntheticVariableValues)
   let cohortVariables = CohortVariables (userVars userInfo) validatedQueryVars validatedSyntheticVars
       plan = LiveQueryPlan parameterizedPlan cohortVariables
       reusablePlan = ReusableLiveQueryPlan parameterizedPlan validatedSyntheticVars <$> varTypes
@@ -277,15 +278,15 @@ buildLiveQueryPlan pgExecCtx fieldAlias astUnresolved varTypes = do
 
 reuseLiveQueryPlan
   :: (MonadError QErr m, MonadIO m)
-  => PGExecCtx
+  => IsPGExecCtx
   -> UserVars
   -> Maybe GH.VariableValues
   -> ReusableLiveQueryPlan
   -> m LiveQueryPlan
-reuseLiveQueryPlan pgExecCtx sessionVars queryVars reusablePlan = do
+reuseLiveQueryPlan isPgCtx sessionVars queryVars reusablePlan = do
   let ReusableLiveQueryPlan parameterizedPlan syntheticVars queryVarTypes = reusablePlan
   annVarVals <- GV.validateVariablesForReuse queryVarTypes queryVars
-  validatedVars <- validateVariables pgExecCtx annVarVals
+  validatedVars <- validateVariables isPgCtx annVarVals
   pure $ LiveQueryPlan parameterizedPlan (CohortVariables sessionVars validatedVars syntheticVars)
 
 data LiveQueryPlanExplanation

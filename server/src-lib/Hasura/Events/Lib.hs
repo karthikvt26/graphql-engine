@@ -7,7 +7,7 @@ module Hasura.Events.Lib
   , Event(..)
   ) where
 
-import           Control.Concurrent            (threadDelay)
+import           Control.Concurrent.Extended   (sleep)
 import           Control.Concurrent.Async      (async, waitAny)
 import           Control.Concurrent.STM.TVar
 import           Control.Exception             (try)
@@ -17,13 +17,13 @@ import           Data.Aeson.Casing
 import           Data.Aeson.TH
 import           Data.Has
 import           Data.Int                      (Int64)
-import           Data.IORef                    (IORef, readIORef)
 import           Data.Time.Clock
 import           Hasura.Events.HTTP
 import           Hasura.HTTP
 import           Hasura.Prelude
 import           Hasura.RQL.DDL.Headers
 import           Hasura.RQL.Types
+import           Hasura.Server.Version         (HasVersion)
 import           Hasura.SQL.Types
 
 import qualified Control.Concurrent.STM.TQueue as TQ
@@ -47,9 +47,6 @@ invocationVersion :: Version
 invocationVersion = "2"
 
 type LogEnvHeaders = Bool
-
-newtype CacheRef
-  = CacheRef { unCacheRef :: IORef (SchemaCache, SchemaCacheVer) }
 
 newtype EventInternalErr
   = EventInternalErr QErr
@@ -152,66 +149,65 @@ data EventEngineCtx
   { _eeCtxEventQueue            :: TQ.TQueue Event
   , _eeCtxEventThreads          :: TVar Int
   , _eeCtxMaxEventThreads       :: Int
-  , _eeCtxFetchIntervalMilliSec :: Int
+  , _eeCtxFetchInterval         :: DiffTime
   }
 
 defaultMaxEventThreads :: Int
 defaultMaxEventThreads = 100
 
-defaultFetchIntervalMilliSec :: Int
+defaultFetchIntervalMilliSec :: Milliseconds
 defaultFetchIntervalMilliSec = 1000
 
 retryAfterHeader :: CI.CI T.Text
 retryAfterHeader = "Retry-After"
 
-initEventEngineCtx :: Int -> Int -> STM EventEngineCtx
+initEventEngineCtx :: Int -> DiffTime -> STM EventEngineCtx
 initEventEngineCtx maxT fetchI = do
   q <- TQ.newTQueue
   c <- newTVar 0
   return $ EventEngineCtx q c maxT fetchI
 
 processEventQueue
-  :: L.Logger L.Hasura -> LogEnvHeaders -> HTTP.Manager-> Q.PGPool
-  -> IORef (SchemaCache, SchemaCacheVer) -> EventEngineCtx
-  -> IO ()
-processEventQueue logger logenv httpMgr pool cacheRef eectx = do
+  :: (HasVersion) => L.Logger L.Hasura -> LogEnvHeaders -> HTTP.Manager-> IsPGExecCtx
+  -> IO SchemaCache -> EventEngineCtx -> IO ()
+processEventQueue logger logenv httpMgr isPGCtx getSchemaCache eectx = do
   threads <- mapM async [fetchThread, consumeThread]
   void $ waitAny threads
   where
-    fetchThread = pushEvents logger pool eectx
-    consumeThread = consumeEvents logger logenv httpMgr pool (CacheRef cacheRef) eectx
+    fetchThread = pushEvents logger isPGCtx eectx
+    consumeThread = consumeEvents logger logenv httpMgr isPGCtx getSchemaCache eectx
 
 pushEvents
-  :: L.Logger L.Hasura -> Q.PGPool -> EventEngineCtx -> IO ()
-pushEvents logger pool eectx  = forever $ do
+  :: L.Logger L.Hasura -> IsPGExecCtx -> EventEngineCtx -> IO ()
+pushEvents logger isPgCtx eectx  = forever $ do
   let EventEngineCtx q _ _ fetchI = eectx
-  eventsOrError <- runExceptT $ Q.runTx pool (Q.RepeatableRead, Just Q.ReadWrite) fetchEvents
+  eventsOrError <- runExceptT $ runLazyTx Q.ReadWrite isPgCtx' $ liftTx fetchEvents
   case eventsOrError of
     Left err     -> L.unLogger logger $ EventInternalErr err
     Right events -> atomically $ mapM_ (TQ.writeTQueue q) events
-  threadDelay (fetchI * 1000)
+  sleep fetchI
+  where isPgCtx' = withTxIsolation Q.RepeatableRead isPgCtx
 
 consumeEvents
-  :: L.Logger L.Hasura -> LogEnvHeaders -> HTTP.Manager -> Q.PGPool -> CacheRef -> EventEngineCtx
-  -> IO ()
-consumeEvents logger logenv httpMgr pool cacheRef eectx  = forever $ do
+  :: (HasVersion) => L.Logger L.Hasura -> LogEnvHeaders -> HTTP.Manager -> IsPGExecCtx -> IO SchemaCache
+  -> EventEngineCtx -> IO ()
+consumeEvents logger logenv httpMgr isPgCtx getSchemaCache eectx  = forever $ do
   event <- atomically $ do
     let EventEngineCtx q _ _ _ = eectx
     TQ.readTQueue q
-  async $ runReaderT  (processEvent logenv pool event) (logger, httpMgr, cacheRef, eectx)
+  async $ runReaderT (processEvent logenv isPgCtx getSchemaCache event) (logger, httpMgr, eectx)
 
 processEvent
-  :: ( MonadReader r m
+  :: ( HasVersion
+     , MonadReader r m
      , Has HTTP.Manager r
      , Has (L.Logger L.Hasura) r
-     , Has CacheRef r
      , Has EventEngineCtx r
      , MonadIO m
      )
-  => LogEnvHeaders -> Q.PGPool -> Event -> m ()
-processEvent logenv pool e = do
-  cacheRef <- asks getter
-  cache <- fmap fst $ liftIO $ readIORef $ unCacheRef cacheRef
+  => LogEnvHeaders -> IsPGExecCtx -> IO SchemaCache -> Event -> m ()
+processEvent logenv isPgCtx getSchemaCache e = do
+  cache <- liftIO getSchemaCache
   let meti = getEventTriggerInfoFromEvent cache e
   case meti of
     Nothing -> do
@@ -228,8 +224,8 @@ processEvent logenv pool e = do
       res <- runExceptT $ tryWebhook headers responseTimeout ep webhook
       let decodedHeaders = map (decodeHeader logenv headerInfos) headers
       finally <- either
-        (processError pool e retryConf decodedHeaders ep)
-        (processSuccess pool e decodedHeaders ep) res
+        (processError isPgCtx e retryConf decodedHeaders ep)
+        (processSuccess isPgCtx e decodedHeaders ep) res
       either logQErr return finally
 
 createEventPayload :: RetryConf -> Event ->  EventPayload
@@ -247,25 +243,27 @@ createEventPayload retryConf e = EventPayload
 
 processSuccess
   :: ( MonadIO m )
-  => Q.PGPool -> Event -> [HeaderConf] -> EventPayload -> HTTPResp
+  => IsPGExecCtx -> Event -> [HeaderConf] -> EventPayload -> HTTPResp
   -> m (Either QErr ())
-processSuccess pool e decodedHeaders ep resp = do
+processSuccess isPgCtx e decodedHeaders ep resp = do
   let respBody = hrsBody resp
       respHeaders = hrsHeaders resp
       respStatus = hrsStatus resp
       invocation = mkInvo ep respStatus decodedHeaders respBody respHeaders
-  liftIO $ runExceptT $ Q.runTx pool (Q.RepeatableRead, Just Q.ReadWrite) $ do
+  liftIO $ runExceptT $ runLazyTx Q.ReadWrite isPgCtx' $ liftTx do
     insertInvocation invocation
     setSuccess e
+  where
+    isPgCtx' = withTxIsolation Q.RepeatableRead isPgCtx
 
 processError
   :: ( MonadIO m
      , MonadReader r m
      , Has (L.Logger L.Hasura) r
      )
-  => Q.PGPool -> Event -> RetryConf -> [HeaderConf] -> EventPayload -> HTTPErr
+  => IsPGExecCtx -> Event -> RetryConf -> [HeaderConf] -> EventPayload -> HTTPErr
   -> m (Either QErr ())
-processError pool e retryConf decodedHeaders ep err = do
+processError isPgCtx e retryConf decodedHeaders ep err = do
   logHTTPErr err
   let invocation = case err of
         HClient excp -> do
@@ -282,15 +280,16 @@ processError pool e retryConf decodedHeaders ep err = do
         HOther detail -> do
           let errMsg = (TBS.fromLBS $ encode detail)
           mkInvo ep 500 decodedHeaders errMsg []
-  liftIO $ runExceptT $ Q.runTx pool (Q.RepeatableRead, Just Q.ReadWrite) $ do
+  liftIO $ runExceptT $ runLazyTx Q.ReadWrite isPgCtx' $ liftTx do
     insertInvocation invocation
     retryOrSetError e retryConf err
+  where isPgCtx' = withTxIsolation Q.RepeatableRead isPgCtx
 
 retryOrSetError :: Event -> RetryConf -> HTTPErr -> Q.TxE QErr ()
 retryOrSetError e retryConf err = do
   let mretryHeader = getRetryAfterHeaderFromError err
       tries = eTries e
-      mretryHeaderSeconds = parseRetryHeader mretryHeader
+      mretryHeaderSeconds = mretryHeader >>= parseRetryHeader
       triesExhausted = tries >= rcNumRetries retryConf
       noRetryHeader = isNothing mretryHeaderSeconds
   -- current_try = tries + 1 , allowed_total_tries = rcNumRetries retryConf + 1
@@ -313,12 +312,8 @@ retryOrSetError e retryConf err = do
         in case mHeader of
              Just (HeaderConf _ (HVValue value)) -> Just value
              _                                   -> Nothing
-    parseRetryHeader Nothing = Nothing
-    parseRetryHeader (Just hValue)
-      = let seconds = readMaybe $ T.unpack hValue
-        in case seconds of
-             Nothing  -> Nothing
-             Just sec -> if sec > 0 then Just sec else Nothing
+
+    parseRetryHeader = mfilter (> 0) . readMaybe . T.unpack
 
 encodeHeader :: EventHeaderInfo -> HTTP.Header
 encodeHeader (EventHeaderInfo hconf cache) =

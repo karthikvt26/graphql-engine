@@ -23,8 +23,7 @@ import qualified Hasura.Logging                   as L
 
 import           Hasura.Db
 import           Hasura.Prelude
-import           Hasura.RQL.Types                 (QErr, RoleName (..),
-                                                   SchemaCache (..),
+import           Hasura.RQL.Types                 (QErr, RoleName (..), SchemaCache (..),
                                                    mkNonEmptyText)
 import           Hasura.Server.Auth
 import           Hasura.Server.Cors
@@ -235,10 +234,10 @@ parseStrAsBool t
 readIsoLevel :: String -> Either String Q.TxIsolation
 readIsoLevel isoS =
   case isoS of
-    "read-committed" -> return Q.ReadCommitted
+    "read-committed"  -> return Q.ReadCommitted
     "repeatable-read" -> return Q.RepeatableRead
-    "serializable" -> return Q.Serializable
-    _ -> Left "Only expecting read-committed / repeatable-read / serializable"
+    "serializable"    -> return Q.Serializable
+    _                 -> Left "Only expecting read-committed / repeatable-read / serializable"
 
 type WithEnv a = ReaderT Env (ExceptT String Identity) a
 
@@ -363,7 +362,11 @@ mkServeOptions rso = do
       withEnv mType "HASURA_GRAPHQL_AUTH_HOOK_TYPE"
 
     mkCorsConfig mCfg = do
-      corsCfg <- fromMaybe CCAllowAll <$> withEnv mCfg (fst corsDomainEnv)
+      corsDisabled <- withEnvBool False (fst corsDisableEnv)
+      corsCfg <- if corsDisabled
+        then return (CCDisabled True)
+        else fromMaybe CCAllowAll <$> withEnv mCfg (fst corsDomainEnv)
+
       readCookVal <- withEnvBool (rsoWsReadCookie rso) (fst wsReadCookieEnv)
       wsReadCookie <- case (isCorsDisabled corsCfg, readCookVal) of
         (True, _)      -> return readCookVal
@@ -464,7 +467,7 @@ serveCmdFooter =
       [ databaseUrlEnv, retriesNumEnv, servePortEnv, serveHostEnv
       , pgStripesEnv, pgConnsEnv, pgTimeoutEnv, pgUsePrepareEnv, txIsoEnv
       , adminSecretEnv , accessKeyEnv, authHookEnv, authHookModeEnv
-      , jwtSecretEnv, unAuthRoleEnv, corsDomainEnv, enableConsoleEnv
+      , jwtSecretEnv, unAuthRoleEnv, corsDomainEnv, corsDisableEnv, enableConsoleEnv
       , enableTelemetryEnv, wsReadCookieEnv, stringifyNumEnv, enabledAPIsEnv
       , enableAllowlistEnv, enabledLogsEnv, logLevelEnv
       ]
@@ -564,6 +567,12 @@ unAuthRoleEnv =
   ( "HASURA_GRAPHQL_UNAUTHORIZED_ROLE"
   , "Unauthorized role, used when admin-secret is not sent in admin-secret only mode "
                                  ++ "or \"Authorization\" header is absent in JWT mode"
+  )
+
+corsDisableEnv :: (String, String)
+corsDisableEnv =
+  ( "HASURA_GRAPHQL_DISABLE_CORS"
+  , "Disable CORS. Do not send any CORS headers on any request"
   )
 
 corsDomainEnv :: (String, String)
@@ -851,7 +860,7 @@ parseCorsConfig = mapCC <$> disableCors <*> corsDomain
 
     disableCors =
       switch ( long "disable-cors" <>
-               help "Disable CORS. Do not send any CORS headers on any request"
+               help (snd corsDisableEnv)
              )
 
     mapCC isDisabled domains =

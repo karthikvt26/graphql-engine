@@ -18,7 +18,6 @@ import qualified Data.Aeson.TH                               as J
 import qualified Data.ByteString.Lazy                        as BL
 import qualified Data.CaseInsensitive                        as CI
 import qualified Data.HashMap.Strict                         as Map
-import qualified Data.IORef                                  as IORef
 import qualified Data.Text                                   as T
 import qualified Data.Text.Encoding                          as TE
 import qualified Data.Time.Clock                             as TC
@@ -29,7 +28,7 @@ import qualified Network.HTTP.Types                          as H
 import qualified Network.WebSockets                          as WS
 import qualified StmContainers.Map                           as STMMap
 
-import           Control.Concurrent                          (threadDelay)
+import           Control.Concurrent.Extended                 (sleep)
 import qualified ListT
 
 import           Hasura.EncJSON
@@ -44,16 +43,15 @@ import           Hasura.Server.Auth                          (AuthMode, UserAuth
 import           Hasura.Server.Context
 import           Hasura.Server.Cors
 import           Hasura.Server.Utils                         (IpAddress (..), RequestId,
-                                                              diffTimeToMicro, getRequestId,
-                                                              withElapsedTime)
-
-import           Hasura.GraphQL.Transport.HTTP               (GQLApiAuthorization (..))
+                                                              getRequestId)
+import           Hasura.Server.Version                       (HasVersion)
 
 import qualified Hasura.GraphQL.Execute                      as E
 import qualified Hasura.GraphQL.Execute.LiveQuery            as LQ
 import qualified Hasura.GraphQL.Execute.LiveQuery.Poll       as LQ
 import qualified Hasura.GraphQL.Transport.WebSocket.Server   as WS
 import qualified Hasura.Logging                              as L
+import qualified Hasura.Server.Telemetry.Counters            as Telem
 
 
 type OperationMap
@@ -77,7 +75,7 @@ data WsClientState
   , wscsReqHeaders :: ![H.Header]
   -- ^ headers from the client (in conn params) to forward to the remote schema
   , wscsIpAddress  :: !IpAddress
-  -- ^ IP address required for the 'GQLApiAuthorization' effect
+  -- ^ IP address required for 'GQLApiAuthorization'
   }
 
 data WSConnState
@@ -190,9 +188,10 @@ mkWsErrorLog uv ci ev =
 data WSServerEnv
   = WSServerEnv
   { _wseLogger          :: !(L.Logger L.Hasura)
-  , _wseRunTx           :: !PGExecCtx
+  , _wseRunTx           :: !IsPGExecCtx
   , _wseLiveQMap        :: !LQ.LiveQueriesState
-  , _wseGCtxMap         :: !(IORef.IORef (SchemaCache, SchemaCacheVer))
+  , _wseGCtxMap         :: !(IO (SchemaCache, SchemaCacheVer))
+  -- ^ an action that always returns the latest version of the schema cache
   , _wseHManager        :: !H.Manager
   , _wseCorsPolicy      :: !CorsPolicy
   , _wseSQLCtx          :: !SQLGenCtx
@@ -214,7 +213,7 @@ onConn (L.Logger logger) corsPolicy wsId requestHead ipAddress = do
   where
     keepAliveAction wsConn = liftIO $ forever $ do
       sendMsg wsConn SMConnKeepAlive
-      threadDelay $ 5 * 1000 * 1000
+      sleep $ seconds 5
 
     jwtExpiryHandler wsConn = do
       expTime <- liftIO $ STM.atomically $ do
@@ -224,7 +223,7 @@ onConn (L.Logger logger) corsPolicy wsId requestHead ipAddress = do
           CSInitError _             -> STM.retry
           CSInitialised clientState -> maybe STM.retry return $ wscsJwtExpTime clientState
       currTime <- TC.getCurrentTime
-      threadDelay $ diffTimeToMicro $ TC.diffUTCTime expTime currTime
+      sleep $ fromUnits $ TC.diffUTCTime expTime currTime
 
     accept hdrs errType = do
       logger $ mkWsInfoLog Nothing (WsConnInfo wsId Nothing Nothing) EAccepted
@@ -285,9 +284,10 @@ onConn (L.Logger logger) corsPolicy wsId requestHead ipAddress = do
             <> "HASURA_GRAPHQL_WS_READ_COOKIE to force read cookie when CORS is disabled."
 
 
-onStart :: forall m. (MonadIO m, GQLApiAuthorization m) => WSServerEnv -> WSConn -> StartMsg -> m ()
+onStart :: forall m. (HasVersion, MonadIO m, E.GQLApiAuthorization m)
+        => WSServerEnv -> WSConn -> StartMsg -> m ()
 onStart serverEnv wsConn (StartMsg opId q) = catchAndIgnore $ do
-
+  timerTot <- startTimer
   opM <- liftIO $ STM.atomically $ STMMap.lookup opId opMap
 
   when (isJust opM) $ withComplete $ sendStartErr $
@@ -304,28 +304,36 @@ onStart serverEnv wsConn (StartMsg opId q) = catchAndIgnore $ do
       withComplete $ sendStartErr e
 
   requestId <- getRequestId reqHdrs
-  reqParsedE <- lift $ authorizeGQLApi userInfo (reqHdrs, ipAddress) q
+  reqParsedE <- lift $ E.authorizeGQLApi userInfo (reqHdrs, ipAddress) q
   reqParsed <- either (withComplete . preExecErr requestId) return reqParsedE
-  (sc, scVer) <- liftIO $ IORef.readIORef gCtxMapRef
+  -- (sc, scVer) <- liftIO $ IORef.readIORef gCtxMapRef
+  (sc, scVer) <- liftIO getSchemaCache
   execPlanE <- runExceptT $ E.getResolvedExecPlan pgExecCtx
                planCache userInfo sqlGenCtx enableAL sc scVer (q, reqParsed)
-  execPlan <- either (withComplete . preExecErr requestId) return execPlanE
+  (telemCacheHit, execPlan) <- either (withComplete . preExecErr requestId) return execPlanE
   let execCtx = E.ExecutionCtx logger sqlGenCtx pgExecCtx planCache sc scVer httpMgr enableAL
 
   case execPlan of
-    E.GExPHasura resolvedOp ->
-      runHasuraGQ requestId q userInfo resolvedOp
+    E.GExPHasura (resolvedOp, txAccess) ->
+      runHasuraGQ timerTot telemCacheHit requestId q userInfo txAccess resolvedOp
     E.GExPRemote rsi opDef  ->
-      runRemoteGQ execCtx requestId userInfo reqHdrs opDef rsi
+      runRemoteGQ timerTot telemCacheHit execCtx requestId userInfo reqHdrs opDef rsi
   where
-    runHasuraGQ :: RequestId -> GQLReqUnparsed -> UserInfo -> E.ExecOp
-                -> ExceptT () m ()
-    runHasuraGQ reqId query userInfo = \case
+-- <<<<<<< HEAD
+--     runHasuraGQ :: RequestId -> GQLReqUnparsed -> UserInfo -> E.ExecOp
+--                 -> ExceptT () m ()
+--     runHasuraGQ reqId query userInfo = \case
+-- =======
+    telemTransport = Telem.HTTP
+    runHasuraGQ :: ExceptT () m DiffTime
+                -> Telem.CacheHit -> RequestId -> GQLReqUnparsed -> UserInfo -> Q.TxAccess
+                -> E.ExecOp -> ExceptT () m ()
+    runHasuraGQ timerTot telemCacheHit reqId query userInfo txAccess = \case
       E.ExOpQuery opTx genSql ->
-        execQueryOrMut reqId query genSql $ runLazyTx' pgExecCtx opTx
+        execQueryOrMut Telem.Query genSql $ runLazyTx' pgExecCtx opTx
       E.ExOpMutation opTx ->
-        execQueryOrMut reqId query Nothing $
-          runLazyTx pgExecCtx Q.ReadWrite $ withUserInfo userInfo opTx
+        execQueryOrMut Telem.Mutation Nothing $
+          runLazyTx Q.ReadWrite pgExecCtx $ withUserInfo userInfo opTx
       E.ExOpSubs lqOp -> do
         -- log the graphql query
         L.unLogger logger $ QueryLog query Nothing reqId
@@ -335,30 +343,67 @@ onStart serverEnv wsConn (StartMsg opId q) = catchAndIgnore $ do
         liftIO $ STM.atomically $
           STMMap.insert (lqId, _grOperationName q) opId opMap
         logOpEv ODStarted (Just reqId)
+-- <<<<<<< HEAD
+    -- execQueryOrMut reqId query genSql action = do
+    --   logOpEv ODStarted (Just reqId)
+    --   -- log the generated SQL and the graphql query
+    --   L.unLogger logger $ QueryLog query genSql reqId
+    --   (dt, resp) <- withElapsedTime $ liftIO $ runExceptT action
+    --   let lqMeta = LQ.LiveQueryMetadata dt
+    --   either (postExecErr reqId) (`sendSuccResp` lqMeta) resp
+    --   sendCompleted (Just reqId)
 
-    execQueryOrMut reqId query genSql action = do
-      logOpEv ODStarted (Just reqId)
-      -- log the generated SQL and the graphql query
-      L.unLogger logger $ QueryLog query genSql reqId
-      (dt, resp) <- withElapsedTime $ liftIO $ runExceptT action
-      let lqMeta = LQ.LiveQueryMetadata dt
-      either (postExecErr reqId) (`sendSuccResp` lqMeta) resp
-      sendCompleted (Just reqId)
+      where
+        runLazyTx' = bool runLazyROTx' runLazyRWTx' $ txAccess == Q.ReadWrite
+        telemLocality = Telem.Local
+        execQueryOrMut telemQueryType genSql action = do
+          logOpEv ODStarted (Just reqId)
+          -- log the generated SQL and the graphql query
+          L.unLogger logger $ QueryLog query genSql reqId
+          (withElapsedTime $ liftIO $ runExceptT action) >>= \case
+            (_,      Left err) -> postExecErr reqId err
+            (telemTimeIO_DT, Right encJson) -> do
+              -- Telemetry. NOTE: don't time network IO:
+              telemTimeTot <- Seconds <$> timerTot
+              sendSuccResp encJson $ LQ.LiveQueryMetadata telemTimeIO_DT
+              let telemTimeIO = fromUnits telemTimeIO_DT
+              Telem.recordTimingMetric Telem.RequestDimensions{..} Telem.RequestTimings{..}
 
-    runRemoteGQ
-      :: E.ExecutionCtx -> RequestId -> UserInfo -> [H.Header]
-      -> G.TypedOperationDefinition -> RemoteSchemaInfo
-      -> ExceptT () m ()
-    runRemoteGQ execCtx reqId userInfo reqHdrs opDef rsi = do
-      when (G._todType opDef == G.OperationTypeSubscription) $
-        withComplete $ preExecErr reqId $
-        err400 NotSupported "subscription to remote server is not supported"
+          sendCompleted (Just reqId)
+
+    -- runRemoteGQ
+    --   :: E.ExecutionCtx -> RequestId -> UserInfo -> [H.Header]
+    --   -> G.TypedOperationDefinition -> RemoteSchemaInfo
+    --   -> ExceptT () m ()
+    -- runRemoteGQ execCtx reqId userInfo reqHdrs opDef rsi = do
+    --   when (G._todType opDef == G.OperationTypeSubscription) $
+    --     withComplete $ preExecErr reqId $
+    --     err400 NotSupported "subscription to remote server is not supported"
+
+    runRemoteGQ :: ExceptT () m DiffTime
+                -> Telem.CacheHit -> E.ExecutionCtx -> RequestId -> UserInfo -> [H.Header]
+                -> G.TypedOperationDefinition -> RemoteSchemaInfo
+                -> ExceptT () m ()
+    runRemoteGQ timerTot telemCacheHit execCtx reqId userInfo reqHdrs opDef rsi = do
+      let telemLocality = Telem.Remote
+      telemQueryType <- case G._todType opDef of
+        G.OperationTypeSubscription ->
+          withComplete $ preExecErr reqId $
+          err400 NotSupported "subscription to remote server is not supported"
+        G.OperationTypeMutation -> return Telem.Mutation
+        G.OperationTypeQuery    -> return Telem.Query
 
       -- if it's not a subscription, use HTTP to execute the query on the remote
-      (dt, resp) <- withElapsedTime $ runExceptT $ flip runReaderT execCtx $
-              E.execRemoteGQ reqId userInfo reqHdrs q rsi opDef
-      let ocMeta = LQ.LiveQueryMetadata dt
-      either (postExecErr reqId) (\val -> sendRemoteResp reqId (_hrBody val) ocMeta) resp
+      (runExceptT $ flip runReaderT execCtx $
+        E.execRemoteGQ reqId userInfo reqHdrs q rsi opDef) >>= \case
+          Left  err           -> postExecErr reqId err
+          Right (telemTimeIO_DT, !val) -> do
+            -- Telemetry. NOTE: don't time network IO:
+            telemTimeTot <- Seconds <$> timerTot
+            sendRemoteResp reqId (_hrBody val) $ LQ.LiveQueryMetadata telemTimeIO_DT
+            let telemTimeIO = fromUnits telemTimeIO_DT
+            Telem.recordTimingMetric Telem.RequestDimensions{..} Telem.RequestTimings{..}
+
       sendCompleted (Just reqId)
 
     sendRemoteResp reqId resp meta =
@@ -369,7 +414,7 @@ onStart serverEnv wsConn (StartMsg opId q) = catchAndIgnore $ do
     invalidGqlErr err = err500 Unexpected $
       "Failed parsing GraphQL response from remote: " <> err
 
-    WSServerEnv logger pgExecCtx lqMap gCtxMapRef httpMgr _ sqlGenCtx planCache
+    WSServerEnv logger pgExecCtx lqMap getSchemaCache httpMgr _ sqlGenCtx planCache
       _ enableAL = serverEnv
 
     WSConnData userInfoR opMap errRespTy = WS.getData wsConn
@@ -435,7 +480,7 @@ onStart serverEnv wsConn (StartMsg opId q) = catchAndIgnore $ do
     catchAndIgnore m = void $ runExceptT m
 
 onMessage
-  :: (MonadIO m, UserAuthentication m, GQLApiAuthorization m)
+  :: (HasVersion, MonadIO m, UserAuthentication m, E.GQLApiAuthorization m)
   => AuthMode
   -> WSServerEnv
   -> WSConn -> BL.ByteString -> m ()
@@ -500,7 +545,7 @@ logWSEvent (L.Logger logger) wsConn wsEv = do
         ODStopped    -> False
 
 onConnInit
-  :: (MonadIO m, UserAuthentication m)
+  :: (HasVersion, MonadIO m, UserAuthentication m)
   => L.Logger L.Hasura -> H.Manager -> WSConn -> AuthMode -> Maybe ConnParams -> m ()
 onConnInit logger manager wsConn authMode connParamsM = do
   connState <- liftIO (STM.readTVarIO (_wscUser $ WS.getData wsConn))
@@ -563,28 +608,29 @@ onClose logger lqMap wsConn = do
 createWSServerEnv
   :: (MonadIO m)
   => L.Logger L.Hasura
-  -> PGExecCtx
+  -> IsPGExecCtx
   -> LQ.LiveQueriesState
-  -> IORef.IORef (SchemaCache, SchemaCacheVer)
+  -> IO (SchemaCache, SchemaCacheVer)
   -> H.Manager
   -> CorsPolicy
   -> SQLGenCtx
   -> Bool
   -> E.PlanCache
   -> m WSServerEnv
-createWSServerEnv logger pgExecCtx lqState cacheRef httpManager
+createWSServerEnv logger isPgCtx lqState getSchemaCache httpManager
   corsPolicy sqlGenCtx enableAL planCache = do
   wsServer <- liftIO $ STM.atomically $ WS.createWSServer logger
   return $
-    WSServerEnv logger pgExecCtx lqState cacheRef httpManager corsPolicy
+    WSServerEnv logger isPgCtx lqState getSchemaCache httpManager corsPolicy
     sqlGenCtx planCache wsServer enableAL
 
 createWSServerApp
-  :: ( MonadIO m
+  :: ( HasVersion
+     , MonadIO m
      , MC.MonadBaseControl IO m
      , LA.Forall (LA.Pure m)
      , UserAuthentication m
-     , GQLApiAuthorization m
+     , E.GQLApiAuthorization m
      )
   => AuthMode
   -> WSServerEnv

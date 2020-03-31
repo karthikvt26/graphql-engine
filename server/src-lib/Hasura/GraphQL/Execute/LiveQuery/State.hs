@@ -19,7 +19,7 @@ import qualified Data.Aeson.Extended                      as J
 import qualified Data.UUID.V4                             as UUID
 import qualified StmContainers.Map                        as STMMap
 
-import           Control.Concurrent.Extended              (threadDelay)
+import           Control.Concurrent.Extended              (sleep)
 
 import qualified Hasura.GraphQL.Execute.LiveQuery.TMap    as TMap
 import qualified Hasura.Logging                           as L
@@ -33,12 +33,12 @@ import           Hasura.GraphQL.Execute.LiveQuery.Poll
 data LiveQueriesState
   = LiveQueriesState
   { _lqsOptions      :: !LiveQueriesOptions
-  , _lqsPGExecTx     :: !PGExecCtx
+  , _lqsPGExecTx     :: !IsPGExecCtx
   , _lqsLiveQueryMap :: !PollerMap
   }
 
-initLiveQueriesState :: LiveQueriesOptions -> PGExecCtx -> IO LiveQueriesState
-initLiveQueriesState options pgCtx = LiveQueriesState options pgCtx <$> STMMap.newIO
+initLiveQueriesState :: LiveQueriesOptions -> IsPGExecCtx -> IO LiveQueriesState
+initLiveQueriesState options isPgCtx = LiveQueriesState options isPgCtx <$> STMMap.newIO
 
 dumpLiveQueriesState :: Bool -> LiveQueriesState -> IO J.Value
 dumpLiveQueriesState extended (LiveQueriesState opts _ lqMap) = do
@@ -100,12 +100,11 @@ addLiveQuery logger wsOpId lqState plan onResultAction = do
     pollerId <- PollerId <$> UUID.nextRandom
     threadRef <- A.async $ forever $ do
       pollQuery logger pollerId metrics lqOpts pgExecCtx query handler
-      threadDelay $ unRefetchInterval refetchInterval
+      sleep $ unRefetchInterval refetchInterval
     STM.atomically $ STM.putTMVar (_pIOState handler) (PollerIOState threadRef metrics)
 
   pure $ LiveQueryId handlerId cohortKey sinkId
   where
-
     LiveQueriesState lqOpts pgExecCtx lqMap = lqState
     LiveQueriesOptions _ refetchInterval = lqOpts
     LiveQueryPlan (ParameterizedLiveQueryPlan role alias query) cohortKey = plan

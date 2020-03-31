@@ -49,7 +49,6 @@ import qualified Data.UUID                                   as UUID
 import qualified Data.UUID.V4                                as UUID
 import qualified Database.PG.Query                           as Q
 import qualified Language.GraphQL.Draft.Syntax               as G
-import qualified ListT
 import qualified StmContainers.Map                           as STMMap
 import qualified System.Metrics.Distribution                 as Metrics
 
@@ -59,6 +58,7 @@ import qualified Hasura.GraphQL.Execute.LiveQuery.TMap       as TMap
 import qualified Hasura.GraphQL.Transport.WebSocket.Protocol as WS
 import qualified Hasura.GraphQL.Transport.WebSocket.Server   as WS
 import qualified Hasura.Logging                              as L
+import qualified ListT
 
 import           Hasura.Db
 import           Hasura.EncJSON
@@ -96,13 +96,13 @@ instance Show Subscriber where
 -- | live query onChange metadata, used for adding more extra analytics data
 data LiveQueryMetadata
   = LiveQueryMetadata
-  { _lqmExecutionTime :: !Clock.NominalDiffTime
+  { _lqmExecutionTime :: !Clock.DiffTime
   }
 
 data LiveQueryResponse
   = LiveQueryResponse
   { _lqrPayload       :: !BL.ByteString
-  , _lqrExecutionTime :: !Clock.NominalDiffTime
+  , _lqrExecutionTime :: !Clock.DiffTime
   }
 
 type LGQResponse = GQResult LiveQueryResponse
@@ -414,11 +414,11 @@ pollQuery
   -> PollerId
   -> RefetchMetrics
   -> LiveQueriesOptions
-  -> PGExecCtx
+  -> IsPGExecCtx
   -> MultiplexedQuery
   -> Poller
   -> IO ()
-pollQuery logger pollerId metrics lqOpts pgExecCtx pgQuery handler = do
+pollQuery logger pollerId metrics lqOpts isPgCtx pgQuery handler = do
   -- start timing, get the process init time
   procInit <- Clock.getCurrentTime
 
@@ -441,12 +441,13 @@ pollQuery logger pollerId metrics lqOpts pgExecCtx pgQuery handler = do
   -- run the multiplexed query, in the partitioned batches
   res <- A.forConcurrently queryVarsBatches $ \queryVarsBatch -> do
     queryInit <- Clock.getCurrentTime
-    mxRes <- runExceptT . runLazyTx' pgExecCtx $ executeMultiplexedQuery pgQuery queryVarsBatch
+
+    -- Running multiplexed query for subscription with read-only access
+    mxRes <- runExceptT . runLazyROTx' isPgCtx $ executeMultiplexedQuery pgQuery queryVars
     queryFinish <- Clock.getCurrentTime
     let dt = Clock.diffUTCTime queryFinish queryInit
         queryTime = realToFrac dt
-        -- TODO: is this 'LiveQueryMetadata' required
-        lqMeta = LiveQueryMetadata dt
+        lqMeta = LiveQueryMetadata $ fromUnits dt
         operations = getCohortOperations cohortSnapshotMap lqMeta mxRes
     Metrics.add (_rmQuery metrics) queryTime
 

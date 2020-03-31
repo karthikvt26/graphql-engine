@@ -41,8 +41,8 @@ selFromToFromItem pfx = \case
 selFromToQual :: SelectFrom -> S.Qual
 selFromToQual = \case
   FromTable tn         -> S.QualTable tn
-  FromIden i           -> S.QualIden i
-  FromFunction qf _    -> S.QualIden $ functionToIden qf
+  FromIden i           -> S.QualIden i Nothing
+  FromFunction qf _    -> S.QualIden (functionToIden qf) Nothing
 
 aggFldToExp :: AggFlds -> S.SQLExp
 aggFldToExp aggFlds = jsonRow
@@ -684,10 +684,9 @@ injectJoinCond :: S.BoolExp       -- ^ Join condition
 injectJoinCond joinCond whereCond =
   S.WhereFrag $ S.simplifyBoolExp $ S.BEBin S.AndOp joinCond whereCond
 
-mkJoinCond :: S.Alias -> [(PGCol, PGCol)] -> S.BoolExp
+mkJoinCond :: S.Alias -> HashMap PGCol PGCol -> S.BoolExp
 mkJoinCond baseTablepfx colMapn =
-  foldl' (S.BEBin S.AndOp) (S.BELit True) $ flip map colMapn $
-  \(lCol, rCol) ->
+  foldl' (S.BEBin S.AndOp) (S.BELit True) $ flip map (HM.toList colMapn) $ \(lCol, rCol) ->
     S.BECompare S.SEQ (S.mkQIdenExp baseTablepfx lCol) (S.mkSIdenExp rCol)
 
 baseNodeToSel :: S.BoolExp -> BaseNode -> S.Select
@@ -706,7 +705,7 @@ baseNodeToSel joinCond baseNode =
              = baseNode
     -- this is the table which is aliased as "pfx.base"
     baseSel = S.mkSelect
-      { S.selExtr  = [S.Extractor S.SEStar Nothing]
+      { S.selExtr  = [S.Extractor (S.SEStar Nothing) Nothing]
       , S.selFrom  = Just $ S.FromExp [fromItem]
       , S.selWhere = Just $ injectJoinCond joinCond whr
       }
@@ -754,7 +753,7 @@ mkAggSelect :: AnnAggSel -> S.Select
 mkAggSelect annAggSel =
   prefixNumToAliases $ arrNodeToSelect bn extr $ S.BELit True
   where
-    aggSel = AnnRelG rootRelName [] annAggSel
+    aggSel = AnnRelG rootRelName HM.empty annAggSel
     rootIden = Iden "root"
     rootPrefix = Prefixes rootIden rootIden
     ArrNode extr _ bn =

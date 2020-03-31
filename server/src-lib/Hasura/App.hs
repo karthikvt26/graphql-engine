@@ -32,25 +32,24 @@ import qualified Text.Mustache.Compile                  as M
 import           Hasura.Db
 import           Hasura.EncJSON
 import           Hasura.Events.Lib
-import           Hasura.GraphQL.Transport.HTTP          (GQLApiAuthorization (..))
+import           Hasura.GraphQL.Execute                 (GQLApiAuthorization (..))
 import           Hasura.GraphQL.Transport.HTTP.Protocol (toParsed)
 import           Hasura.Logging
 import           Hasura.Prelude
-import           Hasura.RQL.DDL.Schema.Cache
 import           Hasura.RQL.Types                       (CacheRWM, Code (..), HasHttpManager,
                                                          HasSQLGenCtx, HasSystemDefined, QErr (..),
                                                          SQLGenCtx (..), SchemaCache (..),
                                                          UserInfoM, adminRole, adminUserInfo,
-                                                         decodeValue, emptySchemaCache, throw400,
-                                                         userRole, withPathK)
+                                                         buildSchemaCacheStrict, decodeValue,
+                                                         throw400, userRole, withPathK)
+import           Hasura.RQL.Types.Run
 import           Hasura.Server.App
 import           Hasura.Server.Auth
 import           Hasura.Server.CheckUpdates             (checkForUpdates)
 import           Hasura.Server.Init
 import           Hasura.Server.Logging
 import           Hasura.Server.Migrate                  (migrateCatalog)
-import           Hasura.Server.Query                    (Run, RunCtx (..), peelRun, requiresAdmin,
-                                                         runQueryM)
+import           Hasura.Server.Query                    (requiresAdmin, runQueryM)
 import           Hasura.Server.SchemaUpdate
 import           Hasura.Server.Telemetry
 import           Hasura.Server.Version
@@ -111,7 +110,7 @@ data InitCtx
   , _icDbUid       :: !Text
   , _icLoggers     :: !Loggers
   , _icConnInfo    :: !Q.ConnInfo
-  , _icPgPool      :: !Q.PGPool
+  , _icPgExecCtx   :: !IsPGExecCtx
   }
 
 -- | Collection of the LoggerCtx, the regular Logger and the PGLogger
@@ -132,7 +131,7 @@ newtype AppM a = AppM { unAppM :: IO a }
 -- this exists as a separate function because the context (logger, http manager, pg pool) can be
 -- used by other functions as well
 initialiseCtx
-  :: (MonadIO m)
+  :: (HasVersion, MonadIO m)
   => HGECommand Hasura
   -> RawConnInfo
   -> m (InitCtx, UTCTime)
@@ -142,7 +141,7 @@ initialiseCtx hgeCmd rci = do
   httpManager <- liftIO $ HTTP.newManager HTTP.tlsManagerSettings
   instanceId <- liftIO generateInstanceId
   connInfo <- liftIO procConnInfo
-  (loggers, pool) <- case hgeCmd of
+  (loggers, pool, isPGCtx) <- case hgeCmd of
     -- for server command generate a proper pool
     HCServe so@ServeOptions{..} -> do
       l@(Loggers _ logger pgLogger) <- mkLoggers soEnabledLogTypes soLogLevel
@@ -151,22 +150,25 @@ initialiseCtx hgeCmd rci = do
       -- log postgres connection info
       unLogger logger $ connInfoToLog connInfo
       pool <- liftIO $ Q.initPGPool connInfo soConnParams pgLogger
+      let isPgCtx = mkIsPgCtx pool soTxIso
       -- safe init catalog
-      initialiseCatalog pool (SQLGenCtx soStringifyNum) httpManager logger
-      return (l, pool)
+      initialiseCatalog isPgCtx (SQLGenCtx soStringifyNum) httpManager logger
+
+      return (l, pool, isPgCtx)
 
     -- for other commands generate a minimal pool
     _ -> do
       l@(Loggers _ _ pgLogger) <- mkLoggers defaultEnabledLogTypes LevelInfo
       pool <- getMinimalPool pgLogger connInfo
-      return (l, pool)
+      return (l, pool, mkIsPgCtx pool Q.Serializable)
 
   -- get the unique db id
   eDbId <- liftIO $ runExceptT $ Q.runTx pool (Q.Serializable, Nothing) getDbId
   dbId <- either printErrJExit return eDbId
 
-  return (InitCtx httpManager instanceId dbId loggers connInfo pool, initTime)
+  return (InitCtx httpManager instanceId dbId loggers connInfo isPGCtx, initTime)
   where
+    mkIsPgCtx pool txIso = IsPGExecCtx (const $ pure $ PGExecCtx pool txIso) [pool]
     procConnInfo =
       either (printErrExit . connInfoErrModifier) return $ mkConnInfo rci
 
@@ -184,11 +186,12 @@ initialiseCtx hgeCmd rci = do
       currentTime <- liftIO getCurrentTime
       -- initialise the catalog
       initRes <- runAsAdmin pool sqlGenCtx httpManager $ migrateCatalog currentTime
-      either printErrJExit logger initRes
+      either printErrJExit (\(result, schemaCache) -> logger result $> schemaCache) initRes
 
 
 runHGEServer
-  :: ( MonadIO m
+  :: ( HasVersion
+     , MonadIO m
      , MonadStateless IO m
      , UserAuthentication m
      , MetadataApiAuthorization m
@@ -212,11 +215,11 @@ runHGEServer ServeOptions{..} InitCtx{..} initTime = do
 
   authMode <- either (printErrExit . T.unpack) return authModeRes
 
-  HasuraApp app cacheRef cacheInitTime shutdownApp <- mkWaiApp soTxIso
+  HasuraApp app cacheRef cacheInitTime shutdownApp <- mkWaiApp
                                                                logger
                                                                sqlGenCtx
                                                                soEnableAllowlist
-                                                               _icPgPool
+                                                               _icPgExecCtx
                                                                _icConnInfo
                                                                _icHttpManager
                                                                authMode
@@ -231,10 +234,10 @@ runHGEServer ServeOptions{..} InitCtx{..} initTime = do
 
   -- log inconsistent schema objects
   inconsObjs <- scInconsistentObjs <$> liftIO (getSCFromRef cacheRef)
-  logInconsObjs logger inconsObjs
+  liftIO $ logInconsObjs logger inconsObjs
 
   -- start a background thread for schema sync
-  startSchemaSync sqlGenCtx _icPgPool logger _icHttpManager
+  startSchemaSync sqlGenCtx _icPgExecCtx logger _icHttpManager
                   cacheRef _icInstanceId cacheInitTime
 
   let warpSettings = Warp.setPort soPort
@@ -244,24 +247,25 @@ runHGEServer ServeOptions{..} InitCtx{..} initTime = do
                      $ Warp.defaultSettings
 
   maxEvThrds <- liftIO $ getFromEnv defaultMaxEventThreads "HASURA_GRAPHQL_EVENTS_HTTP_POOL_SIZE"
-  evFetchMilliSec  <- liftIO $ getFromEnv defaultFetchIntervalMilliSec "HASURA_GRAPHQL_EVENTS_FETCH_INTERVAL"
+  fetchI  <- fmap milliseconds $ liftIO $
+    getFromEnv defaultFetchIntervalMilliSec "HASURA_GRAPHQL_EVENTS_FETCH_INTERVAL"
   logEnvHeaders <- liftIO $ getFromEnv False "LOG_HEADERS_FROM_ENV"
 
   -- prepare event triggers data
-  prepareEvents _icPgPool logger
-  eventEngineCtx <- liftIO $ atomically $ initEventEngineCtx maxEvThrds evFetchMilliSec
-  let scRef = _scrCache cacheRef
+  prepareEvents _icPgExecCtx logger
+  eventEngineCtx <- liftIO $ atomically $ initEventEngineCtx maxEvThrds fetchI
   unLogger logger $ mkGenericStrLog LevelInfo "event_triggers" "starting workers"
   void $ liftIO $ C.forkIO $ processEventQueue logger logEnvHeaders
-    _icHttpManager _icPgPool scRef eventEngineCtx
+    _icHttpManager _icPgExecCtx (getSCFromRef cacheRef) eventEngineCtx
 
   -- start a background thread to check for updates
   void $ liftIO $ C.forkIO $ checkForUpdates loggerCtx _icHttpManager
 
+  -- TODO async/immortal:
   -- start a background thread for telemetry
   when soEnableTelemetry $ do
     unLogger logger $ mkGenericStrLog LevelInfo "telemetry" telemetryNotice
-    void $ liftIO $ C.forkIO $ runTelemetry logger _icHttpManager scRef _icDbUid _icInstanceId
+    void $ liftIO $ C.forkIO $ runTelemetry logger _icHttpManager (getSCFromRef cacheRef) _icDbUid _icInstanceId
 
   finishTime <- liftIO Clock.getCurrentTime
   let apiInitTime = realToFrac $ Clock.diffUTCTime finishTime initTime
@@ -270,9 +274,9 @@ runHGEServer ServeOptions{..} InitCtx{..} initTime = do
   liftIO $ Warp.runSettings warpSettings app
 
   where
-    prepareEvents pool (Logger logger) = do
+    prepareEvents isPGCtx (Logger logger) = do
       liftIO $ logger $ mkGenericStrLog LevelInfo "event_triggers" "preparing data"
-      res <- runTx pool unlockAllEvents
+      res <- runExceptT $ runLazyTx Q.ReadWrite isPGCtx $ liftTx unlockAllEvents
       either printErrJExit return res
 
     getFromEnv :: (Read a) => a -> String -> IO a
@@ -283,9 +287,6 @@ runHGEServer ServeOptions{..} InitCtx{..} initTime = do
             Just val -> readMaybe val
           eRes = maybe (Left $ "Wrong expected type for environment variable: " <> env) Right mRes
       either printErrExit return eRes
-
-    runTx pool tx =
-      liftIO $ runExceptT $ Q.runTx pool (Q.Serializable, Nothing) tx
 
     -- | Catches the SIGTERM signal and initiates a graceful shutdown. Graceful shutdown for regular HTTP
     -- requests is already implemented in Warp, and is triggered by invoking the 'closeSocket' callback.
@@ -307,19 +308,19 @@ runHGEServer ServeOptions{..} InitCtx{..} initTime = do
 
 runAsAdmin
   :: (MonadIO m)
-  => Q.PGPool
+  => IsPGExecCtx
   -> SQLGenCtx
   -> HTTP.Manager
   -> Run a
   -> m (Either QErr a)
-runAsAdmin pool sqlGenCtx httpManager m = do
-  res <- runExceptT $ peelRun emptySchemaCache
-   (RunCtx adminUserInfo httpManager sqlGenCtx)
-   (PGExecCtx pool Q.Serializable) Q.ReadWrite m
-  return $ fmap fst res
+runAsAdmin isPgCtx sqlGenCtx httpManager m = do
+  let runCtx = RunCtx adminUserInfo httpManager sqlGenCtx
+  runExceptT $ peelRun runCtx isPgCtx' (runLazyTx Q.ReadWrite) m
+  where isPgCtx' = withTxIsolation Q.Serializable isPgCtx
 
 execQuery
-  :: ( CacheRWM m
+  :: ( HasVersion
+     , CacheRWM m
      , MonadTx m
      , MonadIO m
      , HasHttpManager m
@@ -368,7 +369,7 @@ instance ConsoleRenderer AppM where
   renderConsole path authMode enableTelemetry consoleAssetsDir =
     return $ mkConsoleHTML path authMode enableTelemetry consoleAssetsDir
 
-mkConsoleHTML :: Text -> AuthMode -> Bool -> Maybe Text -> Either String Text
+mkConsoleHTML :: HasVersion => Text -> AuthMode -> Bool -> Maybe Text -> Either String Text
 mkConsoleHTML path authMode enableTelemetry consoleAssetsDir =
   renderHtmlTemplate consoleTmplt $
       -- variables required to render the template
@@ -376,7 +377,7 @@ mkConsoleHTML path authMode enableTelemetry consoleAssetsDir =
                , "consolePath" .= consolePath
                , "enableTelemetry" .= boolToText enableTelemetry
                , "cdnAssets" .= boolToText (isNothing consoleAssetsDir)
-               , "assetsVersion" .= consoleVersion
+               , "assetsVersion" .= consoleAssetsVersion
                , "serverVersion" .= currentVersion
                ]
     where

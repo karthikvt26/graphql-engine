@@ -18,6 +18,7 @@ module Hasura.GraphQL.Execute
   , EP.dumpPlanCache
 
   , ExecutionCtx(..)
+  , GQLApiAuthorization(..)
   ) where
 
 import           Control.Exception                      (try)
@@ -30,9 +31,10 @@ import qualified Data.HashMap.Strict                    as Map
 import qualified Data.HashSet                           as Set
 import qualified Data.String.Conversions                as CS
 import qualified Data.Text                              as T
+import qualified Database.PG.Query                      as Q
 import qualified Language.GraphQL.Draft.Syntax          as G
 import qualified Network.HTTP.Client                    as HTTP
-import qualified Network.HTTP.Types                     as N
+import qualified Network.HTTP.Types                     as HTTP
 import qualified Network.Wreq                           as Wreq
 
 import           Hasura.EncJSON
@@ -47,7 +49,8 @@ import           Hasura.Prelude
 import           Hasura.RQL.DDL.Headers
 import           Hasura.RQL.Types
 import           Hasura.Server.Context
-import           Hasura.Server.Utils                    (RequestId, filterRequestHeaders)
+import           Hasura.Server.Utils                    (IpAddress, RequestId, filterRequestHeaders)
+import           Hasura.Server.Version                  (HasVersion)
 
 import qualified Hasura.GraphQL.Execute.LiveQuery       as EL
 import qualified Hasura.GraphQL.Execute.Plan            as EP
@@ -56,6 +59,7 @@ import qualified Hasura.GraphQL.Resolve                 as GR
 import qualified Hasura.GraphQL.Validate                as VQ
 import qualified Hasura.GraphQL.Validate.Types          as VT
 import qualified Hasura.Logging                         as L
+import qualified Hasura.Server.Telemetry.Counters       as Telem
 
 -- The current execution plan of a graphql operation, it is
 -- currently, either local pg execution or a remote execution
@@ -72,13 +76,26 @@ data ExecutionCtx
   = ExecutionCtx
   { _ecxLogger          :: !(L.Logger L.Hasura)
   , _ecxSqlGenCtx       :: !SQLGenCtx
-  , _ecxPgExecCtx       :: !PGExecCtx
+  , _ecxPgExecCtx       :: !IsPGExecCtx
   , _ecxPlanCache       :: !EP.PlanCache
   , _ecxSchemaCache     :: !SchemaCache
   , _ecxSchemaCacheVer  :: !SchemaCacheVer
   , _ecxHttpManager     :: !HTTP.Manager
   , _ecxEnableAllowList :: !Bool
   }
+
+-- | Typeclass representing rules/authorization to be enforced on the GraphQL API (over both HTTP & Websockets)
+-- | This is separate from the permissions system. Permissions apply on GraphQL related objects, but
+-- this is applicable on other general things
+class Monad m => GQLApiAuthorization m where
+  authorizeGQLApi
+    :: UserInfo
+    -> ([HTTP.Header], IpAddress)
+    -- ^ request headers and IP address
+    -> GQLReqUnparsed
+    -- ^ the unparsed GraphQL query string (and related values)
+    -> m (Either QErr GQLReqParsed)
+    -- ^ after enforcing authorization, it should return the parsed GraphQL query
 
 -- Enforces the current limitation
 assertSameLocationNodes
@@ -114,7 +131,7 @@ gatherTypeLocs gCtx nodes =
       in maybe qr (Map.union qr) mr
 
 -- This is for when the graphql query is validated
-type ExecPlanPartial = GQExecPlan (GCtx, VQ.RootSelSet)
+type ExecPlanPartial = GQExecPlan (GCtx, VQ.RootSelSet, Q.TxAccess)
 
 getExecPlanPartial
   :: (MonadReusability m, MonadError QErr m)
@@ -128,7 +145,7 @@ getExecPlanPartial userInfo sc enableAL req = do
   -- check if query is in allowlist
   when enableAL checkQueryInAllowlist
 
-  (gCtx, _)  <- flip runStateT sc $ getGCtx role gCtxRoleMap
+  gCtx <- flip runCacheRT sc $ getGCtx role gCtxRoleMap
   queryParts <- flip runReaderT gCtx $ VQ.getQueryParts req
 
   let opDef = VQ.qpOpDef queryParts
@@ -142,13 +159,22 @@ getExecPlanPartial userInfo sc enableAL req = do
   case typeLoc of
     VT.TLHasuraType -> do
       rootSelSet <- runReaderT (VQ.validateGQ queryParts) gCtx
-      return $ GExPHasura (gCtx, rootSelSet)
+      txAccess <- getTxAccess rootSelSet
+      return $ GExPHasura (gCtx, rootSelSet, txAccess)
     VT.TLRemoteType _ rsi ->
       return $ GExPRemote rsi opDef
   where
     role = userRole userInfo
     gCtxRoleMap = scGCtxMap sc
+    getTxAccess rootSelSet = case rootSelSet of
+      VQ.RQuery{}        -> getGQLQueryTxAccess rootSelSet
+      VQ.RMutation{}     -> return Q.ReadWrite
+      VQ.RSubscription{} -> return Q.ReadOnly
 
+    -- TODO: This function should ideally read a configuration
+    -- in the schema cache to get the transaction access to be used to
+    -- for executing the query. For now, we default to Q.readOnly
+    getGQLQueryTxAccess _ = return Q.ReadOnly
     checkQueryInAllowlist =
       -- only for non-admin roles
       when (role /= adminRole) $ do
@@ -171,11 +197,11 @@ data ExecOp
 
 -- The graphql query is resolved into an execution operation
 type ExecPlanResolved
-  = GQExecPlan ExecOp
+  = GQExecPlan (ExecOp, Q.TxAccess)
 
 getResolvedExecPlan
   :: (MonadError QErr m, MonadIO m)
-  => PGExecCtx
+  => IsPGExecCtx
   -> EP.PlanCache
   -> UserInfo
   -> SQLGenCtx
@@ -183,21 +209,22 @@ getResolvedExecPlan
   -> SchemaCache
   -> SchemaCacheVer
   -> (GQLReqUnparsed, GQLReqParsed)
-  -> m ExecPlanResolved
-getResolvedExecPlan pgExecCtx planCache userInfo sqlGenCtx
+  -> m (Telem.CacheHit, ExecPlanResolved)
+getResolvedExecPlan isPgCtx planCache userInfo sqlGenCtx
   enableAL sc scVer (reqUnparsed, reqParsed) = do
+
   planM <- liftIO $ EP.getPlan scVer (userRole userInfo)
            opNameM queryStr planCache
   let usrVars = userVars userInfo
   case planM of
     -- plans are only for queries and subscriptions
-    Just plan -> GExPHasura <$> case plan of
-      EP.RPQuery queryPlan -> do
+    Just plan -> (Telem.Hit,) . GExPHasura <$> case plan of
+      EP.RPQuery queryPlan txAccess -> do
         (tx, genSql) <- EQ.queryOpFromPlan usrVars queryVars queryPlan
-        return $ ExOpQuery tx (Just genSql)
-      EP.RPSubs subsPlan ->
-        ExOpSubs <$> EL.reuseLiveQueryPlan pgExecCtx usrVars queryVars subsPlan
-    Nothing -> noExistingPlan
+        return (ExOpQuery tx $ Just genSql, txAccess)
+      EP.RPSubs subsPlan txAccess ->
+        (, txAccess) . ExOpSubs <$> EL.reuseLiveQueryPlan isPgCtx usrVars queryVars subsPlan
+    Nothing -> (Telem.Miss,) <$> noExistingPlan
   where
     GQLReq opNameM queryStr queryVars = reqUnparsed
     addPlanToCache plan =
@@ -206,18 +233,18 @@ getResolvedExecPlan pgExecCtx planCache userInfo sqlGenCtx
     noExistingPlan = do
       (partialExecPlan, queryReusability) <- runReusabilityT $
         getExecPlanPartial userInfo sc enableAL reqParsed
-      forM partialExecPlan $ \(gCtx, rootSelSet) ->
+      forM partialExecPlan $ \(gCtx, rootSelSet, txAccess) ->
         case rootSelSet of
           VQ.RMutation selSet ->
-            ExOpMutation <$> getMutOp gCtx sqlGenCtx userInfo selSet
+            (, Q.ReadWrite) . ExOpMutation <$> getMutOp gCtx sqlGenCtx userInfo selSet
           VQ.RQuery selSet -> do
             (queryTx, plan, genSql) <- getQueryOp gCtx sqlGenCtx userInfo queryReusability selSet
-            traverse_ (addPlanToCache . EP.RPQuery) plan
-            return $ ExOpQuery queryTx (Just genSql)
+            traverse_ (addPlanToCache . flip EP.RPQuery txAccess) plan
+            return (ExOpQuery queryTx $ Just genSql, txAccess)
           VQ.RSubscription fld -> do
-            (lqOp, plan) <- getSubsOp pgExecCtx gCtx sqlGenCtx userInfo queryReusability fld
-            traverse_ (addPlanToCache . EP.RPSubs) plan
-            return $ ExOpSubs lqOp
+            (lqOp, plan) <- getSubsOp isPgCtx gCtx sqlGenCtx userInfo queryReusability fld
+            traverse_ (addPlanToCache . flip EP.RPSubs txAccess) plan
+            return $ (ExOpSubs lqOp, txAccess)
 
 -- Monad for resolving a hasura query/mutation
 type E m =
@@ -315,11 +342,11 @@ getSubsOpM
      , Has UserInfo r
      , MonadIO m
      )
-  => PGExecCtx
+  => IsPGExecCtx
   -> QueryReusability
   -> VQ.Field
   -> m (EL.LiveQueryPlan, Maybe EL.ReusableLiveQueryPlan)
-getSubsOpM pgExecCtx initialReusability fld =
+getSubsOpM isPgCtx initialReusability fld =
   case VQ._fName fld of
     "__typename" ->
       throwVE "you cannot create a subscription on '__typename' field"
@@ -327,34 +354,36 @@ getSubsOpM pgExecCtx initialReusability fld =
       (astUnresolved, finalReusability) <- runReusabilityTWith initialReusability $
         GR.queryFldToPGAST fld
       let varTypes = finalReusability ^? _Reusable
-      EL.buildLiveQueryPlan pgExecCtx (VQ._fAlias fld) astUnresolved varTypes
+      EL.buildLiveQueryPlan isPgCtx (VQ._fAlias fld) astUnresolved varTypes
 
 getSubsOp
   :: ( MonadError QErr m
      , MonadIO m
      )
-  => PGExecCtx
+  => IsPGExecCtx
   -> GCtx
   -> SQLGenCtx
   -> UserInfo
   -> QueryReusability
   -> VQ.Field
   -> m (EL.LiveQueryPlan, Maybe EL.ReusableLiveQueryPlan)
-getSubsOp pgExecCtx gCtx sqlGenCtx userInfo queryReusability fld =
-  runE gCtx sqlGenCtx userInfo $ getSubsOpM pgExecCtx queryReusability fld
+getSubsOp isPgCtx gCtx sqlGenCtx userInfo queryReusability fld =
+  runE gCtx sqlGenCtx userInfo $ getSubsOpM isPgCtx queryReusability fld
 
 execRemoteGQ
-  :: ( MonadIO m
+  :: ( HasVersion
+     , MonadIO m
      , MonadError QErr m
      , MonadReader ExecutionCtx m
      )
   => RequestId
   -> UserInfo
-  -> [N.Header]
+  -> [HTTP.Header]
   -> GQLReqUnparsed
   -> RemoteSchemaInfo
   -> G.TypedOperationDefinition
-  -> m (HttpResponse EncJSON)
+  -> m (DiffTime, HttpResponse EncJSON)
+  -- ^ Also returns time spent in http request, for telemetry.
 execRemoteGQ reqId userInfo reqHdrs q rsi opDef = do
   execCtx <- ask
   let logger  = _ecxLogger execCtx
@@ -384,11 +413,12 @@ execRemoteGQ reqId userInfo reqHdrs q rsi opDef = do
            }
 
   L.unLogger logger $ QueryLog q Nothing reqId
-  res  <- liftIO $ try $ HTTP.httpLbs req manager
+  (time, res)  <- withElapsedTime $ liftIO $ try $ HTTP.httpLbs req manager
   resp <- either httpThrow return res
   let cookieHdrs = getCookieHdr (resp ^.. Wreq.responseHeader "Set-Cookie")
       respHdrs  = Just $ mkRespHeaders cookieHdrs
-  return $ HttpResponse (encJFromLBS $ resp ^. Wreq.responseBody) respHdrs
+      !httpResp = HttpResponse (encJFromLBS $ resp ^. Wreq.responseBody) respHdrs
+  return (time, httpResp)
 
   where
     RemoteSchemaInfo url hdrConf fwdClientHdrs timeout = rsi

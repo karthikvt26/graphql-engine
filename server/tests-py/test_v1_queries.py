@@ -509,13 +509,13 @@ class TestMetadataOrder(DefaultTestSelectQueries):
         headers = {}
         if hge_ctx.hge_key is not None:
             headers['X-Hasura-Admin-Secret'] = hge_ctx.hge_key
-        export_code, export_resp = hge_ctx.anyq(url, export_query, headers)
+        export_code, export_resp, _ = hge_ctx.anyq(url, export_query, headers)
         assert export_code == 200, export_resp
         replace_query = {
             'type': 'replace_metadata',
             'args': export_resp
         }
-        replace_code, replace_resp = hge_ctx.anyq(url, replace_query, headers)
+        replace_code, replace_resp, _ = hge_ctx.anyq(url, replace_query, headers)
         assert replace_code == 200, replace_resp
 
 
@@ -679,6 +679,9 @@ class TestSetTableIsEnum(DefaultTestQueries):
     def test_add_test_schema_enum_table(self, hge_ctx):
         check_query_f(hge_ctx, self.dir() + '/add_test_schema_enum_table.yaml')
 
+    def test_relationship_with_inconsistent_enum_table(self, hge_ctx):
+        check_query_f(hge_ctx, self.dir() + '/relationship_with_inconsistent_enum_table.yaml')
+
 class TestSetTableCustomFields(DefaultTestQueries):
     @classmethod
     def dir(cls):
@@ -735,5 +738,3 @@ class TestBulkQuery(DefaultTestQueries):
 
     def test_run_bulk_with_select_and_reads(self, hge_ctx):
         check_query_f(hge_ctx, self.dir() + '/select_with_reads.yaml')
-
-  
