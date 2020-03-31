@@ -336,7 +336,6 @@ library
                      , Hasura.GraphQL.Explain
                      , Hasura.GraphQL.Execute.Plan
                      , Hasura.GraphQL.Execute.Query
-                     , Hasura.GraphQL.Execute.LiveQuery
                      , Hasura.GraphQL.Execute.LiveQuery.Options
                      , Hasura.GraphQL.Execute.LiveQuery.Plan
                      , Hasura.GraphQL.Execute.LiveQuery.Poll
