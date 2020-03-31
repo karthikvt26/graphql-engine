@@ -433,7 +433,10 @@ configApiGetHandler serverCtx =
   Spock.get "v1alpha1/config" $ mkSpockAction serverCtx encodeQErr id $
     mkGetHandler $ do
       onlyAdmin
-      let res = encJFromJValue $ runGetConfig (scAuthMode serverCtx)
+      let res = encJFromJValue $ runGetConfig
+                  (scAuthMode serverCtx)
+                  (scEnableAllowlist serverCtx)
+                  (EL._lqsOptions $ scLQState serverCtx)
       return $ JSONResp $ HttpResponse res Nothing
 
 initErrExit :: QErr -> IO a
