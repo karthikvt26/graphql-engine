@@ -232,6 +232,7 @@ library
                      , Hasura.Server.Telemetry.Counters
 
                      , Hasura.GraphQL.Execute
+                     , Hasura.GraphQL.Execute.LiveQuery
                      , Hasura.GraphQL.Validate
                      , Hasura.GraphQL.Transport.HTTP
 
