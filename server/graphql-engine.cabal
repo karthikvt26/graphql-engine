@@ -238,6 +238,8 @@ library
                      , Hasura.RQL.DDL.Metadata.Types
                      , Hasura.RQL.DDL.Metadata.Generator
                      , Hasura.RQL.DDL.Schema
+                     -- required for QueryLog to be exposed
+                     , Hasura.GraphQL.Logging
                      -- required for buildRebuildableSchemaCache and runCacheRWT to be exposed
                      , Hasura.RQL.DDL.Schema.Cache
 
@@ -349,7 +351,6 @@ library
                      , Hasura.GraphQL.Resolve.Select
                      , Hasura.GraphQL.RemoteServer
                      , Hasura.GraphQL.Context
-                     , Hasura.GraphQL.Logging
 
                      , Hasura.Events.Lib
                      , Hasura.Events.HTTP
