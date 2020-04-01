@@ -319,11 +319,6 @@ onStart serverEnv wsConn (StartMsg opId q) = catchAndIgnore $ do
     E.GExPRemote rsi opDef  ->
       runRemoteGQ timerTot telemCacheHit execCtx requestId userInfo reqHdrs opDef rsi
   where
--- <<<<<<< HEAD
---     runHasuraGQ :: RequestId -> GQLReqUnparsed -> UserInfo -> E.ExecOp
---                 -> ExceptT () m ()
---     runHasuraGQ reqId query userInfo = \case
--- =======
     telemTransport = Telem.HTTP
     runHasuraGQ :: ExceptT () m DiffTime
                 -> Telem.CacheHit -> RequestId -> GQLReqUnparsed -> UserInfo -> Q.TxAccess
@@ -337,11 +332,12 @@ onStart serverEnv wsConn (StartMsg opId q) = catchAndIgnore $ do
       E.ExOpSubs lqOp -> do
         -- log the graphql query
         logQuery logger query Nothing reqId
-        lqId <- liftIO $ LQ.addLiveQuery lqMap lqOp liveQOnChange
+        let wsId = WS.getWSId wsConn
+            uniqSubId = LQ.UniqueSubscriberId wsId opId
+        lqId <- liftIO $ LQ.addLiveQuery logger uniqSubId lqMap lqOp liveQOnChange
         liftIO $ STM.atomically $
           STMMap.insert (lqId, _grOperationName q) opId opMap
         logOpEv ODStarted (Just reqId)
-
 -- <<<<<<< HEAD
     -- execQueryOrMut reqId query genSql action = do
     --   logOpEv ODStarted (Just reqId)
@@ -370,14 +366,6 @@ onStart serverEnv wsConn (StartMsg opId q) = catchAndIgnore $ do
 
           sendCompleted (Just reqId)
 
-    -- runRemoteGQ
-    --   :: E.ExecutionCtx -> RequestId -> UserInfo -> [H.Header]
-    --   -> G.TypedOperationDefinition -> RemoteSchemaInfo
-    --   -> ExceptT () m ()
-    -- runRemoteGQ execCtx reqId userInfo reqHdrs opDef rsi = do
-    --   when (G._todType opDef == G.OperationTypeSubscription) $
-    --     withComplete $ preExecErr reqId $
-    --     err400 NotSupported "subscription to remote server is not supported"
 
     runRemoteGQ :: ExceptT () m DiffTime
                 -> Telem.CacheHit -> E.ExecutionCtx -> RequestId -> UserInfo -> [H.Header]

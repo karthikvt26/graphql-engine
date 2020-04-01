@@ -2,7 +2,7 @@
 -- in "Hasura.GraphQL.Execute.LiveQuery.Poll". See "Hasura.GraphQL.Execute.LiveQuery" for high-level
 -- details.
 module Hasura.GraphQL.Execute.LiveQuery.State
-  ( LiveQueriesState
+  ( LiveQueriesState(..)
   , initLiveQueriesState
   , dumpLiveQueriesState
 
@@ -16,11 +16,13 @@ import           Hasura.Prelude
 import qualified Control.Concurrent.Async                 as A
 import qualified Control.Concurrent.STM                   as STM
 import qualified Data.Aeson.Extended                      as J
+import qualified Data.UUID.V4                             as UUID
 import qualified StmContainers.Map                        as STMMap
 
 import           Control.Concurrent.Extended              (sleep)
 
 import qualified Hasura.GraphQL.Execute.LiveQuery.TMap    as TMap
+import qualified Hasura.Logging                           as L
 
 import           Hasura.Db
 import           Hasura.GraphQL.Execute.LiveQuery.Options
@@ -53,13 +55,25 @@ data LiveQueryId
   , _lqiSubscriber :: !SubscriberId
   }
 
+-- | Typeclass representing the action performed when polling for a live query. Currently in OSS, it
+-- polls via 'pollQuery' and then sleeps as per the given refetch interval. In Pro, this might also
+-- log the 'LiveQueriesState'.
+-- class (Monad m, MonadIO m) => LiveQueryPoller m where
+  -- runPoller :: PGExecCtx -> BatchSize -> RefetchInterval -> RefetchMetrics -> Poller -> MultiplexedQuery -> m ()
+  -- default implementation:
+  -- runPoller pgExecCtx batchSize refetchInterval metrics handler query = do
+  --   pollQuery metrics batchSize pgExecCtx query handler
+  --   threadDelay $ unRefetchInterval refetchInterval
+
 addLiveQuery
-  :: LiveQueriesState
+  :: L.Logger L.Hasura
+  -> UniqueSubscriberId
+  -> LiveQueriesState
   -> LiveQueryPlan
   -> OnChange
   -- ^ the action to be executed when result changes
   -> IO LiveQueryId
-addLiveQuery lqState plan onResultAction = do
+addLiveQuery logger wsOpId lqState plan onResultAction = do
   responseId <- newCohortId
   sinkId <- newSinkId
 
@@ -83,21 +97,22 @@ addLiveQuery lqState plan onResultAction = do
   -- the livequery can only be cancelled after putTMVar
   onJust handlerM $ \handler -> do
     metrics <- initRefetchMetrics
+    pollerId <- PollerId <$> UUID.nextRandom
     threadRef <- A.async $ forever $ do
-      pollQuery metrics batchSize isPGCtx query handler
+      pollQuery logger pollerId metrics lqOpts pgExecCtx query handler
       sleep $ unRefetchInterval refetchInterval
     STM.atomically $ STM.putTMVar (_pIOState handler) (PollerIOState threadRef metrics)
 
   pure $ LiveQueryId handlerId cohortKey sinkId
   where
-    LiveQueriesState lqOpts isPGCtx lqMap = lqState
-    LiveQueriesOptions batchSize refetchInterval = lqOpts
+    LiveQueriesState lqOpts pgExecCtx lqMap = lqState
+    LiveQueriesOptions _ refetchInterval = lqOpts
     LiveQueryPlan (ParameterizedLiveQueryPlan role alias query) cohortKey = plan
 
     handlerId = PollerKey role query
 
     addToCohort sinkId handlerC =
-      TMap.insert (Subscriber alias onResultAction) sinkId $ _cNewSubscribers handlerC
+      TMap.insert (Subscriber alias onResultAction wsOpId) sinkId $ _cNewSubscribers handlerC
 
     addToPoller sinkId responseId handler = do
       newCohort <- Cohort responseId <$> STM.newTVar Nothing <*> TMap.new <*> TMap.new
@@ -105,6 +120,7 @@ addLiveQuery lqState plan onResultAction = do
       TMap.insert newCohort cohortKey $ _pCohorts handler
 
     newPoller = Poller <$> TMap.new <*> STM.newEmptyTMVar
+
 
 removeLiveQuery
   :: LiveQueriesState

@@ -102,6 +102,7 @@ data InternalLogTypes
  | ILTJwkRefreshLog
  | ILTTelemetry
  | ILTSchemaSyncThread
+ | ILTPollerLog
  deriving (Show, Eq, Generic)
 
 instance Hashable InternalLogTypes
@@ -116,6 +117,7 @@ instance J.ToJSON InternalLogTypes where
     ILTJwkRefreshLog -> "jwk-refresh-log"
     ILTTelemetry -> "telemetry-log"
     ILTSchemaSyncThread -> "schema-sync-thread"
+    ILTPollerLog -> "poller-log"
 
 -- the default enabled log-types
 defaultEnabledEngineLogTypes :: Set.HashSet (EngineLogType Hasura)
