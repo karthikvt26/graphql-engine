@@ -4,7 +4,7 @@ import {
   defaultPresetsState,
 } from '../DataState';
 import { getEdForm, getIngForm } from '../utils';
-import { makeMigrationCall } from '../DataActions';
+import { makeMigrationCall, fetchRoleList } from '../DataActions';
 import {
   findTable,
   generateTableDef,
@@ -20,9 +20,7 @@ import {
 export const PERM_OPEN_EDIT = 'ModifyTable/PERM_OPEN_EDIT';
 export const PERM_SET_FILTER = 'ModifyTable/PERM_SET_FILTER';
 export const PERM_SET_FILTER_SAME_AS = 'ModifyTable/PERM_SET_FILTER_SAME_AS';
-export const PERM_TOGGLE_COLUMN = 'ModifyTable/PERM_TOGGLE_COLUMN';
-export const PERM_TOGGLE_COMPUTED_FIELD =
-  'ModifyTable/PERM_TOGGLE_COMPUTED_FIELD';
+export const PERM_TOGGLE_FIELD = 'ModifyTable/PERM_TOGGLE_FIELD';
 export const PERM_TOGGLE_ALL_FIELDS = 'ModifyTable/PERM_TOGGLE_ALL_FIELDS';
 export const PERM_ALLOW_ALL = 'ModifyTable/PERM_ALLOW_ALL';
 export const PERM_TOGGLE_ENABLE_LIMIT = 'ModifyTable/PERM_TOGGLE_ENABLE_LIMIT';
@@ -70,10 +68,10 @@ const permSetFilterSameAs = filter => ({
   type: PERM_SET_FILTER_SAME_AS,
   filter,
 });
-const permToggleColumn = column => ({ type: PERM_TOGGLE_COLUMN, column });
-const permToggleComputedField = computedField => ({
-  type: PERM_TOGGLE_COMPUTED_FIELD,
-  computedField,
+const permToggleField = (fieldType, fieldName) => ({
+  type: PERM_TOGGLE_FIELD,
+  fieldType,
+  fieldName,
 });
 const permToggleAllFields = allFields => ({
   type: PERM_TOGGLE_ALL_FIELDS,
@@ -250,20 +248,22 @@ const toggleAllFields = (permissions, allFields, fieldType) => {
 };
 
 // fieldType: columns / computed_fields
-const toggleColumn = (permissions, column, fieldType) => {
-  const currColumns = permissions ? permissions[fieldType] : [];
-  let _newColumns = currColumns;
+const toggleField = (permissions, fieldName, fieldType) => {
+  const currFields =
+    permissions && permissions[fieldType] ? permissions[fieldType] : [];
 
-  const columnIndex = currColumns.indexOf(column);
-  if (columnIndex === -1) {
-    _newColumns.push(column);
+  let _newFields = currFields;
+
+  const fieldIndex = currFields.indexOf(fieldName);
+  if (fieldIndex === -1) {
+    _newFields.push(fieldName);
   } else {
-    _newColumns.splice(columnIndex, 1);
+    _newFields.splice(fieldIndex, 1);
   }
 
-  _newColumns = _newColumns.sort();
+  _newFields = _newFields.sort();
 
-  return _newColumns;
+  return _newFields;
 };
 
 const permRemoveRole = (tableSchema, roleName) => {
@@ -316,6 +316,8 @@ const permRemoveRole = (tableSchema, roleName) => {
       dispatch(permSetRoleName(''));
       // close edit box
       dispatch(permCloseEdit());
+      // fetch all roles
+      dispatch(fetchRoleList());
     };
     const customOnError = () => {};
 
@@ -385,6 +387,8 @@ const permRemoveMultipleRoles = tableSchema => {
       dispatch(permCloseEdit());
       // reset checkbox selections
       dispatch({ type: PERM_RESET_BULK_SELECT });
+      // fetch all roles
+      dispatch(fetchRoleList());
     };
     const customOnError = () => {};
 
@@ -403,7 +407,7 @@ const permRemoveMultipleRoles = tableSchema => {
   };
 };
 
-const applySamePermissionsBulk = tableSchema => {
+const applySamePermissionsBulk = (tableSchema, arePermissionsModified) => {
   return (dispatch, getState) => {
     const permissionsUpQueries = [];
     const permissionsDownQueries = [];
@@ -416,30 +420,29 @@ const applySamePermissionsBulk = tableSchema => {
     const currentQueryType = permissionsState.query;
     const toBeAppliedPermission = permissionsState[currentQueryType];
 
-    const mainApplyTo = {
-      table: table,
-      action: currentQueryType,
-      role: permissionsState.role,
-    };
+    const permApplyToList = permissionsState.applySamePermissions.filter(
+      applyTo => applyTo.table && applyTo.action && applyTo.role
+    );
 
-    const permApplyToList = permissionsState.applySamePermissions
-      .filter(applyTo => applyTo.table && applyTo.action && applyTo.role)
-      .concat([mainApplyTo]);
+    if (arePermissionsModified) {
+      const mainApplyTo = {
+        table: table,
+        action: currentQueryType,
+        role: permissionsState.role,
+      };
 
-    let currentPermissions = [];
-    allSchemas.forEach(tSchema => {
-      currentPermissions = currentPermissions.concat(tSchema.permissions);
-    });
+      permApplyToList.push(mainApplyTo);
+    }
 
     permApplyToList.map(applyTo => {
-      const currTableSchema = allSchemas.find(
-        tSchema =>
-          tSchema.table_name === applyTo.table &&
-          tSchema.table_schema === currentSchema
+      const currTableSchema = findTable(
+        allSchemas,
+        generateTableDef(applyTo.table, currentSchema)
       );
-      const currentPermPermission = currTableSchema.permissions.find(el => {
-        return el.role_name === applyTo.role;
-      });
+
+      const currentPermPermission = currTableSchema.permissions.find(
+        el => el.role_name === applyTo.role
+      );
 
       if (
         currentPermPermission &&
@@ -453,6 +456,7 @@ const applySamePermissionsBulk = tableSchema => {
             role: applyTo.role,
           },
         };
+
         const createQuery = {
           type: 'create_' + applyTo.action + '_permission',
           args: {
@@ -461,8 +465,9 @@ const applySamePermissionsBulk = tableSchema => {
             permission: currentPermPermission.permissions[applyTo.action],
           },
         };
+
         permissionsUpQueries.push(deleteQuery);
-        permissionsDownQueries.push(createQuery);
+        permissionsDownQueries.unshift(createQuery);
       }
 
       // modify query depending on table and action
@@ -471,6 +476,7 @@ const applySamePermissionsBulk = tableSchema => {
         sanitizedPermission.columns = [];
         sanitizedPermission.set = {};
       }
+
       if (applyTo.action === 'insert' && currentQueryType !== 'insert') {
         sanitizedPermission.check = sanitizedPermission.filter;
       } else if (applyTo.action !== 'insert' && currentQueryType === 'insert') {
@@ -494,7 +500,7 @@ const applySamePermissionsBulk = tableSchema => {
         },
       };
       permissionsUpQueries.push(createQuery);
-      permissionsDownQueries.push(deleteQuery);
+      permissionsDownQueries.unshift(deleteQuery);
     });
 
     // Apply migration
@@ -512,6 +518,8 @@ const applySamePermissionsBulk = tableSchema => {
       dispatch(permCloseEdit());
       // reset checkbox selections
       dispatch({ type: PERM_RESET_APPLY_SAME });
+      // fetch all roles
+      dispatch(fetchRoleList());
     };
     const customOnError = () => {};
 
@@ -625,7 +633,11 @@ const copyRolePermissions = (
     const successMsg = 'Permissions copied';
     const errorMsg = 'Permissions copy failed';
 
-    const customOnSuccess = onSuccess;
+    const customOnSuccess = () => {
+      onSuccess();
+      // fetch all roles
+      dispatch(fetchRoleList());
+    };
     const customOnError = () => {};
 
     makeMigrationCall(
@@ -755,6 +767,8 @@ const permChangePermissions = changeType => {
       dispatch(permSetRoleName(''));
       // close edit box
       dispatch(permCloseEdit());
+      // fetch all roles
+      dispatch(fetchRoleList());
     };
     const customOnError = () => {};
 
@@ -778,8 +792,7 @@ export {
   permOpenEdit,
   permSetFilter,
   permSetFilterSameAs,
-  permToggleColumn,
-  permToggleComputedField,
+  permToggleField,
   permToggleAllFields,
   permCloseEdit,
   permSetRoleName,
@@ -791,7 +804,7 @@ export {
   permCustomChecked,
   permRemoveRole,
   permSetBulkSelect,
-  toggleColumn,
+  toggleField,
   toggleAllFields,
   getFilterKey,
   getBasePermissionsState,

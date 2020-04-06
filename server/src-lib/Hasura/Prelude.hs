@@ -6,11 +6,16 @@ module Hasura.Prelude
   , onJust
   , onLeft
   , choice
+  , afold
   , bsToTxt
   , txtToBs
   , spanMaybeM
   , findWithIndex
   , mapFromL
+  -- * Measuring and working with moments and durations
+  , withElapsedTime
+  , startTimer
+  , module Data.Time.Clock.Units
   ) where
 
 import           Control.Applicative               as M (Alternative (..))
@@ -38,9 +43,10 @@ import           Data.HashSet                      as M (HashSet)
 import           Data.List                         as M (find, findIndex, foldl', group,
                                                          intercalate, intersect, lookup, sort,
                                                          sortBy, sortOn, union, unionBy, (\\))
-import           Data.List.NonEmpty                as M (NonEmpty(..))
+import           Data.List.NonEmpty                as M (NonEmpty (..))
 import           Data.Maybe                        as M (catMaybes, fromMaybe, isJust, isNothing,
                                                          listToMaybe, mapMaybe, maybeToList)
+import           Data.Monoid                       as M (getAlt)
 import           Data.Ord                          as M (comparing)
 import           Data.Semigroup                    as M (Semigroup (..))
 import           Data.Sequence                     as M (Seq)
@@ -48,6 +54,7 @@ import           Data.String                       as M (IsString)
 import           Data.Text                         as M (Text)
 import           Data.These                        as M (These (..), fromThese, mergeThese,
                                                          mergeTheseWith, these)
+import           Data.Time.Clock.Units
 import           Data.Traversable                  as M (for)
 import           Data.Word                         as M (Word64)
 import           GHC.Generics                      as M (Generic)
@@ -60,6 +67,7 @@ import qualified Data.HashMap.Strict               as Map
 import qualified Data.Text                         as T
 import qualified Data.Text.Encoding                as TE
 import qualified Data.Text.Encoding.Error          as TE
+import qualified GHC.Clock                         as Clock
 import qualified Test.QuickCheck                   as QC
 
 alphaNumerics :: String
@@ -79,6 +87,9 @@ onLeft e f = either f return e
 
 choice :: (Alternative f) => [f a] -> f a
 choice = asum
+
+afold :: (Foldable t, Alternative f) => t a -> f a
+afold = getAlt . foldMap pure
 
 bsToTxt :: B.ByteString -> Text
 bsToTxt = TE.decodeUtf8With TE.lenientDecode
@@ -106,3 +117,31 @@ findWithIndex p l = do
 -- TODO: Move to Data.HashMap.Strict.Extended; rename to fromListWith?
 mapFromL :: (Eq k, Hashable k) => (a -> k) -> [a] -> Map.HashMap k a
 mapFromL f = Map.fromList . map (\v -> (f v, v))
+
+-- | Time an IO action, returning the time with microsecond precision. The
+-- result of the input action will be evaluated to WHNF.
+--
+-- The result 'DiffTime' is guarenteed to be >= 0.
+withElapsedTime :: MonadIO m=> m a -> m (DiffTime, a)
+withElapsedTime ma = do
+  bef <- liftIO Clock.getMonotonicTimeNSec
+  !a <- ma
+  aft <- liftIO Clock.getMonotonicTimeNSec
+  let !dur = nanoseconds $ fromIntegral (aft - bef)
+  return (dur, a)
+
+-- | Start timing and return an action to return the elapsed time since 'startTimer' was called.
+--
+-- @
+--   timer <- startTimer
+--   someStuffToTime
+--   elapsed <- timer
+--   moreStuff
+--   elapsedBoth <- timer
+-- @
+startTimer :: (MonadIO m, MonadIO n)=> m (n DiffTime)
+startTimer = do
+  !bef <- liftIO Clock.getMonotonicTimeNSec
+  return $ do
+    aft <- liftIO Clock.getMonotonicTimeNSec
+    return $ nanoseconds $ fromIntegral (aft - bef)
