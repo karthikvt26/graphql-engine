@@ -1,5 +1,5 @@
 module Hasura.Server.SchemaUpdate
-  (startSchemaSync)
+  (startSchemaSyncThreads)
 where
 
 import           Hasura.Prelude
@@ -17,9 +17,11 @@ import           Data.Aeson
 import           Data.Aeson.Casing
 import           Data.Aeson.TH
 import           Data.IORef
+import           GHC.AssertNF
 
 import qualified Control.Concurrent.Extended as C
 import qualified Control.Concurrent.STM      as STM
+import qualified Control.Immortal            as Immortal
 import qualified Data.Text                   as T
 import qualified Data.Time                   as UTC
 import qualified Database.PG.Query           as PG
@@ -74,7 +76,7 @@ $(deriveToJSON
  ''ThreadError)
 
 -- | An IO action that enables metadata syncing
-startSchemaSync
+startSchemaSyncThreads
   :: (MonadIO m)
   => SQLGenCtx
   -> IsPGExecCtx
@@ -83,33 +85,50 @@ startSchemaSync
   -> SchemaCacheRef
   -> InstanceId
   -> Maybe UTC.UTCTime
-  -> m ()
-startSchemaSync sqlGenCtx isPGCtx logger httpMgr cacheRef instanceId cacheInitTime = do
+-- <<<<<<< HEAD
+--   -> m ()
+-- startSchemaSync sqlGenCtx isPGCtx logger httpMgr cacheRef instanceId cacheInitTime = do
+-- =======
+  -> m (Immortal.Thread, Immortal.Thread)
+  -- ^ Returns: (listener handle, processor handle)
+startSchemaSyncThreads sqlGenCtx isPGCtx logger httpMgr cacheRef instanceId cacheInitTime = do
   -- only the latest event is recorded here
   -- we don't want to store and process all the events, only the latest event
   updateEventRef <- liftIO $ STM.newTVarIO Nothing
 
   -- Start listener thread
-  lTId <- liftIO $ C.forkIO $ listener sqlGenCtx isPGCtx
-    logger httpMgr updateEventRef cacheRef instanceId cacheInitTime
+-- <<<<<<< HEAD
+--   lTId <- liftIO $ C.forkIO $ listener sqlGenCtx isPGCtx
+--     logger httpMgr updateEventRef cacheRef instanceId cacheInitTime
+--   logThreadStarted TTListener lTId
+
+--   -- Start processor thread
+--   pTId <- liftIO $ C.forkIO $ processor sqlGenCtx isPGCtx
+--     logger httpMgr updateEventRef cacheRef instanceId
+-- =======
+  lTId <- liftIO $ C.forkImmortal "SchemeUpdate.listener" logger $
+    listener sqlGenCtx isPGCtx logger httpMgr updateEventRef cacheRef instanceId cacheInitTime
   logThreadStarted TTListener lTId
 
   -- Start processor thread
-  pTId <- liftIO $ C.forkIO $ processor sqlGenCtx isPGCtx
-    logger httpMgr updateEventRef cacheRef instanceId
+  pTId <- liftIO $ C.forkImmortal "SchemeUpdate.processor" logger $
+    processor sqlGenCtx isPGCtx logger httpMgr updateEventRef cacheRef instanceId
+
   logThreadStarted TTProcessor pTId
 
+  return (lTId, pTId)
+
   where
-    logThreadStarted threadType threadId =
+    logThreadStarted threadType thread =
       let msg = T.pack (show threadType) <> " thread started"
       in unLogger logger $
          StartupLog LevelInfo "schema-sync" $
            object [ "instance_id" .= getInstanceId instanceId
-                  , "thread_id" .= show threadId
+                  , "thread_id" .= show (Immortal.threadId thread)
                   , "message" .= msg
                   ]
 
--- | An IO action that listens to postgres for events and pushes them to a Queue
+-- | An IO action that listens to postgres for events and pushes them to a Queue, in a loop forever.
 listener
   :: SQLGenCtx
   -> IsPGExecCtx
@@ -118,7 +137,8 @@ listener
   -> STM.TVar (Maybe EventPayload)
   -> SchemaCacheRef
   -> InstanceId
-  -> Maybe UTC.UTCTime -> IO ()
+  -> Maybe UTC.UTCTime
+  -> IO void
 listener sqlGenCtx isPgCtx logger httpMgr updateEventRef
   cacheRef instanceId cacheInitTime =
   -- Never exits
@@ -155,16 +175,19 @@ listener sqlGenCtx isPgCtx logger httpMgr updateEventRef
           Left e -> logError logger threadType $ TEJsonParse $ T.pack e
           Right payload -> do
             logInfo logger threadType $ object ["received_event" .= payload]
+            $assertNFHere payload  -- so we don't write thunks to mutable vars
             -- Push a notify event to Queue
             STM.atomically $ STM.writeTVar updateEventRef $ Just payload
 
     onError = logError logger threadType . TEQueryError
+    -- NOTE: we handle expected error conditions here, while unexpected exceptions will result in 
+    -- a restart and log from 'forkImmortal'
     logWarn = unLogger logger $
       SchemaSyncThreadLog LevelWarn TTListener $ String
         "error occurred, retrying postgres listen after 1 second"
 
 
--- | An IO action that processes events from Queue
+-- | An IO action that processes events from Queue, in a loop forever.
 processor
   :: SQLGenCtx
   -> IsPGExecCtx
@@ -172,7 +195,8 @@ processor
   -> HTTP.Manager
   -> STM.TVar (Maybe EventPayload)
   -> SchemaCacheRef
-  -> InstanceId -> IO ()
+  -> InstanceId
+  -> IO void
 processor sqlGenCtx isPGCtx logger httpMgr updateEventRef
   cacheRef instanceId =
   -- Never exits
