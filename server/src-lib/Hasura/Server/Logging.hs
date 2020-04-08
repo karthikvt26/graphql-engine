@@ -307,6 +307,3 @@ mkHttpLog httpLogCtx =
   let isError = isJust $ olError $ hlcOperation httpLogCtx
       logLevel = bool LevelInfo LevelError isError
   in HttpLogLine logLevel httpLogCtx
-
-computeTimeDiff :: Maybe (UTCTime, UTCTime) -> Maybe Double
-computeTimeDiff = fmap (realToFrac . uncurry (flip diffUTCTime))

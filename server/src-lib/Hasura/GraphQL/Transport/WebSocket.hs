@@ -8,7 +8,16 @@ module Hasura.GraphQL.Transport.WebSocket
   , WSServerEnv
   ) where
 
-import qualified Control.Concurrent.Async                    as A
+-- NOTE!:
+--   The handler functions 'onClose', 'onMessage', etc. depend for correctness on two properties:
+--     - they run with async exceptions masked
+--     - they do not race on the same connection
+
+import           Control.Concurrent.Extended                 (sleep)
+import           Control.Exception.Lifted
+import           Data.String
+import           GHC.AssertNF
+
 import qualified Control.Concurrent.Async.Lifted.Safe        as LA
 import qualified Control.Concurrent.STM                      as STM
 import qualified Control.Monad.Trans.Control                 as MC
@@ -23,13 +32,11 @@ import qualified Data.Text.Encoding                          as TE
 import qualified Data.Time.Clock                             as TC
 import qualified Database.PG.Query                           as Q
 import qualified Language.GraphQL.Draft.Syntax               as G
+import qualified ListT
 import qualified Network.HTTP.Client                         as H
 import qualified Network.HTTP.Types                          as H
 import qualified Network.WebSockets                          as WS
 import qualified StmContainers.Map                           as STMMap
-
-import           Control.Concurrent.Extended                 (sleep)
-import qualified ListT
 
 import           Hasura.EncJSON
 import           Hasura.GraphQL.Transport.HTTP.Protocol
@@ -53,7 +60,12 @@ import qualified Hasura.GraphQL.Transport.WebSocket.Server   as WS
 import qualified Hasura.Logging                              as L
 import qualified Hasura.Server.Telemetry.Counters            as Telem
 
-
+-- | 'LQ.LiveQueryId' comes from 'Hasura.GraphQL.Execute.LiveQuery.State.addLiveQuery'. We use
+-- this to track a connection's operations so we can remove them from 'LiveQueryState', and
+-- log.
+--
+-- NOTE!: This must be kept consistent with the global 'LiveQueryState', in 'onClose'
+-- and 'onStart'.
 type OperationMap
   = STMMap.Map OperationId (LQ.LiveQueryId, Maybe OperationName)
 
@@ -81,7 +93,7 @@ data WsClientState
 data WSConnState
   -- headers from the client for websockets
   = CSNotInitialised !WsHeaders !IpAddress
-  | CSInitError Text
+  | CSInitError !Text
   -- headers from the client (in conn params) to forward to the remote schema
   -- and JWT expiry time if any
   | CSInitialised !WsClientState
@@ -110,9 +122,9 @@ sendMsgWithMetadata wsConn msg (LQ.LiveQueryMetadata execTime) =
   liftIO $ WS.sendMsg wsConn $ WS.WSQueueResponse bs wsInfo
   where
     bs = encodeServerMsg msg
-    wsInfo = Just $ WS.WSEventInfo
-      { WS._wseiQueryExecutionTime = Just $ realToFrac execTime
-      , WS._wseiResponseSize = Just $ BL.length bs
+    wsInfo = Just $! WS.WSEventInfo
+      { WS._wseiQueryExecutionTime = Just $! realToFrac execTime
+      , WS._wseiResponseSize = Just $! BL.length bs
       }
 
 data OpDetail
@@ -191,7 +203,7 @@ data WSServerEnv
   , _wseRunTx           :: !IsPGExecCtx
   , _wseLiveQMap        :: !LQ.LiveQueriesState
   , _wseGCtxMap         :: !(IO (SchemaCache, SchemaCacheVer))
-  -- ^ an action that always returns the latest version of the schema cache
+  -- ^ an action that always returns the latest version of the schema cache. See 'SchemaCacheRef'.
   , _wseHManager        :: !H.Manager
   , _wseCorsPolicy      :: !CorsPolicy
   , _wseSQLCtx          :: !SQLGenCtx
@@ -233,8 +245,7 @@ onConn (L.Logger logger) corsPolicy wsId requestHead ipAddress = do
                   <*> pure errType
       let acceptRequest = WS.defaultAcceptRequest
                           { WS.acceptSubprotocol = Just "graphql-ws"}
-      return $ Right $ WS.AcceptWith connData acceptRequest
-                       (Just keepAliveAction) (Just jwtExpiryHandler)
+      return $ Right $ WS.AcceptWith connData acceptRequest keepAliveAction jwtExpiryHandler
 
     reject qErr = do
       logger $ mkWsErrorLog Nothing (WsConnInfo wsId Nothing Nothing) (ERejected qErr)
@@ -290,6 +301,8 @@ onStart serverEnv wsConn (StartMsg opId q) = catchAndIgnore $ do
   timerTot <- startTimer
   opM <- liftIO $ STM.atomically $ STMMap.lookup opId opMap
 
+  -- NOTE: it should be safe to rely on this check later on in this function, since we expect that
+  -- we process all operations on a websocket connection serially:
   when (isJust opM) $ withComplete $ sendStartErr $
     "an operation already exists with this id: " <> unOperationId opId
 
@@ -334,19 +347,16 @@ onStart serverEnv wsConn (StartMsg opId q) = catchAndIgnore $ do
         logQuery logger query Nothing reqId
         let wsId = WS.getWSId wsConn
             uniqSubId = LQ.UniqueSubscriberId wsId opId
-        lqId <- liftIO $ LQ.addLiveQuery logger uniqSubId lqMap lqOp liveQOnChange
+        -- NOTE!: we mask async exceptions higher in the call stack, but it's
+        -- crucial we don't lose lqId after addLiveQuery returns successfully.
+        !lqId <- liftIO $ LQ.addLiveQuery logger uniqSubId lqMap lqOp liveQOnChange
+        let !opName = _grOperationName q
+        liftIO $ $assertNFHere $! (lqId, opName)  -- so we don't write thunks to mutable vars
+
         liftIO $ STM.atomically $
-          STMMap.insert (lqId, _grOperationName q) opId opMap
+          -- NOTE: see crucial `lookup` check above, ensuring this doesn't clobber:
+          STMMap.insert (lqId, opName) opId opMap
         logOpEv ODStarted (Just reqId)
--- <<<<<<< HEAD
-    -- execQueryOrMut reqId query genSql action = do
-    --   logOpEv ODStarted (Just reqId)
-    --   -- log the generated SQL and the graphql query
-    --   L.unLogger logger $ QueryLog query genSql reqId
-    --   (dt, resp) <- withElapsedTime $ liftIO $ runExceptT action
-    --   let lqMeta = LQ.LiveQueryMetadata dt
-    --   either (postExecErr reqId) (`sendSuccResp` lqMeta) resp
-    --   sendCompleted (Just reqId)
 
       where
         runLazyTx' = bool runLazyROTx' runLazyRWTx' $ txAccess == Q.ReadWrite
@@ -365,7 +375,6 @@ onStart serverEnv wsConn (StartMsg opId q) = catchAndIgnore $ do
               Telem.recordTimingMetric Telem.RequestDimensions{..} Telem.RequestTimings{..}
 
           sendCompleted (Just reqId)
-
 
     runRemoteGQ :: ExceptT () m DiffTime
                 -> Telem.CacheHit -> E.ExecutionCtx -> RequestId -> UserInfo -> [H.Header]
@@ -484,19 +493,25 @@ onMessage authMode serverEnv wsConn msgRaw =
                            wsConn authMode params
       CMStart startMsg  -> onStart serverEnv wsConn startMsg
       CMStop stopMsg    -> liftIO $ onStop serverEnv wsConn stopMsg
+      -- The idea is cleanup will be handled by 'onClose', but...
+      -- NOTE: we need to close the websocket connection when we receive the
+      -- CMConnTerm message and calling WS.closeConn will definitely throw an
+      -- exception, but I'm not sure if 'closeConn' is the correct thing here....
       CMConnTerm        -> liftIO $ WS.closeConn wsConn "GQL_CONNECTION_TERMINATE received"
   where
     logger = _wseLogger serverEnv
 
 onStop :: WSServerEnv -> WSConn -> StopMsg -> IO ()
 onStop serverEnv wsConn (StopMsg opId) = do
-  -- probably wrap the whole thing in a single tx?
   opM <- liftIO $ STM.atomically $ STMMap.lookup opId opMap
   case opM of
     Just (lqId, opNameM) -> do
       logWSEvent logger wsConn $ EOperation $ opDet opNameM
-      LQ.removeLiveQuery lqMap lqId
-    Nothing    -> return ()
+      LQ.removeLiveQuery logger lqMap lqId
+    Nothing    ->
+      L.unLogger logger $ L.UnstructuredLog L.LevelError $ fromString $
+        "Received STOP for an operation "<>(show opId)<>" we have no record for. "<>
+        "this could be a misbehaving client or a bug"
   STM.atomically $ STMMap.delete opId opMap
   where
     logger = _wseLogger serverEnv
@@ -542,15 +557,22 @@ onConnInit logger manager wsConn authMode connParamsM = do
       let headers = mkHeaders connState
       res <- resolveUserInfo logger manager headers authMode
       case res of
-        Left e  -> do
-          liftIO $ STM.atomically $ STM.writeTVar (_wscUser $ WS.getData wsConn) $
-            CSInitError $ qeError e
+        Left e -> do
+          let !initErr = CSInitError $ qeError e
+          liftIO $ do
+            $assertNFHere initErr  -- so we don't write thunks to mutable vars
+            STM.atomically $ STM.writeTVar (_wscUser $ WS.getData wsConn) initErr
+
           let connErr = ConnErrMsg $ qeError e
           logWSEvent logger wsConn $ EConnErr connErr
           sendMsg wsConn $ SMConnErr connErr
+
         Right (userInfo, expTimeM) -> do
-          liftIO $ STM.atomically $ STM.writeTVar (_wscUser $ WS.getData wsConn) $
-            CSInitialised $ WsClientState userInfo expTimeM paramHeaders ipAddress
+          let !csInit = CSInitialised $ WsClientState userInfo expTimeM paramHeaders ipAddress
+          liftIO $ do
+            $assertNFHere csInit  -- so we don't write thunks to mutable vars
+            STM.atomically $ STM.writeTVar (_wscUser $ WS.getData wsConn) csInit
+
           sendMsg wsConn SMConnAck
           -- TODO: send it periodically? Why doesn't apollo's protocol use
           -- ping/pong frames of websocket spec?
@@ -587,8 +609,8 @@ onClose
 onClose logger lqMap wsConn = do
   logWSEvent logger wsConn EClosed
   operations <- liftIO $ STM.atomically $ ListT.toList $ STMMap.listT opMap
-  void $ liftIO $ A.forConcurrently operations $ \(_, (lqId, _)) ->
-    LQ.removeLiveQuery lqMap lqId
+  liftIO $ for_ operations $ \(_, (lqId, _)) ->
+    LQ.removeLiveQuery logger lqMap lqId
   where
     opMap = _wscOpMap $ WS.getData wsConn
 
@@ -623,14 +645,15 @@ createWSServerApp
   => AuthMode
   -> WSServerEnv
   -> WS.HasuraServerApp m
-createWSServerApp authMode serverEnv =
-  WS.createServerApp (_wseServer serverEnv) handlers
+createWSServerApp authMode serverEnv = \ !ipAddress !pendingConn ->
+  WS.createServerApp (_wseServer serverEnv) handlers ipAddress pendingConn
   where
     handlers =
       WS.WSHandlers
-      (onConn (_wseLogger serverEnv) (_wseCorsPolicy serverEnv))
-      (onMessage authMode serverEnv)
-      (onClose (_wseLogger serverEnv) $ _wseLiveQMap serverEnv)
+      -- Mask async exceptions during event processing to help maintain integrity of mutable vars:
+      (\rid rh ip -> mask_ $ onConn (_wseLogger serverEnv) (_wseCorsPolicy serverEnv) rid rh ip)
+      (\conn bs -> mask_ $ onMessage authMode serverEnv conn bs)
+      (\conn ->    mask_ $ onClose (_wseLogger serverEnv) (_wseLiveQMap serverEnv) conn)
 
 stopWSServerApp :: WSServerEnv -> IO ()
 stopWSServerApp wsEnv = WS.shutdown (_wseServer wsEnv)
