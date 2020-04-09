@@ -492,7 +492,7 @@ pollQuery logger pollerId metrics lqOpts isPgCtx pgQuery handler = do
     getCohortOperations cohortSnapshotMap actionMeta = \case
       Left e ->
         -- TODO: this is internal error
-        let resp = GQExecError [encodeGQErr False e]
+        let resp = GQExecError [encodeGQLErr False e]
         in [ (resp, (cId, Nothing), Nothing, actionMeta, snapshot)
            | (cId, snapshot) <- Map.toList cohortSnapshotMap
            ]
