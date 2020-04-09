@@ -27,9 +27,6 @@ import           Hasura.EncJSON
 import           Hasura.GraphQL.Transport.HTTP.Protocol
 import           Hasura.Prelude
 import           Hasura.RQL.Types
-import           Hasura.Server.Utils
-
-import qualified Hasura.Logging                         as L
 
 -- | These come from the client and are websocket connection-local.
 newtype OperationId
