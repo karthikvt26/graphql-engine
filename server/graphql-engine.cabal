@@ -253,6 +253,7 @@ library
                      , Hasura.RQL.DDL.Schema.Cache
 
                      , Data.Aeson.Ordered
+                     , Data.TByteString
 
   other-modules:       Hasura.Incremental.Select
                      , Hasura.Incremental.Internal.Cache
@@ -368,7 +369,6 @@ library
                      , Data.HashMap.Strict.InsOrd.Extended
                      , Data.Parser.JSONPath
                      , Data.Sequence.NonEmpty
-                     , Data.TByteString
                      , Data.Text.Extended
 
                      , Hasura.SQL.DML
