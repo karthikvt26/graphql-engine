@@ -6,7 +6,9 @@ module Hasura.GraphQL.Transport.WebSocket.Protocol
   , StopMsg(..)
   , ClientMsg(..)
   , ServerMsg(..)
+  , ServerMsgType(..)
   , encodeServerMsg
+  , serverMsgType
   , DataMsg(..)
   , ErrorMsg(..)
   , ConnErrMsg(..)
@@ -18,10 +20,16 @@ import qualified Data.Aeson.Casing                      as J
 import qualified Data.Aeson.TH                          as J
 import qualified Data.ByteString.Lazy                   as BL
 import qualified Data.HashMap.Strict                    as Map
+import qualified Data.Time.Clock                        as TC
+import qualified Data.UUID                              as UUID
 
 import           Hasura.EncJSON
 import           Hasura.GraphQL.Transport.HTTP.Protocol
 import           Hasura.Prelude
+import           Hasura.RQL.Types
+import           Hasura.Server.Utils
+
+import qualified Hasura.Logging                         as L
 
 -- | These come from the client and are websocket connection-local.
 newtype OperationId
@@ -113,6 +121,14 @@ instance Show ServerMsgType where
 
 instance J.ToJSON ServerMsgType where
   toJSON = J.toJSON . show
+
+serverMsgType :: ServerMsg -> ServerMsgType
+serverMsgType SMConnAck       = SMT_GQL_CONNECTION_ACK
+serverMsgType SMConnKeepAlive = SMT_GQL_CONNECTION_KEEP_ALIVE
+serverMsgType (SMConnErr _)   = SMT_GQL_CONNECTION_ERROR
+serverMsgType (SMData _)      = SMT_GQL_DATA
+serverMsgType (SMErr _)       = SMT_GQL_ERROR
+serverMsgType (SMComplete _)  = SMT_GQL_COMPLETE
 
 encodeServerMsg :: ServerMsg -> BL.ByteString
 encodeServerMsg msg =

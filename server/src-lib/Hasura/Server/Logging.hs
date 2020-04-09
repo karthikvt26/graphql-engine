@@ -21,16 +21,16 @@ module Hasura.Server.Logging
 import           Data.Aeson
 import           Data.Aeson.Casing
 import           Data.Aeson.TH
-import           Data.Int                               (Int64)
+import           Data.Int                                    (Int64)
 import           Data.Time.Clock
 
-import qualified Data.ByteString.Lazy                   as BL
-import qualified Data.Text                              as T
-import qualified Network.HTTP.Types                     as HTTP
-import qualified Network.Wai                            as Wai
+import qualified Data.ByteString.Lazy                        as BL
+import qualified Data.Text                                   as T
+import qualified Network.HTTP.Types                          as HTTP
+import qualified Network.Wai                                 as Wai
 
-import           Hasura.GraphQL.Execute.Query           (GeneratedSqlMap)
-import           Hasura.GraphQL.Transport.HTTP.Protocol (GQLReqUnparsed)
+import           Hasura.GraphQL.Execute.Query                (GeneratedSqlMap)
+import           Hasura.GraphQL.Transport.HTTP.Protocol      (GQLReqUnparsed)
 import           Hasura.HTTP
 import           Hasura.Logging
 import           Hasura.Prelude

@@ -238,6 +238,8 @@ library
                      , Hasura.GraphQL.Execute.LiveQuery
                      , Hasura.GraphQL.Validate
                      , Hasura.GraphQL.Transport.HTTP
+                     , Hasura.GraphQL.Transport.WebSocket.Protocol
+                     , Hasura.GraphQL.Transport.WebSocket.Server
 
                      , Hasura.RQL.Types
                      , Hasura.RQL.Types.Run
@@ -319,8 +321,6 @@ library
                      , Hasura.RQL.GBoolExp
 
                      , Hasura.GraphQL.Transport.HTTP.Protocol
-                     , Hasura.GraphQL.Transport.WebSocket.Protocol
-                     , Hasura.GraphQL.Transport.WebSocket.Server
                      , Hasura.GraphQL.Transport.WebSocket
                      , Hasura.GraphQL.Schema.BoolExp
                      , Hasura.GraphQL.Schema.Common

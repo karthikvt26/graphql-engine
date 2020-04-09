@@ -3,7 +3,8 @@
 
 module Hasura.GraphQL.Transport.WebSocket.Server
   ( WSId(..)
-
+  , WSLog(..)
+  , WSServerLogger(..)
   , WSConn
   , getData
   , getWSId
@@ -26,32 +27,32 @@ module Hasura.GraphQL.Transport.WebSocket.Server
   , shutdown
   ) where
 
-import           Control.Exception.Lifted             (try)
-import           Data.Word                            (Word16)
+import           Data.Word                                   (Word16)
 import           GHC.AssertNF
-import           GHC.Int                              (Int64)
+import           GHC.Int                                     (Int64)
 
+import           Hasura.GraphQL.Transport.WebSocket.Protocol (OperationId, ServerMsgType)
 import           Hasura.Prelude
-import           Hasura.Server.Utils                  (IpAddress (..))
+import           Hasura.Server.Utils                         (IpAddress (..))
 
-import qualified Control.Concurrent.Async             as A
-import qualified Control.Concurrent.Async.Lifted.Safe as LA
-import qualified Control.Concurrent.STM               as STM
+import qualified Control.Concurrent.Async                    as A
+import qualified Control.Concurrent.Async.Lifted.Safe        as LA
+import qualified Control.Concurrent.STM                      as STM
 import           Control.Exception.Lifted
-import qualified Control.Monad.Trans.Control          as MC
-import qualified Data.Aeson                           as J
-import qualified Data.Aeson.Casing                    as J
-import qualified Data.Aeson.TH                        as J
-import qualified Data.ByteString.Lazy                 as BL
+import qualified Control.Monad.Trans.Control                 as MC
+import qualified Data.Aeson                                  as J
+import qualified Data.Aeson.Casing                           as J
+import qualified Data.Aeson.TH                               as J
+import qualified Data.ByteString.Lazy                        as BL
 import           Data.String
-import qualified Data.TByteString                     as TBS
-import qualified Data.UUID                            as UUID
-import qualified Data.UUID.V4                         as UUID
+import qualified Data.TByteString                            as TBS
+import qualified Data.UUID                                   as UUID
+import qualified Data.UUID.V4                                as UUID
 import qualified ListT
-import qualified Network.WebSockets                   as WS
-import qualified StmContainers.Map                    as STMMap
+import qualified Network.WebSockets                          as WS
+import qualified StmContainers.Map                           as STMMap
 
-import qualified Hasura.Logging                       as L
+import qualified Hasura.Logging                              as L
 
 newtype WSId
   = WSId { unWSId :: UUID.UUID }
@@ -81,7 +82,9 @@ $(J.deriveToJSON
 -- extra websocket event info
 data WSEventInfo
   = WSEventInfo
-  { _wseiQueryExecutionTime :: !(Maybe Double)
+  { _wseiEventType      :: !(Maybe ServerMsgType)
+  , _wseiOperationId        :: !(Maybe OperationId)
+  , _wseiQueryExecutionTime :: !(Maybe Double)
   , _wseiResponseSize       :: !(Maybe Int64)
   } deriving (Show, Eq)
 $(J.deriveToJSON
@@ -106,6 +109,20 @@ $(J.deriveToJSON
 instance L.ToEngineLog WSLog L.Hasura where
   toEngineLog wsLog =
     (L.LevelDebug, L.ELTInternal L.ILTWsServer, J.toJSON wsLog)
+
+class (Monad m) => WSServerLogger m where
+  logWSServer
+    :: L.Logger L.Hasura
+    -- ^ logger
+    -> WSLog
+    -- ^ ws server log data
+    -> m ()
+
+instance WSServerLogger m => WSServerLogger (ExceptT e m) where
+  logWSServer l ws = lift $ logWSServer l ws
+
+instance WSServerLogger m => WSServerLogger (ReaderT r m) where
+  logWSServer l ws = lift $ logWSServer l ws
 
 data WSQueueResponse
   = WSQueueResponse
@@ -220,7 +237,7 @@ data WSHandlers m a
   }
 
 createServerApp
-  :: (MonadIO m, MC.MonadBaseControl IO m, LA.Forall (LA.Pure m))
+  :: (MonadIO m, MC.MonadBaseControl IO m, LA.Forall (LA.Pure m), WSServerLogger m)
   => WSServer a
   -> WSHandlers m a
   -- ^ user provided handlers
@@ -228,7 +245,7 @@ createServerApp
 {-# INLINE createServerApp #-}
 createServerApp (WSServer logger@(L.Logger writeLog) serverStatus) wsHandlers !ipAddress !pendingConn = do
   wsId <- WSId <$> liftIO UUID.nextRandom
-  writeLog $ WSLog wsId EConnectionRequest Nothing
+  logWSServer logger $ WSLog wsId EConnectionRequest Nothing
   status <- liftIO $ STM.readTVarIO serverStatus
   case status of
     AcceptingConns _ -> logUnexpectedExceptions $ do
@@ -255,11 +272,11 @@ createServerApp (WSServer logger@(L.Logger writeLog) serverStatus) wsHandlers !i
 
     onReject wsId rejectRequest = do
       liftIO $ WS.rejectRequestWith pendingConn rejectRequest
-      writeLog $ WSLog wsId ERejected Nothing
+      logWSServer logger $ WSLog wsId ERejected Nothing
 
     onAccept wsId (AcceptWith a acceptWithParams keepAlive onJwtExpiry) = do
       conn  <- liftIO $ WS.acceptRequestWith pendingConn acceptWithParams
-      writeLog $ WSLog wsId EAccepted Nothing
+      logWSServer logger $ WSLog wsId EAccepted Nothing
       sendQ <- liftIO STM.newTQueueIO
       let !wsConn = WSConn wsId logger conn sendQ a
       -- TODO there are many thunks here. Difficult to trace how much is retained, and
@@ -292,13 +309,13 @@ createServerApp (WSServer logger@(L.Logger writeLog) serverStatus) wsHandlers !i
           let rcv = forever $ do
                 -- Process all messages serially (important!), in a separate thread:
                 msg <- liftIO $ WS.receiveData conn
-                writeLog $ WSLog wsId (EMessageReceived $ TBS.fromLBS msg) Nothing
+                logWSServer logger $ WSLog wsId (EMessageReceived $ TBS.fromLBS msg) Nothing
                 _hOnMessage wsHandlers wsConn msg
 
           let send = forever $ do
                 WSQueueResponse msg wsInfo <- liftIO $ STM.atomically $ STM.readTQueue sendQ
                 liftIO $ WS.sendTextData conn msg
-                writeLog $ WSLog wsId (EMessageSent $ TBS.fromLBS msg) wsInfo
+                logWSServer logger $ WSLog wsId (EMessageSent $ TBS.fromLBS msg) wsInfo
 
           -- withAsync lets us be very sure that if e.g. an async exception is raised while we're
           -- forking that the threads we launched will be cleaned up. See also below.
@@ -313,17 +330,17 @@ createServerApp (WSServer logger@(L.Logger writeLog) serverStatus) wsHandlers !i
           -- case of async exceptions raised while blocking here:
           try (LA.waitAnyCancel waitOnRefs) >>= \case
             Left ( _ :: WS.ConnectionException) -> do
-              writeLog $ WSLog (_wcConnId wsConn) ECloseReceived Nothing
+              logWSServer logger $ WSLog (_wcConnId wsConn) ECloseReceived Nothing
             -- this will happen when jwt is expired
             Right _ -> do
-              writeLog $ WSLog (_wcConnId wsConn) EJwtExpired Nothing
+              logWSServer logger $ WSLog (_wcConnId wsConn) EJwtExpired Nothing
 
     onConnClose wsConn = \case
       ShuttingDown -> pure ()
       AcceptingConns connMap -> do
         liftIO $ STM.atomically $ STMMap.delete (_wcConnId wsConn) connMap
         _hOnClose wsHandlers wsConn
-        writeLog $ WSLog (_wcConnId wsConn) EClosed Nothing
+        logWSServer logger $ WSLog (_wcConnId wsConn) EClosed Nothing
 
 
 shutdown :: WSServer a -> IO ()
