@@ -4,6 +4,7 @@
 module Hasura.GraphQL.Transport.WebSocket.Server
   ( WSId(..)
   , WSLog(..)
+  , WSEvent(..)
   , WSServerLogger(..)
   , WSConn
   , getData
