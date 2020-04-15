@@ -33,28 +33,28 @@ module Hasura.GraphQL.Execute.LiveQuery.Poll (
   , LiveQueryMetadata(..)
   ) where
 
-import           Hasura.Prelude
-import           Data.List.Split                          (chunksOf)
+import           Data.List.Split                             (chunksOf)
 import           GHC.AssertNF
+import           Hasura.Prelude
 
+import qualified Control.Concurrent.Async                    as A
+import qualified Control.Concurrent.STM                      as STM
+import qualified Control.Immortal                            as Immortal
+import qualified Crypto.Hash                                 as CH
+import qualified Data.Aeson.Casing                           as J
+import qualified Data.Aeson.Extended                         as J
+import qualified Data.Aeson.TH                               as J
+import qualified Data.ByteString                             as BS
+import qualified Data.ByteString.Lazy                        as BL
+import qualified Data.HashMap.Strict                         as Map
+import qualified Data.Time.Clock                             as Clock
+import qualified Data.UUID                                   as UUID
+import qualified Data.UUID.V4                                as UUID
+import qualified Database.PG.Query                           as Q
+import qualified Language.GraphQL.Draft.Syntax               as G
 import qualified ListT
-import qualified Control.Concurrent.Async                 as A
-import qualified Control.Concurrent.STM                   as STM
-import qualified Control.Immortal                         as Immortal
-import qualified Crypto.Hash                              as CH
-import qualified Data.Aeson.Extended                      as J
-import qualified Data.Aeson.TH                      as J
-import qualified Data.Aeson.Casing                      as J
-import qualified Data.ByteString                          as BS
-import qualified Data.ByteString.Lazy                     as BL
-import qualified Data.HashMap.Strict                      as Map
-import qualified Data.Time.Clock                          as Clock
-import qualified Data.UUID                                as UUID
-import qualified Data.UUID.V4                             as UUID
-import qualified Language.GraphQL.Draft.Syntax            as G
-import qualified StmContainers.Map                        as STMMap
-import qualified System.Metrics.Distribution              as Metrics
-import qualified Database.PG.Query as Q
+import qualified StmContainers.Map                           as STMMap
+import qualified System.Metrics.Distribution                 as Metrics
 
 import           Hasura.Db
 import           Hasura.EncJSON
@@ -63,7 +63,7 @@ import           Hasura.GraphQL.Execute.LiveQuery.Plan
 import           Hasura.GraphQL.Transport.HTTP.Protocol
 import           Hasura.RQL.Types
 
-import qualified Hasura.GraphQL.Execute.LiveQuery.TMap    as TMap
+import qualified Hasura.GraphQL.Execute.LiveQuery.TMap       as TMap
 import qualified Hasura.GraphQL.Transport.WebSocket.Protocol as WS
 import qualified Hasura.GraphQL.Transport.WebSocket.Server   as WS
 import qualified Hasura.Logging                              as L
@@ -170,7 +170,7 @@ mkRespHash = ResponseHash . CH.hash
 -- 'CohortId'; the latter is a completely synthetic key used only to identify the cohort in the
 -- generated SQL query.
 type CohortKey = CohortVariables
--- | This has the invariant, maintained in 'removeLiveQuery', that it contains no 'Cohort' with 
+-- | This has the invariant, maintained in 'removeLiveQuery', that it contains no 'Cohort' with
 -- zero total (existing + new) subscribers.
 type CohortMap = TMap.TMap CohortKey Cohort
 
@@ -259,7 +259,7 @@ data Poller
 data PollerIOState
   = PollerIOState
   { _pThread  :: !(Immortal.Thread)
-  -- ^ a handle on the poller’s worker thread that can be used to 'Immortal.stop' it if all its 
+  -- ^ a handle on the poller’s worker thread that can be used to 'Immortal.stop' it if all its
   -- cohorts stop listening
   , _pMetrics :: !RefetchMetrics
   }
@@ -369,8 +369,11 @@ data PollerLog
   { _plPollerId           :: !PollerId
   -- ^ the unique ID (basically a thread that run as a 'Poller') for the 'Poller'; TODO: is this
   -- practical? do we need to track, potentially, 1000s of poller threads uniquely?
-  , _plSubscribers        :: !(Maybe [(Text, Text)])
-  -- ^ list of (WebsocketConnId, OperationId) to uniquely identify each subscriber
+  -- , _plSubscribers        :: ![UniqueSubscriberId]
+  -- -- ^ list of (WebsocketConnId, OperationId) to uniquely identify each subscriber
+  -- -- ^ REMOVING this because redundant info and extra network bytes
+  , _plSubscriberCount    :: !Int
+  -- ^ count of the above '_plSubscribers' field; convenient for Lux to perform analytics
   , _plCohortSize         :: !Int
   -- ^ how many cohorts (or no of groups of different variables but same query) are there
   , _plCohorts            :: ![SimpleCohort]
@@ -447,9 +450,10 @@ pollQuery logger pollerId metrics lqOpts isPgCtx pgQuery handler = do
       respSizes = concat respSizes'
       simpleCohorts = zipWith3 (\(cId, vars) (_, size) (_, subs) -> SimpleCohort cId vars size subs)
                       queryVars respSizes subscriberWsOpIds
+      allSubscribers = concatMap snd $ subscriberWsOpIds
       pollerLog = PollerLog
                 { _plPollerId = pollerId
-                , _plSubscribers = Nothing
+                , _plSubscriberCount = length allSubscribers
                 , _plCohortSize = length cohorts
                 , _plCohorts = simpleCohorts
                 , _plExecutionBatches = execBatches
