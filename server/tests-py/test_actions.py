@@ -117,6 +117,23 @@ class TestQueryActions:
         assert code == 200,resp
         check_query_f(hge_ctx, self.dir() + '/get_users_by_email_success.yaml')
 
+    # This test is to make sure that query actions work well with variables.
+    # Earlier the HGE used to add the query action to the plan cache, which
+    # results in interrmittent validation errors, like:
+    # {
+    #   "errors": [
+    #     {
+    #       "extensions": {
+    #         "path": "$.variableValues",
+    #         "code": "validation-failed"
+    #       },
+    #       "message": "unexpected variables: email"
+    #     }
+    #   ]
+    # }
+    def test_query_action_should_not_throw_validation_error(self, hge_ctx):
+        for _ in range(25):
+            self.test_query_action_success_output_object(hge_ctx)
 
 def mk_headers_with_secret(hge_ctx, headers={}):
     admin_secret = hge_ctx.hge_key
@@ -171,7 +188,6 @@ class TestActionsAsync:
         assert status == 200, resp
         assert 'data' in resp
         action_id = resp['data']['create_user']
-        time.sleep(3)
 
         query_async = '''
         query ($action_id: uuid!){
@@ -206,7 +222,7 @@ class TestActionsAsync:
             'status': 200,
             'response': response
         }
-        check_query(hge_ctx, conf)
+        check_query_timeout(hge_ctx, conf, True, 10)
 
     def test_create_user_success(self, hge_ctx):
         graphql_mutation = '''
@@ -222,7 +238,6 @@ class TestActionsAsync:
         assert status == 200, resp
         assert 'data' in resp
         action_id = resp['data']['create_user']
-        time.sleep(3)
 
         query_async = '''
         query ($action_id: uuid!){
@@ -273,7 +288,7 @@ class TestActionsAsync:
             'status': 200,
             'response': response
         }
-        check_query(hge_ctx, conf)
+        check_query_timeout(hge_ctx, conf, True, 10)
 
     def test_create_user_roles(self, hge_ctx):
         graphql_mutation = '''
@@ -294,7 +309,6 @@ class TestActionsAsync:
         assert status == 200, resp
         assert 'data' in resp
         action_id = resp['data']['create_user']
-        time.sleep(3)
 
         query_async = '''
         query ($action_id: uuid!){
@@ -330,7 +344,7 @@ class TestActionsAsync:
         }
         # Query the action as user-id 2
         # Make request without auth using admin_secret
-        check_query(hge_ctx, conf_user_2, add_auth = False)
+        check_query_timeout(hge_ctx, conf_user_2, add_auth = False, timeout = 10)
 
         conf_user_1 = {
             'url': '/v1/graphql',
@@ -350,7 +364,20 @@ class TestActionsAsync:
         }
         # Query the action as user-id 1
         # Make request without auth using admin_secret
-        check_query(hge_ctx, conf_user_1, add_auth = False)
+        check_query_timeout(hge_ctx, conf_user_1, add_auth = False, timeout = 10)
+
+def check_query_timeout(hge_ctx, conf, add_auth, timeout):
+    wait_until = time.time() + timeout
+    while True:
+        time.sleep(2)
+        try:
+            check_query(hge_ctx, conf, add_auth = add_auth)
+        except AssertionError:
+            if time.time() > wait_until:
+                raise
+            else:
+                continue
+        break
 
 @pytest.mark.usefixtures('per_class_tests_db_state')
 class TestSetCustomTypes:
@@ -359,11 +386,24 @@ class TestSetCustomTypes:
     def dir(cls):
         return 'queries/actions/custom-types'
 
-    def test_resuse_pgscalars(self, hge_ctx):
+    def test_reuse_pgscalars(self, hge_ctx):
         check_query_f(hge_ctx, self.dir() + '/reuse_pgscalars.yaml')
 
-    def test_resuse_unknown_pgscalar(self, hge_ctx):
+    def test_reuse_unknown_pgscalar(self, hge_ctx):
         check_query_f(hge_ctx, self.dir() + '/reuse_unknown_pgscalar.yaml')
 
     def test_create_action_pg_scalar(self, hge_ctx):
         check_query_f(hge_ctx, self.dir() + '/create_action_pg_scalar.yaml')
+
+    def test_list_type_relationship(self, hge_ctx):
+        check_query_f(hge_ctx, self.dir() + '/list_type_relationship.yaml')
+
+@pytest.mark.usefixtures('per_class_tests_db_state')
+class TestActionsMetadata:
+
+    @classmethod
+    def dir(cls):
+        return 'queries/actions/metadata'
+
+    def test_recreate_permission(self, hge_ctx):
+        check_query_f(hge_ctx, self.dir() + '/recreate_permission.yaml')
