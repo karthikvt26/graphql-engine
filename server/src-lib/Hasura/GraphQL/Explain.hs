@@ -141,7 +141,5 @@ explainGQLQuery isPgCtx sc sqlGenCtx enableAL actionExecuter (GQLExplain query u
       (plan, _) <- E.getSubsOp isPgCtx gCtx sqlGenCtx userInfo queryReusability actionExecuter rootField
       runInTx txAccess $ encJFromJValue <$> E.explainLiveQueryPlan plan
   where
-    usrVars = mkUserVars $ maybe [] Map.toList userVarsRaw
-    userInfo = mkUserInfo (fromMaybe adminRole $ roleFromVars usrVars) usrVars
     runInTx txAccess = liftEither <=< liftIO . runExceptT . runLazyTx txAccess isPgCtx
     sessionVariables = mkSessionVariablesText $ maybe [] Map.toList userVarsRaw

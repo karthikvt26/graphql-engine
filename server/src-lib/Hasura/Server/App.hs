@@ -29,7 +29,6 @@ import           Control.Concurrent.MVar.Lifted
 -- import qualified Network.HTTP.Client                       as HTTP
 -- import qualified Network.HTTP.Types                        as HTTP
 -- import qualified Network.Wai                               as Wai
--- import qualified Network.Wai.Handler.WebSockets.Custom     as WSC
 -- import qualified Network.WebSockets                        as WS
 -- import qualified System.Metrics                            as EKG
 -- import qualified System.Metrics.Json                       as EKG
@@ -76,7 +75,8 @@ import qualified Database.PG.Query                      as Q
 import qualified Network.HTTP.Client                    as HTTP
 import qualified Network.HTTP.Types                     as HTTP
 import qualified Network.Wai                            as Wai
-import qualified Network.Wai.Handler.WebSockets         as WS
+-- import qualified Network.Wai.Handler.WebSockets         as WS
+import qualified Network.Wai.Handler.WebSockets.Custom     as WSC
 import qualified Network.WebSockets                     as WS
 import qualified System.Metrics                         as EKG
 import qualified System.Metrics.Json                    as EKG
@@ -115,6 +115,7 @@ import           Hasura.SQL.Types
 -- import qualified Hasura.Logging                            as L
 -- import qualified Hasura.Server.PGDump                      as PGD
 -- =======
+import qualified Hasura.GraphQL.Transport.WebSocket.Server as WS
 import qualified Hasura.GraphQL.Execute                 as E
 import qualified Hasura.GraphQL.Execute.LiveQuery       as EL
 import qualified Hasura.GraphQL.Explain                 as GE
@@ -302,7 +303,7 @@ mkSpockAction serverCtx qErrEncoder qErrModifier apiHandler = do
     let handlerState = HandlerCtx serverCtx userInfo headers ipAddress requestId
         includeInternal = shouldIncludeInternal (_uiRole userInfo) $
                           scResponseInternalErrorsConfig serverCtx
-        curRole = userRole userInfo
+        -- curRole = userRole userInfo
 
     (serviceTime, (result, q)) <- withElapsedTime $ case apiHandler of
       AHGet handler -> do
@@ -523,7 +524,7 @@ configApiGetHandler serverCtx =
                   (scAuthMode serverCtx)
                   (scEnableAllowlist serverCtx)
                   (EL._lqsOptions $ scLQState serverCtx)
-      return $ JSONResp $ HttpResponse res Nothing
+      return $ JSONResp $ HttpResponse res []
 
 initErrExit :: QErr -> IO a
 initErrExit e = do
@@ -674,10 +675,10 @@ mkWaiApp logger sqlGenCtx enableAL isPgCtx ci httpManager mode corsCfg enableCon
         -- planCache <- liftIO $ E.initPlanCache planCacheOptions
 
       let isPgSerCtx = withTxIsolation Q.Serializable isPgCtx
-          pgExecCtx = PGExecCtx pool Q.Serializable
+          -- pgExecCtx = PGExecCtx isPgCtx Q.Serializable
           adminRunCtx = RunCtx adminUserInfo httpManager sqlGenCtx
       currentTime <- liftIO getCurrentTime
-      initialiseResult <- runExceptT $ peelRun adminRunCtx isPgSerCtx Q.ReadWrite do
+      initialiseResult <- runExceptT $ peelRun adminRunCtx isPgSerCtx (runLazyTx Q.ReadWrite) do
         (,) <$> migrateCatalog currentTime <*> liftTx fetchLastUpdate
 
       ((migrationResult, schemaCache), lastUpdateEvent) <-

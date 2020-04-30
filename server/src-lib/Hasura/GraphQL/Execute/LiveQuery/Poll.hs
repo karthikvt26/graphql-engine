@@ -38,43 +38,43 @@ import           GHC.AssertNF
 import           Hasura.Prelude
 
 import qualified Control.Concurrent.Async                    as A
+import qualified Control.Concurrent.Async                    as A
+import qualified Control.Concurrent.STM                      as STM
 import qualified Control.Concurrent.STM                      as STM
 import qualified Control.Immortal                            as Immortal
+import qualified Control.Immortal                            as Immortal
+import qualified Crypto.Hash                                 as CH
 import qualified Crypto.Hash                                 as CH
 import qualified Data.Aeson.Casing                           as J
 import qualified Data.Aeson.Extended                         as J
+import qualified Data.Aeson.Extended                         as J
 import qualified Data.Aeson.TH                               as J
 import qualified Data.ByteString                             as BS
+import qualified Data.ByteString                             as BS
+import qualified Data.ByteString.Lazy                        as BL
 import qualified Data.ByteString.Lazy                        as BL
 import qualified Data.HashMap.Strict                         as Map
+import qualified Data.HashMap.Strict                         as Map
+import qualified Data.Time.Clock                             as Clock
 import qualified Data.Time.Clock                             as Clock
 import qualified Data.UUID                                   as UUID
+import qualified Data.UUID                                   as UUID
+import qualified Data.UUID.V4                                as UUID
 import qualified Data.UUID.V4                                as UUID
 import qualified Database.PG.Query                           as Q
 import qualified Language.GraphQL.Draft.Syntax               as G
+import qualified Language.GraphQL.Draft.Syntax               as G
+import qualified ListT
 import qualified ListT
 import qualified StmContainers.Map                           as STMMap
+import qualified StmContainers.Map                           as STMMap
 import qualified System.Metrics.Distribution                 as Metrics
-import qualified Control.Concurrent.Async                 as A
-import qualified Control.Concurrent.STM                   as STM
-import qualified Control.Immortal                         as Immortal
-import qualified Crypto.Hash                              as CH
-import qualified Data.Aeson.Extended                      as J
-import qualified Data.ByteString                          as BS
-import qualified Data.ByteString.Lazy                     as BL
-import qualified Data.HashMap.Strict                      as Map
-import qualified Data.Time.Clock                          as Clock
-import qualified Data.UUID                                as UUID
-import qualified Data.UUID.V4                             as UUID
-import qualified Language.GraphQL.Draft.Syntax            as G
-import qualified ListT
-import qualified StmContainers.Map                        as STMMap
-import qualified System.Metrics.Distribution              as Metrics
+import qualified System.Metrics.Distribution                 as Metrics
 
-import           Data.List.Split                          (chunksOf)
+import           Data.List.Split                             (chunksOf)
 import           GHC.AssertNF
 
-import qualified Hasura.GraphQL.Execute.LiveQuery.TMap    as TMap
+import qualified Hasura.GraphQL.Execute.LiveQuery.TMap       as TMap
 
 import           Hasura.Db
 import           Hasura.EncJSON
@@ -506,8 +506,6 @@ pollQuery logger pollerId metrics lqOpts isPgCtx pgQuery handler = do
       (dt, a) <- withElapsedTime m
       Metrics.add (f metrics) $ realToFrac dt
       return (dt, a)
-
-    Poller cohortMap _ = handler
 
     Poller cohortMap _ = handler
     LiveQueriesOptions batchSize _ = lqOpts

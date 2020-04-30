@@ -258,7 +258,6 @@ library
                      , Hasura.GraphQL.Logging
                      -- required for buildRebuildableSchemaCache and runCacheRWT to be exposed
                      , Hasura.RQL.DDL.Schema.Cache
-                     , Hasura.EncJSON
                      , Hasura.Session
 
                      , Data.Aeson.Ordered

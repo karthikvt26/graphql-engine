@@ -87,7 +87,6 @@ import           Hasura.Server.CheckUpdates                (checkForUpdates)
 import           Hasura.Server.Init
 import           Hasura.Server.Logging
 import           Hasura.Server.Migrate                     (migrateCatalog)
-import           Hasura.Server.Query                       (requiresAdmin, runQueryM)
 import           Hasura.Server.SchemaUpdate
 import           Hasura.Server.Telemetry
 import           Hasura.Server.Version
@@ -148,6 +147,7 @@ data InitCtx
   = InitCtx
   { _icHttpManager :: !HTTP.Manager
   , _icInstanceId  :: !InstanceId
+  -- , _icDbUid       :: !Text
   , _icLoggers     :: !Loggers
   , _icConnInfo    :: !Q.ConnInfo
   , _icPgExecCtx   :: !IsPGExecCtx
@@ -203,10 +203,10 @@ initialiseCtx hgeCmd rci = do
       return (l, pool, mkIsPgCtx pool Q.Serializable)
 
   -- get the unique db id
-  eDbId <- liftIO $ runExceptT $ Q.runTx pool (Q.Serializable, Nothing) getDbId
-  dbId <- either printErrJExit return eDbId
+  -- eDbId <- liftIO $ runExceptT $ Q.runTx pool (Q.Serializable, Nothing) getDbId
+  -- dbId <- either printErrJExit return eDbId
 
-  return (InitCtx httpManager instanceId dbId loggers connInfo isPGCtx, initTime)
+  return (InitCtx httpManager instanceId loggers connInfo isPGCtx, initTime)
   where
     mkIsPgCtx pool txIso = IsPGExecCtx (const $ pure $ PGExecCtx pool txIso) [pool]
     procConnInfo =
@@ -223,9 +223,9 @@ initialiseCtx hgeCmd rci = do
       return $ Loggers loggerCtx logger pgLogger
 
 -- | Run a transaction and if an error is encountered, log the error and abort the program
-runTxIO :: Q.PGPool -> Q.TxMode -> Q.TxE QErr a -> IO a
+runTxIO :: IsPGExecCtx -> Q.TxAccess -> Q.TxE QErr a -> IO a
 runTxIO pool isoLevel tx = do
-  eVal <- liftIO $ runExceptT $ Q.runTx pool isoLevel tx
+  eVal <- liftIO $ runExceptT $ runLazyTx isoLevel pool $ liftTx tx
   either printErrJExit return eVal
 
 runHGEServer
@@ -264,11 +264,10 @@ runHGEServer ServeOptions{..} InitCtx{..} initTime = do
   authMode <- either (printErrExit . T.unpack) return authModeRes
 
   HasuraApp app cacheRef cacheInitTime shutdownApp <-
-    mkWaiApp soTxIso
-             logger
+    mkWaiApp logger
              sqlGenCtx
              soEnableAllowlist
-             _icPgPool
+             _icPgExecCtx
              _icConnInfo
              _icHttpManager
              authMode
@@ -308,7 +307,7 @@ runHGEServer ServeOptions{..} InitCtx{..} initTime = do
 
   -- start a backgroud thread to handle async actions
   _asyncActionsThread <- C.forkImmortal "asyncActionsProcessor" logger $ liftIO $
-    asyncActionsProcessor (_scrCache cacheRef) _icPgPool _icHttpManager
+    asyncActionsProcessor (_scrCache cacheRef) _icPgExecCtx _icHttpManager
 
   -- start a background thread to check for updates
   _updateThread <- C.forkImmortal "checkForUpdates" logger $ liftIO $
@@ -317,8 +316,12 @@ runHGEServer ServeOptions{..} InitCtx{..} initTime = do
   -- start a background thread for telemetry
   when soEnableTelemetry $ do
     unLogger logger $ mkGenericStrLog LevelInfo "telemetry" telemetryNotice
+
+    (dbId, pgVersion) <- liftIO $ runTxIO _icPgExecCtx Q.ReadOnly $
+      (,) <$> getDbId <*> getPgVersion
+
     void $ C.forkImmortal "runTelemetry" logger $ liftIO $
-      runTelemetry logger _icHttpManager (getSCFromRef cacheRef) _icDbUid _icInstanceId
+      runTelemetry logger _icHttpManager (getSCFromRef cacheRef) dbId _icInstanceId pgVersion
 -- =======
 --     (dbId, pgVersion) <- liftIO $ runTxIO _icPgPool (Q.ReadCommitted, Nothing) $
 --       (,) <$> getDbId <*> getPgVersion
@@ -333,7 +336,7 @@ runHGEServer ServeOptions{..} InitCtx{..} initTime = do
   let warpSettings = Warp.setPort soPort
                      . Warp.setHost soHost
                      . Warp.setGracefulShutdownTimeout (Just 30) -- 30s graceful shutdown
-                     . Warp.setInstallShutdownHandler (shutdownHandler logger shutdownApp eventEngineCtx _icPgPool)
+                     . Warp.setInstallShutdownHandler (shutdownHandler logger shutdownApp eventEngineCtx _icPgExecCtx)
                      $ Warp.defaultSettings
   liftIO $ Warp.runSettings warpSettings app
 
@@ -349,9 +352,9 @@ runHGEServer ServeOptions{..} InitCtx{..} initTime = do
     -- There is another hasura instance which is processing events and
     -- it will lock events to process them.
     -- So, unlocking all the locked events might re-deliver an event(due to #2).
-    prepareEvents pool (Logger logger) = do
+    prepareEvents isPgCtx (Logger logger) = do
       liftIO $ logger $ mkGenericStrLog LevelInfo "event_triggers" "preparing data"
-      res <- runExceptT $ runLazyTx Q.ReadCommitted isPGCtx $ liftTx unlockAllEvents
+      res <- runExceptT $ runLazyTx Q.ReadWrite isPgCtx $ liftTx unlockAllEvents
       either printErrJExit return res
 
     -- | shutdownEvents will be triggered when a graceful shutdown has been inititiated, it will
@@ -359,13 +362,13 @@ runHGEServer ServeOptions{..} InitCtx{..} initTime = do
     -- It may happen that an event may be processed more than one time, an event that has been already
     -- processed but not been marked as delivered in the db will be unlocked by `shutdownEvents`
     -- and will be processed when the events are proccessed next time.
-    shutdownEvents :: Q.PGPool -> Logger Hasura -> EventEngineCtx -> IO ()
+    shutdownEvents :: IsPGExecCtx -> Logger Hasura -> EventEngineCtx -> IO ()
     shutdownEvents pool (Logger logger) EventEngineCtx {..} = do
       liftIO $ logger $ mkGenericStrLog LevelInfo "event_triggers" "unlocking events that are locked by the HGE"
       lockedEvents <- readTVarIO _eeCtxLockedEvents
       liftIO $ do
         when (not $ Set.null $ lockedEvents) $ do
-          res <- runTx pool (Q.ReadCommitted, Nothing) (unlockEvents $ toList lockedEvents)
+          res <- runTx pool Q.ReadWrite (unlockEvents $ toList lockedEvents)
           case res of
             Left err -> logger $ mkGenericStrLog
                          LevelWarn "event_triggers" ("Error in unlocking the events " ++ (show err))
@@ -381,16 +384,16 @@ runHGEServer ServeOptions{..} InitCtx{..} initTime = do
           eRes = maybe (Left $ "Wrong expected type for environment variable: " <> env) Right mRes
       either printErrExit return eRes
 
-    runTx :: Q.PGPool -> Q.TxMode -> Q.TxE QErr a -> IO (Either QErr a)
+    runTx :: IsPGExecCtx -> Q.TxAccess -> Q.TxE QErr a -> IO (Either QErr a)
     runTx pool txLevel tx =
-      liftIO $ runExceptT $ Q.runTx pool txLevel tx
+      liftIO $ runExceptT $ runLazyTx txLevel pool $ liftTx tx
 
     -- | Catches the SIGTERM signal and initiates a graceful shutdown. Graceful shutdown for regular HTTP
     -- requests is already implemented in Warp, and is triggered by invoking the 'closeSocket' callback.
     -- We only catch the SIGTERM signal once, that is, if we catch another SIGTERM signal then the process
     -- is terminated immediately.
     -- If the user hits CTRL-C (SIGINT), then the process is terminated immediately
-    shutdownHandler :: Logger Hasura -> IO () -> EventEngineCtx -> Q.PGPool -> IO () -> IO ()
+    shutdownHandler :: Logger Hasura -> IO () -> EventEngineCtx -> IsPGExecCtx -> IO () -> IO ()
     shutdownHandler (Logger logger) shutdownApp eeCtx pool closeSocket =
       void $ Signals.installHandler
         Signals.sigTERM

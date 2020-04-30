@@ -47,7 +47,6 @@ import           Hasura.HTTP
 import           Hasura.Prelude
 import           Hasura.RQL.DDL.Headers
 import           Hasura.RQL.Types
-import           Hasura.Server.Context
 import           Hasura.Server.Logging                  (QueryLogger (..))
 import           Hasura.Server.Utils                    (IpAddress, RequestId, filterRequestHeaders)
 import           Hasura.Server.Utils                    (RequestId, mkClientHeadersForward,
@@ -199,7 +198,7 @@ getExecPlanPartial userInfo sc enableAL req = do
 -- to be executed
 data ExecOp
   = ExOpQuery !LazyRespTx !(Maybe EQ.GeneratedSqlMap)
-  | ExOpMutation !N.ResponseHeaders !LazyRespTx
+  | ExOpMutation !HTTP.ResponseHeaders !LazyRespTx
   | ExOpSubs !EL.LiveQueryPlan
 
 -- The graphql query is resolved into an execution operation
@@ -216,7 +215,7 @@ getResolvedExecPlan
   -> SchemaCache
   -> SchemaCacheVer
   -> HTTP.Manager
-  -> [N.Header]
+  -> [HTTP.Header]
   -> (GQLReqUnparsed, GQLReqParsed)
   -> m (Telem.CacheHit, ExecPlanResolved)
 getResolvedExecPlan isPgCtx planCache userInfo sqlGenCtx
@@ -312,11 +311,11 @@ resolveMutSelSet
      , Has SQLGenCtx r
      , Has InsCtxMap r
      , Has HTTP.Manager r
-     , Has [N.Header] r
+     , Has [HTTP.Header] r
      , MonadIO m
      )
   => VQ.SelSet
-  -> m (LazyRespTx, N.ResponseHeaders)
+  -> m (LazyRespTx, HTTP.ResponseHeaders)
 resolveMutSelSet fields = do
   aliasedTxs <- forM (toList fields) $ \fld -> do
     fldRespTx <- case VQ._fName fld of
@@ -342,9 +341,9 @@ getMutOp
   -> SQLGenCtx
   -> UserInfo
   -> HTTP.Manager
-  -> [N.Header]
+  -> [HTTP.Header]
   -> VQ.SelSet
-  -> m (LazyRespTx, N.ResponseHeaders)
+  -> m (LazyRespTx, HTTP.ResponseHeaders)
 getMutOp ctx sqlGenCtx userInfo manager reqHeaders selSet =
   peelReaderT $ resolveMutSelSet selSet
   where

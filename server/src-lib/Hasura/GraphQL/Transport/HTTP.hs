@@ -17,9 +17,8 @@ import           Hasura.GraphQL.Transport.HTTP.Protocol
 import           Hasura.HTTP
 import           Hasura.Prelude
 import           Hasura.RQL.Types
-import           Hasura.Server.Context
-import           Hasura.Server.Logging                  (QueryLogger (..))
 import           Hasura.Server.Init.Config
+import           Hasura.Server.Logging                  (QueryLogger (..))
 import           Hasura.Server.Utils                    (RequestId)
 import           Hasura.Server.Version                  (HasVersion)
 import           Hasura.Session
@@ -58,11 +57,11 @@ runGQ reqId userInfo reqHdrs req@(reqUnparsed, _) = do
   (telemTimeTot_DT, (telemCacheHit, telemLocality, (telemTimeIO_DT, telemQueryType, !resp))) <- withElapsedTime $ do
     E.ExecutionCtx _ sqlGenCtx pgExecCtx planCache sc scVer httpManager enableAL <- ask
     (telemCacheHit, execPlan) <- E.getResolvedExecPlan pgExecCtx planCache
-                                 userInfo sqlGenCtx enableAL sc scVer req
+                                 userInfo sqlGenCtx enableAL sc scVer httpManager reqHdrs req
     case execPlan of
       E.GExPHasura (resolvedOp, txAccess) -> do
-        (telemTimeIO, telemQueryType, resp) <- runHasuraGQ reqId reqUnparsed userInfo txAccess resolvedOp
-        return (telemCacheHit, Telem.Local, (telemTimeIO, telemQueryType, HttpResponse resp Nothing))
+        (telemTimeIO, telemQueryType, respHdrs, resp) <- runHasuraGQ reqId reqUnparsed userInfo txAccess resolvedOp
+        return (telemCacheHit, Telem.Local, (telemTimeIO, telemQueryType, HttpResponse resp respHdrs))
 -- =======
 --                 userInfo sqlGenCtx enableAL sc scVer httpManager reqHdrs req
 --     case execPlan of
@@ -128,27 +127,30 @@ runHasuraGQ
 runHasuraGQ reqId query userInfo txAccess resolvedOp = do
   E.ExecutionCtx logger _ isPgCtx _ _ _ _ _ <- ask
   logQuery' logger
-  (telemTimeIO, respE) <- withElapsedTime $ liftIO $ runExceptT $
-    executeTx isPgCtx
-  resp <- liftEither respE
-  let !json = encodeGQResp $ GQSuccess $ encJToLBS resp
+  (telemTimeIO, respE) <- withElapsedTime $ runExceptT $ executeTx isPgCtx
+  (respHdrs, resp)     <- liftEither respE
+
+  let !json          = encodeGQResp $ GQSuccess $ encJToLBS resp
       telemQueryType = case resolvedOp of E.ExOpMutation{} -> Telem.Mutation ; _ -> Telem.Query
-  return (telemTimeIO, telemQueryType, json)
+  return (telemTimeIO, telemQueryType, respHdrs, json)
   where
     runLazyTx' = bool runLazyROTx' runLazyRWTx' $ txAccess == Q.ReadWrite
+
     executeTx isPgCtx = case resolvedOp of
-      E.ExOpQuery tx _  -> runLazyTx' isPgCtx tx
-      E.ExOpMutation tx -> runLazyTx Q.ReadWrite isPgCtx $
-        withUserInfo userInfo tx
+      E.ExOpQuery tx _    ->
+        ([],) <$> runLazyTx' isPgCtx tx
+      E.ExOpMutation respHeaders tx ->
+        (respHeaders,) <$> (runLazyTx' isPgCtx $ withUserInfo userInfo tx)
       E.ExOpSubs _ ->
         throw400 UnexpectedPayload
         "subscriptions are not supported over HTTP, use websockets instead"
+
     logQuery' logger = case resolvedOp of
       -- log the generated SQL and the graphql query
       E.ExOpQuery _ genSql -> logQuery logger query genSql reqId
       -- log the graphql query
-      E.ExOpMutation _ -> logQuery logger query Nothing reqId
-      E.ExOpSubs _ -> return ()
+      E.ExOpMutation _ _   -> logQuery logger query Nothing reqId
+      E.ExOpSubs _         -> return ()
 -- =======
 -- runHasuraGQ reqId query userInfo resolvedOp = do
 --   E.ExecutionCtx logger _ pgExecCtx _ _ _ _ _ <- ask

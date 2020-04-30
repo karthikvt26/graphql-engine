@@ -305,7 +305,7 @@ processEventQueue logger logenv httpMgr isPgCtx getSchemaCache EventEngineCtx{..
           --  i) schema cache is not up-to-date (due to some bug, say during schema syncing across multiple instances)
           --  ii) the event trigger is dropped when this event was just fetched
           logQErr $ err500 Unexpected "table or event-trigger not found in schema cache"
-          liftIO . runExceptT $ Q.runTx pool (Q.RepeatableRead, Just Q.ReadWrite) $ do
+          liftIO . runExceptT $ runLazyTx Q.ReadWrite isPgCtx $ liftTx $ do
             currentTime <- liftIO getCurrentTime
             -- For such an event, we unlock the event and retry after a minute
             setRetry e (addUTCTime 60 currentTime)
