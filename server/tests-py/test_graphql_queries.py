@@ -18,7 +18,9 @@ class TestGraphQLQueryBasic:
 
     def test_select_query_author_with_include_directive(self, hge_ctx, transport):
         check_query_f(hge_ctx, self.dir() + '/select_query_author_include_directive.yaml', transport)
-
+    
+    # Can't run server upgrade tests, as this test has a schema change
+    @pytest.mark.skip_server_upgrade_test
     def test_select_various_postgres_types(self, hge_ctx, transport):
         check_query_f(hge_ctx, self.dir() + '/select_query_test_types.yaml', transport)
 
@@ -62,6 +64,9 @@ class TestGraphQLQueryBasic:
     def test_select_query_invalid_escape_sequence(self, hge_ctx, transport):
         transport = 'http'
         check_query_f(hge_ctx, self.dir() + "/select_query_invalid_escape_sequence.yaml", transport)
+
+    def test_select_query_person_citext(self, hge_ctx, transport):
+        check_query_f(hge_ctx, self.dir() + "/select_query_person_citext.yaml", transport)
 
     def test_select_query_batching(self, hge_ctx, transport):
         transport = 'http'

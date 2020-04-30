@@ -101,7 +101,7 @@ addLiveQuery logger wsOpId lqState plan onResultAction = do
     metrics <- initRefetchMetrics
     pollerId <- PollerId <$> UUID.nextRandom
 
-    threadRef <- forkImmortal ("pollQuery."<>show sinkId) logger $ forever $ do
+    threadRef <- forkImmortal ("pollQuery." <> show sinkId) logger $ forever $ do
       pollQuery logger pollerId metrics lqOpts pgExecCtx query handler
       sleep $ unRefetchInterval refetchInterval
 

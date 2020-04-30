@@ -14,11 +14,6 @@ module Hasura.GraphQL.Transport.WebSocket
 --     - they run with async exceptions masked
 --     - they do not race on the same connection
 
-import           Control.Concurrent.Extended                 (sleep)
-import           Control.Exception.Lifted
-import           Data.String
-import           GHC.AssertNF
-
 import qualified Control.Concurrent.Async.Lifted.Safe        as LA
 import qualified Control.Concurrent.STM                      as STM
 import qualified Control.Monad.Trans.Control                 as MC
@@ -39,20 +34,27 @@ import qualified Network.HTTP.Types                          as H
 import qualified Network.WebSockets                          as WS
 import qualified StmContainers.Map                           as STMMap
 
+import           Control.Concurrent.Extended                 (sleep)
+import           Control.Exception.Lifted
+import           Data.String
+import           GHC.AssertNF
+import qualified ListT
+
 import           Hasura.EncJSON
 import           Hasura.GraphQL.Transport.HTTP.Protocol
 import           Hasura.GraphQL.Transport.WebSocket.Protocol
+import           Hasura.HTTP
 import           Hasura.Prelude
 import           Hasura.RQL.Types
 import           Hasura.RQL.Types.Error                      (Code (StartFailed))
 import           Hasura.Server.Auth                          (AuthMode, UserAuthentication,
                                                               resolveUserInfo)
-import           Hasura.Server.Context
 import           Hasura.Server.Cors
 import           Hasura.Server.Logging                       (QueryLogger (..))
 import           Hasura.Server.Utils                         (IpAddress (..), RequestId,
                                                               getRequestId)
 import           Hasura.Server.Version                       (HasVersion)
+import           Hasura.Session
 
 import qualified Hasura.GraphQL.Execute                      as E
 import qualified Hasura.GraphQL.Execute.LiveQuery            as LQ
@@ -83,7 +85,7 @@ data WsClientState
   = WsClientState
   { wscsUserInfo   :: !UserInfo
   -- ^ the 'UserInfo' required to execute the query and various other things
-  , wscsJwtExpTime :: !(Maybe TC.UTCTime)
+  , wscsTokenExpTime :: !(Maybe TC.UTCTime)
   -- ^ the JWT expiry time, if any
   , wscsReqHeaders :: ![H.Header]
   -- ^ headers from the client (in conn params) to forward to the remote schema
@@ -172,14 +174,14 @@ $(J.deriveToJSON
 data WsConnInfo
   = WsConnInfo
   { _wsciWebsocketId :: !WS.WSId
-  , _wsciJwtExpiry   :: !(Maybe TC.UTCTime)
+  , _wsciTokenExpiry :: !(Maybe TC.UTCTime)
   , _wsciMsg         :: !(Maybe Text)
   } deriving (Show, Eq)
 $(J.deriveToJSON (J.aesonDrop 5 J.snakeCase) ''WsConnInfo)
 
 data WSLogInfo
   = WSLogInfo
-  { _wsliUserVars       :: !(Maybe UserVars)
+  { _wsliUserVars       :: !(Maybe SessionVariables)
   , _wsliConnectionInfo :: !WsConnInfo
   , _wsliEvent          :: !WSEvent
   } deriving (Show, Eq)
@@ -195,11 +197,11 @@ instance L.ToEngineLog WSLog L.Hasura where
   toEngineLog (WSLog logLevel wsLog) =
     (logLevel, L.ELTWebsocketLog, J.toJSON wsLog)
 
-mkWsInfoLog :: Maybe UserVars -> WsConnInfo -> WSEvent -> WSLog
+mkWsInfoLog :: Maybe SessionVariables -> WsConnInfo -> WSEvent -> WSLog
 mkWsInfoLog uv ci ev =
   WSLog L.LevelInfo $ WSLogInfo uv ci ev
 
-mkWsErrorLog :: Maybe UserVars -> WsConnInfo -> WSEvent -> WSLog
+mkWsErrorLog :: Maybe SessionVariables -> WsConnInfo -> WSEvent -> WSLog
 mkWsErrorLog uv ci ev =
   WSLog L.LevelError $ WSLogInfo uv ci ev
 
@@ -233,7 +235,7 @@ onConn (L.Logger logger) corsPolicy wsId requestHead ipAddress = do
       sendMsg wsConn SMConnKeepAlive
       sleep $ seconds 5
 
-    jwtExpiryHandler wsConn = do
+    tokenExpiryHandler wsConn = do
       expTime <- liftIO $ STM.atomically $ do
         connState <- STM.readTVar $ (_wscUser . WS.getData) wsConn
         case connState of
@@ -251,7 +253,7 @@ onConn (L.Logger logger) corsPolicy wsId requestHead ipAddress = do
                   <*> pure errType
       let acceptRequest = WS.defaultAcceptRequest
                           { WS.acceptSubprotocol = Just "graphql-ws"}
-      return $ Right $ WS.AcceptWith connData acceptRequest keepAliveAction jwtExpiryHandler
+      return $ Right $ WS.AcceptWith connData acceptRequest keepAliveAction tokenExpiryHandler
 
     reject qErr = do
       logger $ mkWsErrorLog Nothing (WsConnInfo wsId Nothing Nothing) (ERejected qErr)
@@ -329,6 +331,8 @@ onStart serverEnv wsConn (StartMsg opId q) = catchAndIgnore $ do
   (sc, scVer) <- liftIO getSchemaCache
   execPlanE <- runExceptT $ E.getResolvedExecPlan pgExecCtx
                planCache userInfo sqlGenCtx enableAL sc scVer (q, reqParsed)
+               -- planCache userInfo sqlGenCtx enableAL sc scVer httpMgr reqHdrs q
+
   (telemCacheHit, execPlan) <- either (withComplete . preExecErr requestId) return execPlanE
   let execCtx = E.ExecutionCtx logger sqlGenCtx pgExecCtx planCache sc scVer httpMgr enableAL
 
@@ -343,9 +347,16 @@ onStart serverEnv wsConn (StartMsg opId q) = catchAndIgnore $ do
                 -> Telem.CacheHit -> RequestId -> GQLReqUnparsed -> UserInfo -> Q.TxAccess
                 -> E.ExecOp -> ExceptT () m ()
     runHasuraGQ timerTot telemCacheHit reqId query userInfo txAccess = \case
+-- =======
+--     runHasuraGQ :: ExceptT () IO DiffTime
+--                 -> Telem.CacheHit -> RequestId -> GQLReqUnparsed -> UserInfo -> E.ExecOp
+--                 -> ExceptT () IO ()
+--     runHasuraGQ timerTot telemCacheHit reqId query userInfo = \case
+-- >>>>>>> stable
       E.ExOpQuery opTx genSql ->
         execQueryOrMut Telem.Query genSql $ runLazyTx' pgExecCtx opTx
-      E.ExOpMutation opTx ->
+      -- Response headers discarded over websockets
+      E.ExOpMutation _ opTx ->
         execQueryOrMut Telem.Mutation Nothing $
           runLazyTx Q.ReadWrite pgExecCtx $ withUserInfo userInfo opTx
       E.ExOpSubs lqOp -> do
@@ -509,15 +520,22 @@ onMessage authMode serverEnv wsConn msgRaw =
 
 onStop :: WSServerEnv -> WSConn -> StopMsg -> IO ()
 onStop serverEnv wsConn (StopMsg opId) = do
+  -- When a stop message is received for an operation, it may not be present in OpMap
+  -- in these cases:
+  -- 1. If the operation is a query/mutation - as we remove the operation from the
+  -- OpMap as soon as it is executed
+  -- 2. A misbehaving client
+  -- 3. A bug on our end
   opM <- liftIO $ STM.atomically $ STMMap.lookup opId opMap
   case opM of
     Just (lqId, opNameM) -> do
       logWSEvent logger wsConn $ EOperation $ opDet opNameM
       LQ.removeLiveQuery logger lqMap lqId
     Nothing    ->
-      L.unLogger logger $ L.UnstructuredLog L.LevelError $ fromString $
-        "Received STOP for an operation "<>(show opId)<>" we have no record for. "<>
-        "this could be a misbehaving client or a bug"
+      L.unLogger logger $ L.UnstructuredLog L.LevelDebug $ fromString $
+        "Received STOP for an operation that we have no record for: "
+        <> show (unOperationId opId)
+        <> " (could be a query/mutation operation or a misbehaving client or a bug)"
   STM.atomically $ STMMap.delete opId opMap
   where
     logger = _wseLogger serverEnv
@@ -530,12 +548,20 @@ logWSEvent
   => L.Logger L.Hasura -> WSConn -> WSEvent -> m ()
 logWSEvent (L.Logger logger) wsConn wsEv = do
   userInfoME <- liftIO $ STM.readTVarIO userInfoR
-  let (userVarsM, jwtExpM) = case userInfoME of
+  let (userVarsM, tokenExpM) = case userInfoME of
         CSInitialised WsClientState{..} -> ( Just $ userVars wscsUserInfo
-                                           , wscsJwtExpTime
+                                           , wscsTokenExpTime
                                            )
         _                               -> (Nothing, Nothing)
-  liftIO $ logger $ WSLog logLevel $ WSLogInfo userVarsM (WsConnInfo wsId jwtExpM Nothing) wsEv
+  liftIO $ logger $ WSLog logLevel $ WSLogInfo userVarsM (WsConnInfo wsId tokenExpM Nothing) wsEv
+-- =======
+--   let (userVarsM, tokenExpM) = case userInfoME of
+--         CSInitialised userInfo tokenM _ -> ( Just $ _uiSession userInfo
+--                                            , tokenM
+--                                            )
+--         _                               -> (Nothing, Nothing)
+--   liftIO $ logger $ WSLog logLevel $ WSLogInfo userVarsM (WsConnInfo wsId tokenExpM Nothing) wsEv
+-- >>>>>>> stable
   where
     WSConnData userInfoR _ _ = WS.getData wsConn
     wsId = WS.getWSId wsConn
@@ -591,6 +617,33 @@ onConnInit logger manager wsConn authMode connParamsM = do
 
     mkHeaders connState =
       paramHeaders ++ getClientHeaders connState
+-- =======
+--   headers <- mkHeaders <$> liftIO (STM.readTVarIO (_wscUser $ WS.getData wsConn))
+--   res <- resolveUserInfo logger manager headers authMode
+--   case res of
+--     Left e  -> do
+--       let !initErr = CSInitError $ qeError e
+--       liftIO $ do
+--         $assertNFHere initErr  -- so we don't write thunks to mutable vars
+--         STM.atomically $ STM.writeTVar (_wscUser $ WS.getData wsConn) initErr
+
+--       let connErr = ConnErrMsg $ qeError e
+--       logWSEvent logger wsConn $ EConnErr connErr
+--       sendMsg wsConn $ SMConnErr connErr
+--     Right (userInfo, expTimeM) -> do
+--       let !csInit = CSInitialised userInfo expTimeM paramHeaders
+--       liftIO $ do
+--         $assertNFHere csInit  -- so we don't write thunks to mutable vars
+--         STM.atomically $ STM.writeTVar (_wscUser $ WS.getData wsConn) csInit
+
+--       sendMsg wsConn SMConnAck
+--       -- TODO: send it periodically? Why doesn't apollo's protocol use
+--       -- ping/pong frames of websocket spec?
+--       sendMsg wsConn SMConnKeepAlive
+--   where
+--     mkHeaders st =
+--       paramHeaders ++ getClientHdrs st
+-- >>>>>>> stable
 
     paramHeaders =
       [ (CI.mk $ TE.encodeUtf8 h, TE.encodeUtf8 v)

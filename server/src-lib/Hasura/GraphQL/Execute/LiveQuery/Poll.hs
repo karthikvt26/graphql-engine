@@ -55,13 +55,34 @@ import qualified Language.GraphQL.Draft.Syntax               as G
 import qualified ListT
 import qualified StmContainers.Map                           as STMMap
 import qualified System.Metrics.Distribution                 as Metrics
+import qualified Control.Concurrent.Async                 as A
+import qualified Control.Concurrent.STM                   as STM
+import qualified Control.Immortal                         as Immortal
+import qualified Crypto.Hash                              as CH
+import qualified Data.Aeson.Extended                      as J
+import qualified Data.ByteString                          as BS
+import qualified Data.ByteString.Lazy                     as BL
+import qualified Data.HashMap.Strict                      as Map
+import qualified Data.Time.Clock                          as Clock
+import qualified Data.UUID                                as UUID
+import qualified Data.UUID.V4                             as UUID
+import qualified Language.GraphQL.Draft.Syntax            as G
+import qualified ListT
+import qualified StmContainers.Map                        as STMMap
+import qualified System.Metrics.Distribution              as Metrics
+
+import           Data.List.Split                          (chunksOf)
+import           GHC.AssertNF
+
+import qualified Hasura.GraphQL.Execute.LiveQuery.TMap    as TMap
 
 import           Hasura.Db
 import           Hasura.EncJSON
 import           Hasura.GraphQL.Execute.LiveQuery.Options
 import           Hasura.GraphQL.Execute.LiveQuery.Plan
 import           Hasura.GraphQL.Transport.HTTP.Protocol
-import           Hasura.RQL.Types
+import           Hasura.RQL.Types.Error
+import           Hasura.Session
 
 import qualified Hasura.GraphQL.Execute.LiveQuery.TMap       as TMap
 import qualified Hasura.GraphQL.Transport.WebSocket.Protocol as WS
@@ -258,7 +279,7 @@ data Poller
 
 data PollerIOState
   = PollerIOState
-  { _pThread  :: !(Immortal.Thread)
+  { _pThread  :: !Immortal.Thread
   -- ^ a handle on the poller’s worker thread that can be used to 'Immortal.stop' it if all its
   -- cohorts stop listening
   , _pMetrics :: !RefetchMetrics
@@ -464,6 +485,20 @@ pollQuery logger pollerId metrics lqOpts isPgCtx pgQuery handler = do
                 , _plLiveQueryOptions = lqOpts
                 }
   L.unLogger logger pollerLog
+-- =======
+--       let queryVarsBatches = chunksOf (unBatchSize batchSize) $ getQueryVars cohortSnapshotMap
+--       return (cohortSnapshotMap, queryVarsBatches)
+
+--     flip A.mapConcurrently_ queryVarsBatches $ \queryVars -> do
+--       (dt, mxRes) <- timing _rmQuery $
+--         runExceptT $ runLazyTx' pgExecCtx $ executeMultiplexedQuery pgQuery queryVars
+--       let lqMeta = LiveQueryMetadata $ fromUnits dt
+--           operations = getCohortOperations cohortSnapshotMap lqMeta mxRes
+
+--       void $ timing _rmPush $
+--         -- concurrently push each unique result
+--         A.mapConcurrently_ (uncurry4 pushResultToCohort) operations
+-- >>>>>>> stable
 
   where
     timing :: (RefetchMetrics -> Metrics.Distribution) -> IO b -> IO (DiffTime, b)
@@ -471,6 +506,8 @@ pollQuery logger pollerId metrics lqOpts isPgCtx pgQuery handler = do
       (dt, a) <- withElapsedTime m
       Metrics.add (f metrics) $ realToFrac dt
       return (dt, a)
+
+    Poller cohortMap _ = handler
 
     Poller cohortMap _ = handler
     LiveQueriesOptions batchSize _ = lqOpts

@@ -1,5 +1,5 @@
-{-# LANGUAGE StrictData #-}  -- TODO project-wide, maybe. See #3941
 {-# LANGUAGE RecordWildCards #-}
+{-# LANGUAGE StrictData      #-}
 module Hasura.Events.Lib
   ( initEventEngineCtx
   , processEventQueue
@@ -7,18 +7,20 @@ module Hasura.Events.Lib
   , defaultMaxEventThreads
   , defaultFetchIntervalMilliSec
   , Event(..)
+  , unlockEvents
+  , EventEngineCtx(..)
   ) where
 
-import           Control.Concurrent.Extended   (sleep)
-import           Control.Concurrent.Async      (wait, withAsync, async, link)
+import           Control.Concurrent.Async    (async, link, wait, withAsync)
+import           Control.Concurrent.Extended (sleep)
 import           Control.Concurrent.STM.TVar
-import           Control.Exception.Lifted      (finally, mask_, try)
+import           Control.Exception.Lifted    (finally, mask_, try)
 import           Control.Monad.STM
 import           Data.Aeson
 import           Data.Aeson.Casing
 import           Data.Aeson.TH
 import           Data.Has
-import           Data.Int                      (Int64)
+import           Data.Int                    (Int64)
 import           Data.String
 import           Data.Time.Clock
 import           Data.Word
@@ -27,22 +29,40 @@ import           Hasura.HTTP
 import           Hasura.Prelude
 import           Hasura.RQL.DDL.Headers
 import           Hasura.RQL.Types
-import           Hasura.Server.Version         (HasVersion)
+import           Hasura.Server.Version       (HasVersion)
 import           Hasura.SQL.Types
 
-import qualified Data.ByteString               as BS
-import qualified Data.CaseInsensitive          as CI
-import qualified Data.HashMap.Strict           as M
-import qualified Data.TByteString              as TBS
-import qualified Data.Text                     as T
-import qualified Data.Text.Encoding            as T
-import qualified Data.Text.Encoding            as TE
-import qualified Data.Text.Encoding.Error      as TE
-import qualified Data.Time.Clock               as Time
-import qualified Database.PG.Query             as Q
-import qualified Hasura.Logging                as L
-import qualified Network.HTTP.Client           as HTTP
-import qualified Network.HTTP.Types            as HTTP
+-- <<<<<<< HEAD
+-- import qualified Data.ByteString               as BS
+-- import qualified Data.CaseInsensitive          as CI
+-- import qualified Data.HashMap.Strict           as M
+-- import qualified Data.TByteString              as TBS
+-- import qualified Data.Text                     as T
+-- import qualified Data.Text.Encoding            as T
+-- import qualified Data.Text.Encoding            as TE
+-- import qualified Data.Text.Encoding.Error      as TE
+-- import qualified Data.Time.Clock               as Time
+-- import qualified Database.PG.Query             as Q
+-- import qualified Hasura.Logging                as L
+-- import qualified Network.HTTP.Client           as HTTP
+-- import qualified Network.HTTP.Types            as HTTP
+-- =======
+-- remove these when array encoding is merged
+import qualified Database.PG.Query.PTI       as PTI
+import qualified PostgreSQL.Binary.Encoding  as PE
+
+import qualified Data.ByteString             as BS
+import qualified Data.CaseInsensitive        as CI
+import qualified Data.HashMap.Strict         as M
+import qualified Data.Set                    as Set
+import qualified Data.TByteString            as TBS
+import qualified Data.Text                   as T
+import qualified Data.Text.Encoding          as T
+import qualified Data.Time.Clock             as Time
+import qualified Database.PG.Query           as Q
+import qualified Hasura.Logging              as L
+import qualified Network.HTTP.Client         as HTTP
+import qualified Network.HTTP.Types          as HTTP
 
 type Version = T.Text
 
@@ -153,8 +173,9 @@ data Invocation
 
 data EventEngineCtx
   = EventEngineCtx
-  { _eeCtxEventThreadsCapacity  :: TVar Int
-  , _eeCtxFetchInterval         :: DiffTime
+  { _eeCtxEventThreadsCapacity :: TVar Int
+  , _eeCtxFetchInterval        :: DiffTime
+  , _eeCtxLockedEvents         :: TVar (Set.Set EventId)
   }
 
 defaultMaxEventThreads :: Int
@@ -169,67 +190,8 @@ retryAfterHeader = "Retry-After"
 initEventEngineCtx :: Int -> DiffTime -> STM EventEngineCtx
 initEventEngineCtx maxT _eeCtxFetchInterval = do
   _eeCtxEventThreadsCapacity <- newTVar maxT
+  _eeCtxLockedEvents <- newTVar Set.empty
   return $ EventEngineCtx{..}
-
---   :: (HasVersion) => L.Logger L.Hasura -> LogEnvHeaders -> HTTP.Manager-> IsPGExecCtx
---   -> IO SchemaCache -> EventEngineCtx -> IO ()
--- processEventQueue logger logenv httpMgr isPGCtx getSchemaCache eectx = do
---   threads <- mapM async [fetchThread, consumeThread]
---   void $ waitAny threads
---   where
---     fetchThread = pushEvents logger isPGCtx eectx
---     consumeThread = consumeEvents logger logenv httpMgr isPGCtx getSchemaCache eectx
-
--- pushEvents
---   :: L.Logger L.Hasura -> IsPGExecCtx -> EventEngineCtx -> IO ()
--- pushEvents logger isPgCtx eectx  = forever $ do
---   let EventEngineCtx q _ _ fetchI = eectx
---   eventsOrError <- runExceptT $ runLazyTx Q.ReadWrite isPgCtx' $ liftTx fetchEvents
---   case eventsOrError of
---     Left err     -> L.unLogger logger $ EventInternalErr err
---     Right events -> atomically $ mapM_ (TQ.writeTQueue q) events
---   sleep fetchI
---   where isPgCtx' = withTxIsolation Q.RepeatableRead isPgCtx
-
--- consumeEvents
---   :: (HasVersion) => L.Logger L.Hasura -> LogEnvHeaders -> HTTP.Manager -> IsPGExecCtx -> IO SchemaCache
---   -> EventEngineCtx -> IO ()
--- consumeEvents logger logenv httpMgr isPgCtx getSchemaCache eectx  = forever $ do
---   event <- atomically $ do
---     let EventEngineCtx q _ _ _ = eectx
---     TQ.readTQueue q
---   async $ runReaderT (processEvent logenv isPgCtx getSchemaCache event) (logger, httpMgr, eectx)
-
--- processEvent
---   :: ( HasVersion
---      , MonadReader r m
---      , Has HTTP.Manager r
---      , Has (L.Logger L.Hasura) r
---      , Has EventEngineCtx r
---      , MonadIO m
---      )
---   => LogEnvHeaders -> IsPGExecCtx -> IO SchemaCache -> Event -> m ()
--- processEvent logenv isPgCtx getSchemaCache e = do
---   cache <- liftIO getSchemaCache
---   let meti = getEventTriggerInfoFromEvent cache e
---   case meti of
---     Nothing -> do
---       logQErr $ err500 Unexpected "table or event-trigger not found in schema cache"
---     Just eti -> do
---       let webhook = T.unpack $ wciCachedValue $ etiWebhookInfo eti
---           retryConf = etiRetryConf eti
---           timeoutSeconds = fromMaybe defaultTimeoutSeconds (rcTimeoutSec retryConf)
---           responseTimeout = HTTP.responseTimeoutMicro (timeoutSeconds * 1000000)
---           headerInfos = etiHeaders eti
---           etHeaders = map encodeHeader headerInfos
---           headers = addDefaultHeaders etHeaders
---           ep = createEventPayload retryConf e
---       res <- runExceptT $ tryWebhook headers responseTimeout ep webhook
---       let decodedHeaders = map (decodeHeader logenv headerInfos) headers
---       finally <- either
---         (processError isPgCtx e retryConf decodedHeaders ep)
---         (processSuccess isPgCtx e decodedHeaders ep) res
---       either logQErr return finally
 
 -- | Service events from our in-DB queue.
 --
@@ -255,9 +217,23 @@ processEventQueue logger logenv httpMgr isPgCtx getSchemaCache EventEngineCtx{..
           Left err -> do
             L.unLogger logger $ EventInternalErr err
             return []
-          Right events ->
+          Right events -> do
+            saveLockedEvents events
             return events
+
+    -- After the events are fetched from the DB, we store the locked events
+    -- in a hash set(order doesn't matter and look ups are faster) in the
+    -- event engine context
+    saveLockedEvents :: [Event] -> IO ()
+    saveLockedEvents evts =
+      liftIO $ atomically $ do
+        lockedEvents <- readTVar _eeCtxLockedEvents
+        let evtsIds = map eId evts
+        let newLockedEvents = Set.union lockedEvents (Set.fromList evtsIds)
+        writeTVar _eeCtxLockedEvents newLockedEvents
+
     isPgCtx' = withTxIsolation Q.RepeatableRead isPgCtx
+
 
     -- work on this batch of events while prefetching the next. Recurse after we've forked workers
     -- for each in the batch, minding the requested pool size.
@@ -278,10 +254,15 @@ processEventQueue logger logenv httpMgr isPgCtx getSchemaCache EventEngineCtx{..
               check $ capacity > 0
               writeTVar _eeCtxEventThreadsCapacity $! (capacity - 1)
             -- since there is some capacity in our worker threads, we can launch another:
-            let restoreCapacity = liftIO $ atomically $
-                  modifyTVar' _eeCtxEventThreadsCapacity (+ 1)
+            let restoreCapacity evt =
+                    liftIO $ atomically $
+                           do
+                             modifyTVar' _eeCtxEventThreadsCapacity (+ 1)
+                             -- After the event has been processed, remove it from the
+                             -- locked events cache
+                             modifyTVar' _eeCtxLockedEvents (Set.delete (eId evt))
             t <- async $ flip runReaderT (logger, httpMgr) $
-                    processEvent event `finally` restoreCapacity
+                    processEvent event `finally` (restoreCapacity event)
             link t
 
         -- return when next batch ready; some 'processEvent' threads may be running.
@@ -320,7 +301,15 @@ processEventQueue logger logenv httpMgr isPgCtx getSchemaCache EventEngineCtx{..
       let meti = getEventTriggerInfoFromEvent cache e
       case meti of
         Nothing -> do
+          --  This rare error can happen in the following known cases:
+          --  i) schema cache is not up-to-date (due to some bug, say during schema syncing across multiple instances)
+          --  ii) the event trigger is dropped when this event was just fetched
           logQErr $ err500 Unexpected "table or event-trigger not found in schema cache"
+          liftIO . runExceptT $ Q.runTx pool (Q.RepeatableRead, Just Q.ReadWrite) $ do
+            currentTime <- liftIO getCurrentTime
+            -- For such an event, we unlock the event and retry after a minute
+            setRetry e (addUTCTime 60 currentTime)
+          >>= flip onLeft logQErr
         Just eti -> do
           let webhook = T.unpack $ wciCachedValue $ etiWebhookInfo eti
               retryConf = etiRetryConf eti
@@ -435,17 +424,15 @@ decodeHeader
   :: LogEnvHeaders -> [EventHeaderInfo] -> (HTTP.HeaderName, BS.ByteString)
   -> HeaderConf
 decodeHeader logenv headerInfos (hdrName, hdrVal)
-  = let name = decodeBS $ CI.original hdrName
+  = let name = bsToTxt $ CI.original hdrName
         getName ehi = let (HeaderConf name' _) = ehiHeaderConf ehi
                       in name'
         mehi = find (\hi -> getName hi == name) headerInfos
     in case mehi of
-         Nothing -> HeaderConf name (HVValue (decodeBS hdrVal))
+         Nothing -> HeaderConf name (HVValue (bsToTxt hdrVal))
          Just ehi -> if logenv
                      then HeaderConf name (HVValue (ehiCachedValue ehi))
                      else ehiHeaderConf ehi
-   where
-     decodeBS = TE.decodeUtf8With TE.lenientDecode
 
 mkInvo
   :: EventPayload -> Int -> [HeaderConf] -> TBS.TByteString -> [HeaderConf]
@@ -546,6 +533,7 @@ fetchEvents limitI =
                     WHERE l.delivered = 'f' and l.error = 'f' and l.locked = 'f'
                           and (l.next_retry_at is NULL or l.next_retry_at <= now())
                           and l.archived = 'f'
+                    ORDER BY created_at
                     LIMIT $1
                     FOR UPDATE SKIP LOCKED )
       RETURNING id, schema_name, table_name, trigger_name, payload::json, tries, created_at
@@ -604,7 +592,27 @@ unlockAllEvents =
           UPDATE hdb_catalog.event_log
           SET locked = 'f'
           WHERE locked = 't'
-          |] () False
+          |] () True
 
 toInt64 :: (Integral a) => a -> Int64
 toInt64 = fromIntegral
+
+-- EventIdArray is only used for PG array encoding
+newtype EventIdArray = EventIdArray { unEventIdArray :: [EventId]} deriving (Show, Eq)
+
+instance Q.ToPrepArg EventIdArray where
+  toPrepVal (EventIdArray l) = Q.toPrepValHelper PTI.unknown encoder $ l
+    where
+      -- 25 is the OID value of TEXT, https://jdbc.postgresql.org/development/privateapi/constant-values.html
+      encoder = PE.array 25 . PE.dimensionArray foldl' (PE.encodingArray . PE.text_strict)
+
+unlockEvents :: [EventId] -> Q.TxE QErr Int
+unlockEvents eventIds =
+   (runIdentity . Q.getRow) <$> Q.withQE defaultTxErrorHandler
+   [Q.sql|
+     WITH "cte" AS
+     (UPDATE hdb_catalog.event_log
+     SET locked = 'f'
+     WHERE id = ANY($1::text[]) RETURNING *)
+     SELECT count(*) FROM "cte"
+   |] (Identity $ EventIdArray eventIds) True

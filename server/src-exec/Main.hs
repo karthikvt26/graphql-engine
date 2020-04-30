@@ -11,7 +11,7 @@ import           Hasura.RQL.DDL.Metadata    (fetchMetadata)
 import           Hasura.RQL.DDL.Schema
 import           Hasura.RQL.Types
 import           Hasura.Server.Init
-import           Hasura.Server.Migrate      (dropCatalog)
+import           Hasura.Server.Migrate      (downgradeCatalog, dropCatalog)
 import           Hasura.Server.Version
 
 import qualified Data.ByteString.Lazy       as BL
@@ -30,12 +30,12 @@ runApp (HGEOptionsG rci hgeCmd) =
 
     HCExport -> do
       (initCtx, _) <- initialiseCtx hgeCmd rci
-      res <- runTx' initCtx fetchMetadata
+      res <- runTx' initCtx fetchMetadata Q.ReadCommitted
       either printErrJExit printJSON res
 
     HCClean -> do
       (initCtx, _) <- initialiseCtx hgeCmd rci
-      res <- runTx' initCtx dropCatalog
+      res <- runTx' initCtx dropCatalog Q.ReadCommitted
       either printErrJExit (const cleanSuccess) res
 
     HCExecute -> do
@@ -50,9 +50,20 @@ runApp (HGEOptionsG rci hgeCmd) =
           & fmap (\(res, _, _) -> res)
       either printErrJExit (liftIO . BLC.putStrLn) res
 
+    HCDowngrade opts -> do
+      (InitCtx{..}, initTime) <- initialiseCtx hgeCmd rci
+      let sqlGenCtx = SQLGenCtx False
+      res <- downgradeCatalog opts initTime
+             & runAsAdmin _icPgPool sqlGenCtx _icHttpManager
+      either printErrJExit (liftIO . print) res
+
     HCVersion -> liftIO $ putStrLn $ "Hasura GraphQL Engine: " ++ convertText currentVersion
   where
     runTx' InitCtx{..} tx =
       liftIO $ runExceptT $ runLazyTx Q.ReadWrite (withTxIsolation Q.Serializable _icPgExecCtx) $ liftTx tx
+-- =======
+--     runTx' initCtx tx txIso =
+--       liftIO $ runExceptT $ Q.runTx (_icPgPool initCtx) (txIso, Nothing) tx
+-- >>>>>>> stable
 
     cleanSuccess = liftIO $ putStrLn "successfully cleaned graphql-engine related data"

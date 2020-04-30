@@ -32,9 +32,12 @@ import           Hasura.Prelude
 import           Hasura.RQL.DML.Internal               (mkAdminRolePermInfo)
 import           Hasura.RQL.Types
 import           Hasura.Server.Utils                   (duplicates)
+import           Hasura.Session
 import           Hasura.SQL.Types
 
+import           Hasura.GraphQL.Schema.Action
 import           Hasura.GraphQL.Schema.BoolExp
+import           Hasura.GraphQL.Schema.Builder
 import           Hasura.GraphQL.Schema.Common
 import           Hasura.GraphQL.Schema.Function
 import           Hasura.GraphQL.Schema.Merge
@@ -45,10 +48,12 @@ import           Hasura.GraphQL.Schema.Mutation.Update
 import           Hasura.GraphQL.Schema.OrderBy
 import           Hasura.GraphQL.Schema.Select
 
+type TableSchemaCtx = RoleContext (TyAgg, RootFields, InsCtxMap)
+
 getInsPerm :: TableInfo -> RoleName -> Maybe InsPermInfo
-getInsPerm tabInfo role
-  | role == adminRole = _permIns $ mkAdminRolePermInfo (_tiCoreInfo tabInfo)
-  | otherwise = Map.lookup role rolePermInfoMap >>= _permIns
+getInsPerm tabInfo roleName
+  | roleName == adminRoleName = _permIns $ mkAdminRolePermInfo (_tiCoreInfo tabInfo)
+  | otherwise = Map.lookup roleName rolePermInfoMap >>= _permIns
   where
     rolePermInfoMap = _tiRolePermInfoMap tabInfo
 
@@ -114,6 +119,7 @@ mkComputedFieldFunctionArgSeq inputArgs =
     Seq.fromList $ procFuncArgs inputArgs faName $
     \fa t -> FunctionArgItem (G.Name t) (faName fa) (faHasDefault fa)
 
+-- see Note [Split schema generation (TODO)]
 mkGCtxRole'
   :: QualifiedTable
   -> Maybe PGDescription
@@ -163,6 +169,7 @@ mkGCtxRole' tn descM insPermM selPermM updColsM delPermM pkeyCols constraints vi
       [ TIInpObj <$> mutHelper viIsInsertable insInpObjM
       , TIInpObj <$> mutHelper viIsUpdatable updSetInpObjM
       , TIInpObj <$> mutHelper viIsUpdatable updIncInpObjM
+      , TIInpObj <$> mutHelper viIsUpdatable primaryKeysInpObjM
       , TIObj <$> mutRespObjM
       , TIEnum <$> selColInpTyM
       ]
@@ -195,6 +202,9 @@ mkGCtxRole' tn descM insPermM selPermM updColsM delPermM pkeyCols constraints vi
     updJSONOpInpObjTysM = map TIInpObj <$> updJSONOpInpObjsM
     -- fields used in set input object
     updSetInpObjFldsM = mkColFldMap (mkUpdSetTy tn) <$> updColsM
+
+    -- primary key columns input object for update_by_pk
+    primaryKeysInpObjM = guard (isJust selPermM) *> (mkPKeyColumnsInpObj tn <$> pkeyCols)
 
     selFldsM = snd <$> selPermM
     selColNamesM = (map pgiName . getPGColumnFields) <$> selFldsM
@@ -315,6 +325,7 @@ mkGCtxRole' tn descM insPermM selPermM updColsM delPermM pkeyCols constraints vi
     computedFieldFuncArgsInps = map (TIInpObj . fst) computedFieldReqTypes
     computedFieldFuncArgScalars = Set.fromList $ concatMap snd computedFieldReqTypes
 
+-- see Note [Split schema generation (TODO)]
 getRootFldsRole'
   :: QualifiedTable
   -> Maybe (PrimaryKey PGColumnInfo)
@@ -323,7 +334,7 @@ getRootFldsRole'
   -> [FunctionInfo]
   -> Maybe ([T.Text], Bool) -- insert perm
   -> Maybe (AnnBoolExpPartialSQL, Maybe Int, [T.Text], Bool) -- select filter
-  -> Maybe ([PGColumnInfo], PreSetColsPartial, AnnBoolExpPartialSQL, [T.Text]) -- update filter
+  -> Maybe ([PGColumnInfo], PreSetColsPartial, AnnBoolExpPartialSQL, Maybe AnnBoolExpPartialSQL, [T.Text]) -- update filter
   -> Maybe (AnnBoolExpPartialSQL, [T.Text]) -- delete filter
   -> Maybe ViewInfo
   -> TableConfig -- custom config
@@ -331,7 +342,7 @@ getRootFldsRole'
 getRootFldsRole' tn primaryKey constraints fields funcs insM
                  selM updM delM viM tableConfig =
   RootFields
-    { rootQueryFields = makeFieldMap $
+    { _rootQueryFields = makeFieldMap $
         funcQueries
         <> funcAggQueries
         <> catMaybes
@@ -339,18 +350,20 @@ getRootFldsRole' tn primaryKey constraints fields funcs insM
           , getSelAggDet selM
           , getPKeySelDet <$> selM <*> primaryKey
           ]
-    , rootMutationFields = makeFieldMap $ catMaybes
+    , _rootMutationFields = makeFieldMap $ catMaybes
         [ mutHelper viIsInsertable getInsDet insM
+        , onlyIfSelectPermExist $ mutHelper viIsInsertable getInsOneDet insM
         , mutHelper viIsUpdatable getUpdDet updM
+        , onlyIfSelectPermExist $ mutHelper viIsUpdatable getUpdByPkDet $ (,) <$> updM <*> primaryKey
         , mutHelper viIsDeletable getDelDet delM
+        , onlyIfSelectPermExist $ mutHelper viIsDeletable getDelByPkDet $ (,) <$> delM <*> primaryKey
         ]
     }
   where
     makeFieldMap = mapFromL (_fiName . snd)
     customRootFields = _tcCustomRootFields tableConfig
-    colGNameMap = mkPGColGNameMap $ getValidCols fields
+    colGNameMap = mkPGColGNameMap $ getCols fields
 
-    allCols = getCols fields
     funcQueries = maybe [] getFuncQueryFlds selM
     funcAggQueries = maybe [] getFuncAggQueryFlds selM
 
@@ -358,25 +371,45 @@ getRootFldsRole' tn primaryKey constraints fields funcs insM
     mutHelper f getDet mutM =
       bool Nothing (getDet <$> mutM) $ isMutable f viM
 
+    onlyIfSelectPermExist v = guard (isJust selM) *> v
+
     getCustomNameWith f = f customRootFields
 
     insCustName = getCustomNameWith _tcrfInsert
     getInsDet (hdrs, upsertPerm) =
       let isUpsertable = upsertable constraints upsertPerm $ isJust viM
-      in ( MCInsert $ InsOpCtx tn $ hdrs `union` maybe [] (\(_, _, _, x) -> x) updM
+      in ( MCInsert $ InsOpCtx tn $ hdrs `union` maybe [] (^. _5) updM
          , mkInsMutFld insCustName tn isUpsertable
          )
 
+    insOneCustName = getCustomNameWith _tcrfInsertOne
+    getInsOneDet (hdrs, upsertPerm) =
+      let isUpsertable = upsertable constraints upsertPerm $ isJust viM
+      in ( MCInsertOne $ InsOpCtx tn $ hdrs `union` maybe [] (^. _5) updM
+         , mkInsertOneMutationField insOneCustName tn isUpsertable
+         )
+
     updCustName = getCustomNameWith _tcrfUpdate
-    getUpdDet (updCols, preSetCols, updFltr, hdrs) =
-      ( MCUpdate $ UpdOpCtx tn hdrs colGNameMap updFltr preSetCols
+    getUpdDet (updCols, preSetCols, updFltr, updCheck, hdrs) =
+      ( MCUpdate $ UpdOpCtx tn hdrs colGNameMap updFltr updCheck preSetCols
       , mkUpdMutFld updCustName tn updCols
+      )
+
+    updByPkCustName = getCustomNameWith _tcrfUpdateByPk
+    getUpdByPkDet ((updCols, preSetCols, updFltr, updCheck, hdrs), pKey) =
+      ( MCUpdateByPk $ UpdOpCtx tn hdrs colGNameMap updFltr updCheck preSetCols
+      , mkUpdateByPkMutationField updByPkCustName tn updCols pKey
       )
 
     delCustName = getCustomNameWith _tcrfDelete
     getDelDet (delFltr, hdrs) =
-      ( MCDelete $ DelOpCtx tn hdrs delFltr allCols
+      ( MCDelete $ DelOpCtx tn hdrs colGNameMap delFltr
       , mkDelMutFld delCustName tn
+      )
+    delByPkCustName = getCustomNameWith _tcrfDeleteByPk
+    getDelByPkDet ((delFltr, hdrs), pKey) =
+      ( MCDeleteByPk $ DelOpCtx tn hdrs colGNameMap delFltr
+      , mkDeleteByPkMutationField delByPkCustName tn pKey
       )
 
 
@@ -427,8 +460,8 @@ getRootFldsRole' tn primaryKey constraints fields funcs insM
 
 
 getSelPermission :: TableInfo -> RoleName -> Maybe SelPermInfo
-getSelPermission tabInfo role =
-  Map.lookup role (_tiRolePermInfoMap tabInfo) >>= _permSel
+getSelPermission tabInfo roleName =
+  Map.lookup roleName (_tiRolePermInfoMap tabInfo) >>= _permSel
 
 getSelPerm
   :: (MonadError QErr m)
@@ -438,11 +471,11 @@ getSelPerm
   -- role and its permission
   -> RoleName -> SelPermInfo
   -> m (Bool, [SelField])
-getSelPerm tableCache fields role selPermInfo = do
+getSelPerm tableCache fields roleName selPermInfo = do
 
   relFlds <- fmap catMaybes $ forM validRels $ \relInfo -> do
       remTableInfo <- getTabInfo tableCache $ riRTable relInfo
-      let remTableSelPermM = getSelPermission remTableInfo role
+      let remTableSelPermM = getSelPermission remTableInfo roleName
           remTableFlds = _tciFieldInfoMap $ _tiCoreInfo remTableInfo
           remTableColGNameMap =
             mkPGColGNameMap $ getValidCols remTableFlds
@@ -464,7 +497,7 @@ getSelPerm tableCache fields role selPermInfo = do
         CFRScalar scalarTy  -> pure $ Just $ CFTScalar scalarTy
         CFRSetofTable retTable -> do
           retTableInfo <- getTabInfo tableCache retTable
-          let retTableSelPermM = getSelPermission retTableInfo role
+          let retTableSelPermM = getSelPermission retTableInfo roleName
               retTableFlds = _tciFieldInfoMap $ _tiCoreInfo retTableInfo
               retTableColGNameMap =
                 mkPGColGNameMap $ getValidCols retTableFlds
@@ -517,7 +550,7 @@ mkInsCtx role tableCache fields insPermInfo updPermM = do
     setCols = ipiSet insPermInfo
     checkCond = ipiCheck insPermInfo
     updPermForIns = mkUpdPermForIns <$> updPermM
-    mkUpdPermForIns upi = UpdPermForIns (toList $ upiCols upi)
+    mkUpdPermForIns upi = UpdPermForIns (toList $ upiCols upi) (upiCheck upi)
                           (upiFilter upi) (upiSet upi)
 
     isInsertable Nothing _          = False
@@ -538,7 +571,7 @@ mkAdminInsCtx tc fields = do
       isMutable viIsInsertable viewInfoM && isValidRel relName remoteTable
 
   let relInfoMap = Map.fromList $ catMaybes relTupsM
-      updPerm = UpdPermForIns updCols noFilter Map.empty
+      updPerm = UpdPermForIns updCols Nothing noFilter Map.empty
 
   return $ InsCtx colGNameMap noFilter Map.empty relInfoMap (Just updPerm)
   where
@@ -650,6 +683,7 @@ getRootFldsRole tn pCols constraints fields funcs viM (RolePermInfo insM selM up
     mkUpd u = ( flip getColInfos allCols $ Set.toList $ upiCols u
               , upiSet u
               , upiFilter u
+              , upiCheck u
               , upiRequiredHeaders u
               )
     mkDel d = (dpiFilter d, dpiRequiredHeaders d)
@@ -661,78 +695,140 @@ mkGCtxMapTable
   => TableCache
   -> FunctionCache
   -> TableInfo
-  -> m (Map.HashMap RoleName (TyAgg, RootFields, InsCtxMap))
+  -> m (Map.HashMap RoleName TableSchemaCtx)
 mkGCtxMapTable tableCache funcCache tabInfo = do
-  m <- flip Map.traverseWithKey rolePerms $
-       mkGCtxRole tableCache tn descM fields primaryKey validConstraints
-                  tabFuncs viewInfo customConfig
+  m <- flip Map.traverseWithKey rolePermsMap $ \roleName rolePerm ->
+    for rolePerm $ mkGCtxRole tableCache tn descM fields primaryKey validConstraints
+                             tabFuncs viewInfo customConfig roleName
   adminInsCtx <- mkAdminInsCtx tableCache fields
   adminSelFlds <- mkAdminSelFlds fields tableCache
   let adminCtx = mkGCtxRole' tn descM (Just (cols, icRelations adminInsCtx))
                  (Just (True, adminSelFlds)) (Just cols) (Just ())
                  primaryKey validConstraints viewInfo tabFuncs
       adminInsCtxMap = Map.singleton tn adminInsCtx
-  return $ Map.insert adminRole (adminCtx, adminRootFlds, adminInsCtxMap) m
+      adminTableCtx = RoleContext (adminCtx, adminRootFlds, adminInsCtxMap) Nothing
+  pure $ Map.insert adminRoleName adminTableCtx m
   where
     TableInfo coreInfo rolePerms _ = tabInfo
     TableCoreInfo tn descM _ fields primaryKey _ _ viewInfo _ customConfig = coreInfo
     validConstraints = mkValidConstraints $ map _cName (tciUniqueOrPrimaryKeyConstraints coreInfo)
     cols = getValidCols fields
-    tabFuncs = filter (isValidObjectName . fiName) $
-               getFuncsOfTable tn funcCache
+    tabFuncs = filter (isValidObjectName . fiName) $ getFuncsOfTable tn funcCache
+
     adminRootFlds =
       getRootFldsRole' tn primaryKey validConstraints fields tabFuncs
       (Just ([], True)) (Just (noFilter, Nothing, [], True))
-      (Just (cols, mempty, noFilter, [])) (Just (noFilter, []))
+      (Just (cols, mempty, noFilter, Nothing, [])) (Just (noFilter, []))
       viewInfo customConfig
+
+    rolePermsMap :: Map.HashMap RoleName (RoleContext RolePermInfo)
+    rolePermsMap = flip Map.map rolePerms $ \permInfo ->
+      case _permIns permInfo of
+        Nothing      -> RoleContext permInfo Nothing
+        Just insPerm ->
+          if ipiBackendOnly insPerm then
+            -- Remove insert permission from 'default' context and keep it in 'backend' context.
+            RoleContext { _rctxDefault = permInfo{_permIns = Nothing}
+                        , _rctxBackend = Just permInfo
+                        }
+          -- Remove insert permission from 'backend' context and keep it in 'default' context.
+          else RoleContext { _rctxDefault = permInfo
+                           , _rctxBackend = Just permInfo{_permIns = Nothing}
+                           }
 
 noFilter :: AnnBoolExpPartialSQL
 noFilter = annBoolExpTrue
 
+{- Note [Split schema generation (TODO)]
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+As of writing this, the schema is generated per table per role and for all permissions.
+See functions  "mkGCtxRole'" and "getRootFldsRole'". This approach makes hard to
+differentiate schema generation for each operation (select, insert, delete and update)
+based on respective permission information and safe merging those schemas eventually.
+For backend-only inserts (see https://github.com/hasura/graphql-engine/pull/4224)
+we need to somehow defer the logic of merging schema for inserts with others based on its
+backend-only credibility. This requires significant refactor of this module and
+we can't afford to do it as of now since we're going to rewrite the entire GraphQL schema
+generation (see https://github.com/hasura/graphql-engine/pull/4111). For aforementioned
+backend-only inserts, we're following a hacky implementation of generating schema for
+both default session and one with backend privilege -- the later differs with the former by
+only having the schema related to insert operation.
+-}
+
 mkGCtxMap
   :: forall m. (MonadError QErr m)
-  => TableCache -> FunctionCache -> m GCtxMap
-mkGCtxMap tableCache functionCache = do
+  => TableCache -> FunctionCache -> ActionCache -> m GCtxMap
+mkGCtxMap tableCache functionCache actionCache = do
   typesMapL <- mapM (mkGCtxMapTable tableCache functionCache) $
                filter (tableFltr . _tiCoreInfo) $ Map.elems tableCache
-  typesMap <- combineTypes typesMapL
-  return $ flip Map.map typesMap $ \(ty, flds, insCtxMap) ->
-    mkGCtx ty flds insCtxMap
+  let actionsSchema = mkActionsSchema actionCache
+  typesMap <- combineTypes actionsSchema typesMapL
+  let gCtxMap  = flip Map.map typesMap $
+                 fmap (\(ty, flds, insCtxMap) -> mkGCtx ty flds insCtxMap)
+  pure gCtxMap
   where
     tableFltr ti = not (isSystemDefined $ _tciSystemDefined ti) && isValidObjectName (_tciName ti)
 
     combineTypes
-      :: [Map.HashMap RoleName (TyAgg, RootFields, InsCtxMap)]
-      -> m (Map.HashMap RoleName (TyAgg, RootFields, InsCtxMap))
-    combineTypes maps = do
-      let listMap = foldr (Map.unionWith (++) . Map.map pure) Map.empty maps
-      flip Map.traverseWithKey listMap $ \_ typeList -> do
-        let tyAgg = mconcat $ map (^. _1) typeList
-            insCtx = mconcat $ map (^. _3) typeList
-        rootFields <- combineRootFields $ map (^. _2) typeList
-        pure (tyAgg, rootFields, insCtx)
+      :: Map.HashMap RoleName (RootFields, TyAgg)
+      -> [Map.HashMap RoleName TableSchemaCtx]
+      -> m (Map.HashMap RoleName TableSchemaCtx)
+    combineTypes actionsSchema tableCtxMaps = do
+      let tableCtxsMap =
+            foldr (Map.unionWith (++) . Map.map pure)
+            ((\(rf, tyAgg) -> pure $ RoleContext (tyAgg, rf, mempty) Nothing) <$> actionsSchema)
+            tableCtxMaps
 
-    combineRootFields :: [RootFields] -> m RootFields
-    combineRootFields rootFields = do
-      let duplicateQueryFields = duplicates $
-            concatMap (Map.keys . rootQueryFields) rootFields
-          duplicateMutationFields = duplicates $
-            concatMap (Map.keys . rootMutationFields) rootFields
+      flip Map.traverseWithKey tableCtxsMap $ \_ tableSchemaCtxs -> do
+        let defaultTableSchemaCtxs = map _rctxDefault tableSchemaCtxs
+            backendGCtxTypesMaybe =
+              -- If no table has 'backend' schema context then
+              -- aggregated context should be Nothing
+              if all (isNothing . _rctxBackend) tableSchemaCtxs then Nothing
+              else Just $ flip map tableSchemaCtxs $
+                   -- Consider 'default' if 'backend' doesn't exist for any table
+                   -- see Note [Split schema generation (TODO)]
+                   \(RoleContext def backend) -> fromMaybe def backend
 
-      when (not $ null duplicateQueryFields) $
-        throw400 Unexpected $ "following query root fields are duplicated: "
-        <> showNames duplicateQueryFields
+        RoleContext <$> combineTypes' defaultTableSchemaCtxs
+                    <*> mapM combineTypes' backendGCtxTypesMaybe
+      where
+        combineTypes' :: [(TyAgg, RootFields, InsCtxMap)] -> m (TyAgg, RootFields, InsCtxMap)
+        combineTypes' typeList = do
+          let tyAgg = mconcat $ map (^. _1) typeList
+              insCtx = mconcat $ map (^. _3) typeList
+          rootFields <- combineRootFields $ map (^. _2) typeList
+          pure (tyAgg, rootFields, insCtx)
 
-      when (not $ null duplicateMutationFields) $
-        throw400 Unexpected $ "following mutation root fields are duplicated: "
-        <> showNames duplicateMutationFields
+        combineRootFields :: [RootFields] -> m RootFields
+        combineRootFields rootFields = do
+          let duplicateQueryFields = duplicates $
+                concatMap (Map.keys . _rootQueryFields) rootFields
+              duplicateMutationFields = duplicates $
+                concatMap (Map.keys . _rootMutationFields) rootFields
 
-      pure $ mconcat rootFields
+          -- TODO: The following exception should result in inconsistency
+          when (not $ null duplicateQueryFields) $
+            throw400 Unexpected $ "following query root fields are duplicated: "
+            <> showNames duplicateQueryFields
 
-getGCtx :: (CacheRM m) => RoleName -> GCtxMap -> m GCtx
-getGCtx rn ctxMap = do
-  sc <- askSchemaCache
-  return $ fromMaybe (scDefaultRemoteGCtx sc) $ Map.lookup rn ctxMap
+          when (not $ null duplicateMutationFields) $
+            throw400 Unexpected $ "following mutation root fields are duplicated: "
+            <> showNames duplicateMutationFields
+
+          pure $ mconcat rootFields
+
+getGCtx :: BackendOnlyFieldAccess -> SchemaCache -> RoleName -> GCtx
+getGCtx backendOnlyFieldAccess sc roleName =
+  case Map.lookup roleName (scGCtxMap sc) of
+    Nothing                                           -> scDefaultRemoteGCtx sc
+    Just (RoleContext defaultGCtx maybeBackendGCtx)   ->
+      case backendOnlyFieldAccess of
+        BOFAAllowed    ->
+          -- When backend field access is allowed and if there's no 'backend_only'
+          -- permissions defined, we should allow access to non backend only fields
+          fromMaybe defaultGCtx maybeBackendGCtx
+        BOFADisallowed -> defaultGCtx
 
 -- pretty print GCtx
 ppGCtx :: GCtx -> String
@@ -756,40 +852,6 @@ ppGCtx gCtx =
     mRootO = _gMutRoot gCtx
     sRootO = _gSubRoot gCtx
 
--- | A /types aggregate/, which holds role-specific information about visible GraphQL types.
--- Importantly, it holds more than just the information needed by GraphQL: it also includes how the
--- GraphQL types relate to Postgres types, which is used to validate literals provided for
--- Postgres-specific scalars.
-data TyAgg
-  = TyAgg
-  { _taTypes   :: !TypeMap
-  , _taFields  :: !FieldMap
-  , _taScalars :: !(Set.HashSet PGScalarType)
-  , _taOrdBy   :: !OrdByCtx
-  } deriving (Show, Eq)
-
-instance Semigroup TyAgg where
-  (TyAgg t1 f1 s1 o1) <> (TyAgg t2 f2 s2 o2) =
-    TyAgg (Map.union t1 t2) (Map.union f1 f2)
-          (Set.union s1 s2) (Map.union o1 o2)
-
-instance Monoid TyAgg where
-  mempty = TyAgg Map.empty Map.empty Set.empty Map.empty
-
--- | A role-specific mapping from root field names to allowed operations.
-data RootFields
-  = RootFields
-  { rootQueryFields    :: !(Map.HashMap G.Name (QueryCtx, ObjFldInfo))
-  , rootMutationFields :: !(Map.HashMap G.Name (MutationCtx, ObjFldInfo))
-  } deriving (Show, Eq)
-
-instance Semigroup RootFields where
-  RootFields a1 b1 <> RootFields a2 b2
-    = RootFields (a1 <> a2) (b1 <> b2)
-
-instance Monoid RootFields where
-  mempty = RootFields Map.empty Map.empty
-
 mkGCtx :: TyAgg -> RootFields -> InsCtxMap -> GCtx
 mkGCtx tyAgg (RootFields queryFields mutationFields) insCtxMap =
   let queryRoot = mkQueryRootTyInfo qFlds
@@ -812,12 +874,12 @@ mkGCtx tyAgg (RootFields queryFields mutationFields) insCtxMap =
     colTys = Set.fromList $ map pgiType $ mapMaybe (^? _RFPGColumn) $
              Map.elems fldInfos
     mkMutRoot =
-      mkHsraObjTyInfo (Just "mutation root") (G.NamedType "mutation_root") Set.empty .
+      mkHsraObjTyInfo (Just "mutation root") mutationRootNamedType Set.empty .
       mapFromL _fiName
     mutRootM = bool (Just $ mkMutRoot mFlds) Nothing $ null mFlds
     mkSubRoot =
       mkHsraObjTyInfo (Just "subscription root")
-      (G.NamedType "subscription_root") Set.empty . mapFromL _fiName
+      subscriptionRootNamedType Set.empty . mapFromL _fiName
     subRootM = bool (Just $ mkSubRoot qFlds) Nothing $ null qFlds
 
     qFlds = rootFieldInfos queryFields

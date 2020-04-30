@@ -7,6 +7,7 @@ module Hasura.RQL.Types.Run
   ) where
 
 import           Hasura.Prelude
+import           Hasura.Session
 
 import qualified Network.HTTP.Client         as HTTP
 
