@@ -12,6 +12,7 @@ module Hasura.Logging
   , debugT
   , debugBS
   , debugLBS
+  , UnstructuredLog(..)
   , Logger (..)
   , LogLevel(..)
   , mkLogger
@@ -102,6 +103,7 @@ data InternalLogTypes
  | ILTJwkRefreshLog
  | ILTTelemetry
  | ILTSchemaSyncThread
+ | ILTPollerLog
  deriving (Show, Eq, Generic)
 
 instance Hashable InternalLogTypes
@@ -116,6 +118,7 @@ instance J.ToJSON InternalLogTypes where
     ILTJwkRefreshLog -> "jwk-refresh-log"
     ILTTelemetry -> "telemetry-log"
     ILTSchemaSyncThread -> "schema-sync-thread"
+    ILTPollerLog -> "poller-log"
 
 -- the default enabled log-types
 defaultEnabledEngineLogTypes :: Set.HashSet (EngineLogType Hasura)
@@ -186,22 +189,22 @@ class EnabledLogTypes impl => ToEngineLog a impl where
   toEngineLog :: a -> (LogLevel, EngineLogType impl, J.Value)
 
 
-newtype UnstructuredLog
-  = UnstructuredLog { _unUnstructuredLog :: TBS.TByteString }
+data UnstructuredLog
+  = UnstructuredLog { _ulLevel :: !LogLevel, _ulPayload :: !TBS.TByteString }
   deriving (Show, Eq)
 
 debugT :: Text -> UnstructuredLog
-debugT = UnstructuredLog . TBS.fromText
+debugT = UnstructuredLog LevelDebug . TBS.fromText
 
 debugBS :: B.ByteString -> UnstructuredLog
-debugBS = UnstructuredLog . TBS.fromBS
+debugBS = UnstructuredLog LevelDebug . TBS.fromBS
 
 debugLBS :: BL.ByteString -> UnstructuredLog
-debugLBS = UnstructuredLog . TBS.fromLBS
+debugLBS = UnstructuredLog LevelDebug . TBS.fromLBS
 
 instance ToEngineLog UnstructuredLog Hasura where
-  toEngineLog (UnstructuredLog t) =
-    (LevelDebug, ELTInternal ILTUnstructured, J.toJSON t)
+  toEngineLog (UnstructuredLog level t) =
+    (level, ELTInternal ILTUnstructured, J.toJSON t)
 
 data LoggerCtx impl
   = LoggerCtx

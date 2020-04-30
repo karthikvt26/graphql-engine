@@ -17,25 +17,27 @@ import qualified Network.HTTP.Client          as HTTP
 import qualified Network.HTTP.Client.TLS      as HTTP
 import qualified Test.Hspec.Runner            as Hspec
 
-import           Hasura.Db                    (PGExecCtx (..))
+import           Hasura.Db                    (IsPGExecCtx (..), PGExecCtx (..), runLazyTx)
 import           Hasura.RQL.Types             (SQLGenCtx (..), adminUserInfo)
 import           Hasura.RQL.Types.Run
-import           Hasura.Server.Init          (RawConnInfo, mkConnInfo,
-                                              mkRawConnInfo, parseRawConnInfo,
-                                              runWithEnv)
+import           Hasura.Server.Init           (RawConnInfo, mkConnInfo, mkRawConnInfo,
+                                               parseRawConnInfo, runWithEnv)
 import           Hasura.Server.Migrate
 import           Hasura.Server.Version
+import           Hasura.Session               (adminUserInfo)
 
 import qualified Data.Parser.CacheControlSpec as CacheControlParser
+import qualified Data.Parser.JSONPathSpec     as JsonPath
+import qualified Data.Parser.URLTemplate      as URLTemplate
+import qualified Data.TimeSpec                as TimeSpec
 import qualified Hasura.IncrementalSpec       as IncrementalSpec
-import qualified Hasura.RQL.MetadataSpec      as MetadataSpec
+-- import qualified Hasura.RQL.MetadataSpec      as MetadataSpec
 import qualified Hasura.Server.MigrateSpec    as MigrateSpec
-import qualified Data.TimeSpec               as TimeSpec
-import qualified Hasura.Server.TelemetrySpec as TelemetrySpec
+import qualified Hasura.Server.TelemetrySpec  as TelemetrySpec
 
 data TestSuites
   = AllSuites !RawConnInfo
-  -- ^ Run all test suites. It probably doesn't make sense to be able to specify additional 
+  -- ^ Run all test suites. It probably doesn't make sense to be able to specify additional
   -- hspec args here.
   | SingleSuite ![String] !TestSuite
   -- ^ Args to pass through to hspec (as if from 'getArgs'), and the specific suite to run.
@@ -56,8 +58,10 @@ main = withVersion $$(getVersionFromEnvironment) $ parseArgs >>= \case
 unitSpecs :: Spec
 unitSpecs = do
   describe "Data.Parser.CacheControl" CacheControlParser.spec
+  describe "Data.Parser.URLTemplate" URLTemplate.spec
+  describe "Data.Parser.JsonPath" JsonPath.spec
   describe "Hasura.Incremental" IncrementalSpec.spec
-  describe "Hasura.RQL.Metadata" MetadataSpec.spec
+  -- describe "Hasura.RQL.Metadata" MetadataSpec.spec -- Commenting until optimizing the test in CI
   describe "Data.Time" TimeSpec.spec
   describe "Hasura.Server.Telemetry" TelemetrySpec.spec
 
@@ -70,14 +74,14 @@ buildPostgresSpecs pgConnOptions = do
 
   let setupCacheRef = do
         pgPool <- Q.initPGPool pgConnInfo Q.defaultConnParams { Q.cpConns = 1 } print
-
+        let pgContext = PGExecCtx pgPool Q.Serializable
+            isPgCtx = IsPGExecCtx (const $ return pgContext) [pgPool]
         httpManager <- HTTP.newManager HTTP.tlsManagerSettings
         let runContext = RunCtx adminUserInfo httpManager (SQLGenCtx False)
-            pgContext = PGExecCtx pgPool Q.Serializable
 
             runAsAdmin :: Run a -> IO a
             runAsAdmin =
-                  peelRun runContext pgContext Q.ReadWrite
+                  peelRun runContext isPgCtx (runLazyTx Q.ReadWrite)
               >>> runExceptT
               >=> flip onLeft printErrJExit
 
@@ -93,8 +97,8 @@ parseArgs = execParser $ info (helper <*> (parseNoCommand <|> parseSubCommand)) 
   fullDesc <> header "Hasura GraphQL Engine test suite"
   where
     parseNoCommand = AllSuites <$> parseRawConnInfo
-    parseSubCommand = SingleSuite <$> parseHspecPassThroughArgs <*> subCmd 
-      where 
+    parseSubCommand = SingleSuite <$> parseHspecPassThroughArgs <*> subCmd
+      where
         subCmd = subparser $ mconcat
           [ command "unit" $ info (pure UnitSuite) $
               progDesc "Only run unit tests"

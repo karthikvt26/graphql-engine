@@ -30,6 +30,7 @@ import {
 } from './utils';
 
 import _push from './push';
+import { getFetchAllRolesQuery } from '../../Common/utils/v1QueryUtils';
 
 import { fetchColumnTypesQuery, fetchColumnDefaultFunctions } from './utils';
 
@@ -61,6 +62,12 @@ const REQUEST_SUCCESS = 'ModifyTable/REQUEST_SUCCESS';
 const REQUEST_ERROR = 'ModifyTable/REQUEST_ERROR';
 const SET_FILTER_SCHEMA = 'Data/SET_FILTER_SCHEMA';
 const SET_FILTER_TABLES = 'Data/SET_FILTER_TABLES';
+
+export const SET_ALL_ROLES = 'Data/SET_ALL_ROLES';
+export const setAllRoles = roles => ({
+  type: SET_ALL_ROLES,
+  roles,
+});
 
 const initQueries = (schemaFilter = []) => {
   if (schemaFilter.length > 0) {
@@ -486,7 +493,7 @@ const loadSchema = configOptions => {
           allSchemas: consistentSchemas || maybeInconsistentSchemas,
         });
 
-        dispatch(loadInconsistentObjects());
+        dispatch(loadInconsistentObjects({ shouldReloadMetadata: false }));
       },
       error => {
         console.error('loadSchema error: ' + JSON.stringify(error));
@@ -801,6 +808,38 @@ const fetchColumnTypeInfo = () => {
   };
 };
 
+export const fetchRoleList = () => (dispatch, getState) => {
+  const query = getFetchAllRolesQuery();
+  const options = {
+    credentials: globalCookiePolicy,
+    method: 'POST',
+    headers: dataHeaders(getState),
+    body: JSON.stringify(query),
+  };
+
+  return dispatch(requestAction(Endpoints.query, options)).then(
+    data => {
+      const allRoles = [...new Set(data.map(r => r.role_name))];
+      const { inconsistentObjects } = getState().metadata;
+
+      let consistentRoles = [...allRoles];
+
+      if (inconsistentObjects.length > 0) {
+        consistentRoles = filterInconsistentMetadataObjects(
+          allRoles,
+          inconsistentObjects,
+          'roles'
+        );
+      }
+
+      dispatch(setAllRoles(consistentRoles));
+    },
+    error => {
+      console.error('Failed to load roles ' + JSON.stringify(error));
+    }
+  );
+};
+
 /* ******************************************************* */
 const dataReducer = (state = defaultState, action) => {
   // eslint-disable-line no-unused-vars
@@ -942,6 +981,11 @@ const dataReducer = (state = defaultState, action) => {
         tableFilter: {
           ...action.data,
         },
+      };
+    case SET_ALL_ROLES:
+      return {
+        ...state,
+        allRoles: action.roles,
       };
     default:
       return state;

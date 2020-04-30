@@ -1,3 +1,4 @@
+{-# LANGUAGE UndecidableInstances #-}
 module Hasura.GraphQL.Execute.LiveQuery.TMap
   ( TMap
   , new
@@ -33,7 +34,7 @@ lookup :: (Eq k, Hashable k) => k -> TMap k v -> STM (Maybe v)
 lookup k = fmap (Map.lookup k) . readTVar . unTMap
 
 insert :: (Eq k, Hashable k) => v -> k -> TMap k v -> STM ()
-insert v k mapTv = modifyTVar' (unTMap mapTv) $ Map.insert k v
+insert !v k mapTv = modifyTVar' (unTMap mapTv) $ Map.insert k v
 
 delete :: (Eq k, Hashable k) => k -> TMap k v -> STM ()
 delete k mapTv = modifyTVar' (unTMap mapTv) $ Map.delete k

@@ -27,7 +27,7 @@ data Mutation
   = Mutation
   { _mTable    :: !QualifiedTable
   , _mQuery    :: !(S.CTE, DS.Seq Q.PrepArg)
-  , _mFields   :: !MutFlds
+  , _mOutput   :: !MutationOutput
   , _mCols     :: ![PGColumnInfo]
   , _mStrfyNum :: !Bool
   } deriving (Show, Eq)
@@ -35,22 +35,22 @@ data Mutation
 runMutation :: Mutation -> Q.TxE QErr EncJSON
 runMutation mut =
   bool (mutateAndReturn mut) (mutateAndSel mut) $
-    hasNestedFld $ _mFields mut
+    hasNestedFld $ _mOutput mut
 
 mutateAndReturn :: Mutation -> Q.TxE QErr EncJSON
-mutateAndReturn (Mutation qt (cte, p) mutFlds _ strfyNum) =
+mutateAndReturn (Mutation qt (cte, p) mutationOutput allCols strfyNum) =
   encJFromBS . runIdentity . Q.getRow
     <$> Q.rawQE dmlTxErrorHandler (Q.fromBuilder $ toSQL selWith)
         (toList p) True
   where
-    selWith = mkMutationOutputExp qt Nothing cte mutFlds strfyNum
+    selWith = mkMutationOutputExp qt allCols Nothing cte mutationOutput strfyNum
 
 mutateAndSel :: Mutation -> Q.TxE QErr EncJSON
-mutateAndSel (Mutation qt q mutFlds allCols strfyNum) = do
+mutateAndSel (Mutation qt q mutationOutput allCols strfyNum) = do
   -- Perform mutation and fetch unique columns
   MutateResp _ columnVals <- mutateAndFetchCols qt allCols q strfyNum
   selCTE <- mkSelCTEFromColVals qt allCols columnVals
-  let selWith = mkMutationOutputExp qt Nothing selCTE mutFlds strfyNum
+  let selWith = mkMutationOutputExp qt allCols Nothing selCTE mutationOutput strfyNum
   -- Perform select query and fetch returning fields
   encJFromBS . runIdentity . Q.getRow
     <$> Q.rawQE dmlTxErrorHandler (Q.fromBuilder $ toSQL selWith) [] True
@@ -85,7 +85,7 @@ mutateAndFetchCols qt cols (cte, p) strfyNum =
       { S.selExtr = [S.Extractor S.countStar Nothing]
       , S.selFrom = Just $ S.FromExp [S.FIIden aliasIden]
       }
-    colSel = S.SESelect $ mkSQLSelect False $
+    colSel = S.SESelect $ mkSQLSelect JASMultipleRows $
              AnnSelG selFlds tabFrom tabPerm noTableArgs strfyNum
 
 -- | Note:- Using sorted columns is necessary to enable casting the rows returned by VALUES expression to table type.
@@ -108,8 +108,7 @@ mkSelCTEFromColVals qt allCols colVals =
   where
     rowAlias = Iden "row"
     extractor = S.selectStar' $ S.QualIden rowAlias $ Just $ S.TypeAnn $ toSQLTxt qt
-    sortedCols = flip sortBy allCols $ \lCol rCol ->
-                 compare (pgiPosition lCol) (pgiPosition rCol)
+    sortedCols = sortCols allCols
     mkTupsFromColVal colVal =
       fmap S.TupleExp $ forM sortedCols $ \ci -> do
         let pgCol = pgiColumn ci

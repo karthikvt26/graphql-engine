@@ -3,9 +3,10 @@ module Hasura.RQL.DDL.RemoteSchema
   , runRemoveRemoteSchema
   , removeRemoteSchemaFromCatalog
   , runReloadRemoteSchema
+  , fetchRemoteSchemas
   , addRemoteSchemaP1
   , addRemoteSchemaP2Setup
-  , addRemoteSchemaP2
+  , addRemoteSchemaToCatalog
   ) where
 
 import           Hasura.EncJSON
@@ -84,9 +85,9 @@ runReloadRemoteSchema
   :: (QErrM m, CacheRWM m)
   => RemoteSchemaNameQuery -> m EncJSON
 runReloadRemoteSchema (RemoteSchemaNameQuery name) = do
-  rmSchemas <- scRemoteSchemas <$> askSchemaCache
-  void $ onNothing (Map.lookup name rmSchemas) $
-    throw400 NotExists $ "remote schema with name " <> name <<> " does not exist"
+  remoteSchemas <- getAllRemoteSchemas <$> askSchemaCache
+  unless (name `elem` remoteSchemas) $ throw400 NotExists $
+    "remote schema with name " <> name <<> " does not exist"
 
   let invalidations = mempty { ciRemoteSchemas = S.singleton name }
   withNewInconsistentObjsCheck $ buildSchemaCacheWithOptions CatalogUpdate invalidations
@@ -108,3 +109,15 @@ removeRemoteSchemaFromCatalog name =
     DELETE FROM hdb_catalog.remote_schemas
       WHERE name = $1
   |] (Identity name) True
+
+fetchRemoteSchemas :: Q.TxE QErr [AddRemoteSchemaQuery]
+fetchRemoteSchemas =
+  map fromRow <$> Q.listQE defaultTxErrorHandler
+    [Q.sql|
+     SELECT name, definition, comment
+       FROM hdb_catalog.remote_schemas
+     ORDER BY name ASC
+     |] () True
+  where
+    fromRow (name, Q.AltJ def, comment) =
+      AddRemoteSchemaQuery name def comment

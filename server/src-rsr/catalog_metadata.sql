@@ -7,7 +7,9 @@ select
     'remote_schemas', remote_schemas.items,
     'functions', functions.items,
     'allowlist_collections', allowlist.item,
-    'computed_fields', computed_field.items
+    'computed_fields', computed_field.items,
+    'custom_types', custom_types.item,
+    'actions', actions.items
   )
 from
   (
@@ -170,4 +172,46 @@ from
         from hdb_catalog.hdb_function_info_agg
         where function_name = cc.function_name and function_schema = cc.function_schema
       ) fi on 'true'
-  ) as computed_field
+  ) as computed_field,
+  (
+    select
+      json_build_object(
+        'custom_types',
+         coalesce((select custom_types from hdb_catalog.hdb_custom_types), '{}'),
+        'pg_scalars', -- See Note [Postgres scalars in custom types]
+         coalesce((select json_agg(typname) from pg_catalog.pg_type where typtype = 'b'), '[]')
+      ) as item
+  ) as custom_types,
+  (
+    select
+      coalesce(
+        json_agg(
+          json_build_object(
+            'name', ha.action_name,
+            'definition', ha.action_defn :: json,
+            'comment', ha.comment,
+            'permissions', p.items
+          )
+        ),
+        '[]'
+      ) as items
+    from
+      hdb_catalog.hdb_action ha
+      left join lateral
+      (
+        select
+          coalesce(
+            json_agg(
+              json_build_object(
+                'action', hap.action_name,
+                'role', hap.role_name,
+                'comment', hap.comment
+              )
+            ),
+            '[]'
+          ) as items
+          from
+              hdb_catalog.hdb_action_permission hap
+          where hap.action_name = ha.action_name
+      ) p on 'true'
+  ) as actions

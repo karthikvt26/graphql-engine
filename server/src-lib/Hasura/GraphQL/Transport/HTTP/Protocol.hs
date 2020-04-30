@@ -4,7 +4,7 @@ module Hasura.GraphQL.Transport.HTTP.Protocol
   , GQLReqUnparsed
   , GQLReqParsed
   , toParsed
-  , GQLQueryText
+  , GQLQueryText(..)
   , GQLExecDoc(..)
   , OperationName(..)
   , VariableValues
@@ -38,7 +38,7 @@ newtype GQLExecDoc
   deriving (Ord, Show, Eq, Hashable)
 
 instance J.FromJSON GQLExecDoc where
-  parseJSON v = (GQLExecDoc . G.getExecutableDefinitions) <$> J.parseJSON v
+  parseJSON v = GQLExecDoc . G.getExecutableDefinitions <$> J.parseJSON v
 
 instance J.ToJSON GQLExecDoc where
   toJSON = J.toJSON . G.ExecutableDocument . unGQLExecDoc
@@ -74,19 +74,19 @@ data GQLBatchedReqs a
   = GQLSingleRequest (GQLReq a)
   | GQLBatchedReqs [GQLReq a]
   deriving (Show, Eq, Generic)
-  
+
 instance J.ToJSON a => J.ToJSON (GQLBatchedReqs a) where
   toJSON (GQLSingleRequest q) = J.toJSON q
-  toJSON (GQLBatchedReqs qs) = J.toJSON qs
+  toJSON (GQLBatchedReqs qs)  = J.toJSON qs
 
 instance J.FromJSON a => J.FromJSON (GQLBatchedReqs a) where
   parseJSON arr@J.Array{} = GQLBatchedReqs <$> J.parseJSON arr
-  parseJSON other = GQLSingleRequest <$> J.parseJSON other
+  parseJSON other         = GQLSingleRequest <$> J.parseJSON other
 
 newtype GQLQueryText
   = GQLQueryText
   { _unGQLQueryText :: Text
-  } deriving (Show, Eq, Ord, J.FromJSON, J.ToJSON, Hashable)
+  } deriving (Show, Eq, Ord, J.FromJSON, J.ToJSON, Hashable, IsString)
 
 type GQLReqUnparsed = GQLReq GQLQueryText
 type GQLReqParsed = GQLReq GQLExecDoc

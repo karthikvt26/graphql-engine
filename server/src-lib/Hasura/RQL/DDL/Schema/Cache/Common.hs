@@ -26,7 +26,7 @@ import           Hasura.SQL.Types
 data InvalidationKeys = InvalidationKeys
   { _ikMetadata      :: !Inc.InvalidationKey
   , _ikRemoteSchemas :: !(HashMap RemoteSchemaName Inc.InvalidationKey)
-  } deriving (Eq, Generic)
+  } deriving (Show, Eq, Generic)
 instance Inc.Cacheable InvalidationKeys
 instance Inc.Select InvalidationKeys
 $(makeLenses ''InvalidationKeys)
@@ -54,12 +54,14 @@ data BuildInputs
 data BuildOutputs
   = BuildOutputs
   { _boTables        :: !TableCache
+  , _boActions       :: !ActionCache
   , _boFunctions     :: !FunctionCache
   , _boRemoteSchemas :: !(HashMap RemoteSchemaName (RemoteSchemaCtx, MetadataObject))
   -- ^ We preserve the 'MetadataObject' from the original catalog metadata in the output so we can
   -- reuse it later if we need to mark the remote schema inconsistent during GraphQL schema
   -- generation (because of field conflicts).
   , _boAllowlist     :: !(HS.HashSet GQLQuery)
+  , _boCustomTypes   :: !(NonObjectTypeMap, AnnotatedObjects)
   } deriving (Show, Eq)
 $(makeLenses ''BuildOutputs)
 

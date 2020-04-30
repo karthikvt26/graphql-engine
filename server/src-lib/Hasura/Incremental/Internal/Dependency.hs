@@ -7,11 +7,13 @@ module Hasura.Incremental.Internal.Dependency where
 import           Hasura.Prelude
 
 import qualified Data.Dependent.Map            as DM
+import qualified Data.URL.Template             as UT
 import qualified Language.GraphQL.Draft.Syntax as G
 import qualified Network.URI.Extended          as N
 
 import           Control.Applicative
 import           Data.Aeson                    (Value)
+import           Data.CaseInsensitive          (CI)
 import           Data.Functor.Classes          (Eq1 (..), Eq2 (..))
 import           Data.GADT.Compare
 import           Data.Int
@@ -169,6 +171,8 @@ instance (Cacheable k, Cacheable v) => Cacheable (HashMap k v) where
   unchanged accesses = liftEq2 (unchanged accesses) (unchanged accesses)
 instance (Cacheable a) => Cacheable (HashSet a) where
   unchanged = liftEq . unchanged
+instance (Cacheable a) => Cacheable (CI a) where
+  unchanged _ = (==)
 
 instance Cacheable ()
 instance (Cacheable a, Cacheable b) => Cacheable (a, b)
@@ -195,6 +199,9 @@ instance Cacheable G.Value
 instance Cacheable G.ValueConst
 instance Cacheable G.VariableDefinition
 instance Cacheable N.URI
+instance Cacheable UT.Variable
+instance Cacheable UT.TemplateItem
+instance Cacheable UT.URLTemplate
 instance (Cacheable a) => Cacheable (Maybe a)
 instance (Cacheable a, Cacheable b) => Cacheable (Either a b)
 instance (Cacheable a) => Cacheable [a]
@@ -209,6 +216,7 @@ deriving instance Cacheable G.Name
 deriving instance Cacheable G.NamedType
 deriving instance Cacheable G.StringValue
 deriving instance Cacheable G.Variable
+deriving instance Cacheable G.Description
 deriving instance (Cacheable a) => Cacheable (G.ListValueG a)
 deriving instance (Cacheable a) => Cacheable (G.ObjectValueG a)
 

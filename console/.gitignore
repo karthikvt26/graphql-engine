@@ -11,7 +11,7 @@ npm-debug.log
 coverage
 .idea/*
 test
-**/.tern-port
 
 packages/console-oss/build/
 packages/console-oss-table/build/
+**/.tern-port

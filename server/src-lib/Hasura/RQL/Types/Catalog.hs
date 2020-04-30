@@ -12,6 +12,7 @@ module Hasura.RQL.Types.Catalog
   , CatalogPermission(..)
   , CatalogEventTrigger(..)
   , CatalogFunction(..)
+  , CatalogCustomTypes(..)
   ) where
 
 import           Hasura.Prelude
@@ -25,13 +26,16 @@ import           Data.Aeson.TH
 import           Hasura.Incremental               (Cacheable)
 import           Hasura.RQL.DDL.ComputedField
 import           Hasura.RQL.DDL.Schema.Function
+import           Hasura.RQL.Types.Action
 import           Hasura.RQL.Types.Column
 import           Hasura.RQL.Types.Common
+import           Hasura.RQL.Types.CustomTypes
 import           Hasura.RQL.Types.EventTrigger
 import           Hasura.RQL.Types.Permission
 import           Hasura.RQL.Types.QueryCollection
 import           Hasura.RQL.Types.RemoteSchema
 import           Hasura.RQL.Types.SchemaCache
+import           Hasura.Session
 import           Hasura.SQL.Types
 
 newtype CatalogForeignKey
@@ -137,6 +141,27 @@ instance NFData CatalogFunction
 instance Cacheable CatalogFunction
 $(deriveFromJSON (aesonDrop 3 snakeCase) ''CatalogFunction)
 
+data CatalogCustomTypes
+  = CatalogCustomTypes
+  { _cctCustomTypes :: !CustomTypes
+  , _cctPgScalars   :: !(HashSet PGScalarType)
+  -- ^ All Postgres base types, which may be referenced in custom type definitions.
+  -- When we validate the custom types (see 'validateCustomTypeDefinitions'),
+  -- we record which base types were referenced so that we can be sure to include them
+  -- in the generated GraphQL schema.
+  --
+  -- These are not actually part of the Hasura metadata --- we fetch them from
+  -- @pg_catalog.pg_type@ --- but they’re needed when validating the custom type
+  -- metadata, so we include them here.
+  --
+  -- See Note [Postgres scalars in custom types] for more details.
+  } deriving (Show, Eq, Generic)
+instance NFData CatalogCustomTypes
+instance Cacheable CatalogCustomTypes
+$(deriveFromJSON (aesonDrop 4 snakeCase) ''CatalogCustomTypes)
+
+type CatalogAction = ActionMetadata
+
 data CatalogMetadata
   = CatalogMetadata
   { _cmTables               :: ![CatalogTable]
@@ -147,6 +172,8 @@ data CatalogMetadata
   , _cmFunctions            :: ![CatalogFunction]
   , _cmAllowlistCollections :: ![CollectionDef]
   , _cmComputedFields       :: ![CatalogComputedField]
+  , _cmCustomTypes          :: !CatalogCustomTypes
+  , _cmActions              :: ![CatalogAction]
   } deriving (Show, Eq, Generic)
 instance NFData CatalogMetadata
 instance Cacheable CatalogMetadata
