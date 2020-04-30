@@ -246,7 +246,8 @@
     "webpack-cli": "3.3.11",
     "webpack-dev-middleware": "3.7.2",
     "webpack-hot-middleware": "2.25.0",
-    "webpack-isomorphic-tools": "3.0.6"
+    "webpack-isomorphic-tools": "3.0.6",
+    "webpack-node-externals": "^1.7.2"
   },
   "engines": {
     "node": ">=8.9.1"

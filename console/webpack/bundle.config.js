@@ -14,6 +14,7 @@ const webpackIsomorphicToolsPlugin = new WebpackIsomorphicToolsPlugin(
 
 const TerserPlugin = require('terser-webpack-plugin');
 const OptimizeCssAssetsPlugin = require('optimize-css-assets-webpack-plugin');
+const ForkTsCheckerWebpackPlugin = require('fork-ts-checker-webpack-plugin');
 const nodeExternals = require('webpack-node-externals');
 
 // const BundleAnalyzerPlugin = require('webpack-bundle-analyzer').BundleAnalyzerPlugin;
@@ -31,10 +32,11 @@ const cleanOptions = {
 };
 
 module.exports = {
-  externals: [nodeExternals()],
+  externals: [nodeExternals({ importType: 'umd' })],
   mode: 'production',
   context: path.resolve(__dirname, '..'),
   entry: './pro-index.js',
+  devtool: 'eval-source-map',
   output: {
     path: assetsPath,
     filename: '[name].js',
@@ -50,8 +52,10 @@ module.exports = {
         type: 'javascript/auto',
       },
       {
-        test: /\.jsx?$/,
+        test: /\.(j|t)sx?$/,
         exclude: /node_modules/,
+        use: 'babel-loader',
+        /*
         use: {
           loader: 'babel-loader',
           options: {
@@ -64,6 +68,7 @@ module.exports = {
             ],
           },
         },
+        */
       },
       {
         test: /\.flow$/,
@@ -137,7 +142,7 @@ module.exports = {
   },
   resolve: {
     modules: ['src', 'node_modules'],
-    extensions: ['.json', '.js', '.jsx', '.mjs'],
+    extensions: ['.json', '.js', '.jsx', '.mjs', '.ts', '.tsx'],
   },
   optimization: {
     minimize: true,
@@ -203,5 +208,11 @@ module.exports = {
       CONSOLE_ASSET_VERSION: JSON.stringify(getRandomHexString()),
     }),
     // new BundleAnalyzerPlugin()
+    new ForkTsCheckerWebpackPlugin({
+      compilerOptions: {
+        allowJs: true,
+        checkJs: false,
+      },
+    }),
   ],
 };
