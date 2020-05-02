@@ -20,7 +20,6 @@ import           Data.IORef                      (IORef, readIORef, writeIORef)
 import           Data.List                       (find)
 import           Data.Time.Clock                 (NominalDiffTime, UTCTime, diffUTCTime,
                                                   getCurrentTime)
-import           Data.Time.Format                (defaultTimeLocale, parseTimeM)
 import           GHC.AssertNF
 import           Network.URI                     (URI)
 

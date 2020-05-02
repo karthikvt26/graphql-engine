@@ -20,13 +20,10 @@ import qualified Data.Aeson.Casing                      as J
 import qualified Data.Aeson.TH                          as J
 import qualified Data.ByteString.Lazy                   as BL
 import qualified Data.HashMap.Strict                    as Map
-import qualified Data.Time.Clock                        as TC
-import qualified Data.UUID                              as UUID
 
 import           Hasura.EncJSON
 import           Hasura.GraphQL.Transport.HTTP.Protocol
 import           Hasura.Prelude
-import           Hasura.RQL.Types
 
 -- | These come from the client and are websocket connection-local.
 newtype OperationId

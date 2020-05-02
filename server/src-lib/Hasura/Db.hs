@@ -22,6 +22,8 @@ module Hasura.Db
   , mkTxErrorHandler
   ) where
 
+import Debug.Trace
+import System.IO.Unsafe (unsafePerformIO)
 import           Control.Lens
 import           Control.Monad.Trans.Control  (MonadBaseControl (..))
 import           Control.Monad.Unique
@@ -118,11 +120,14 @@ type RespTx = Q.TxE QErr EncJSON
 type LazyRespTx = LazyTx QErr EncJSON
 
 setHeadersTx :: SessionVariables -> Q.TxE QErr ()
-setHeadersTx session =
-  Q.unitQE defaultTxErrorHandler setSess () False
+setHeadersTx session = do
+  Q.unitQE defaultTxErrorHandler (trace ("the sql query: " <> show setSess) setSess) () False
   where
-    setSess = Q.fromText $
-      "SET LOCAL \"hasura.user\" = " <> toSQLTxt (sessionInfoJsonExp session)
+    txt =  "SET LOCAL \"hasura.user\" = " <> toSQLTxt (sessionInfoJsonExp session)
+    setSess =
+      let _ = unsafePerformIO (putStrLn "here")
+      in Q.fromText $ trace ("the set local text: " ++ show txt) txt
+      -- "SET LOCAL \"hasura.user\" = " <> toSQLTxt (sessionInfoJsonExp session)
 
 sessionInfoJsonExp :: SessionVariables -> S.SQLExp
 sessionInfoJsonExp = S.SELit . J.encodeToStrictText
@@ -155,7 +160,8 @@ mkTxErrorHandler isExpectedError txe = fromMaybe unexpectedError expectedError
 
         PGDataException code -> case code of
           Just (PGErrorSpecific PGInvalidEscapeSequence) -> (BadRequest, message)
-          _                                              -> (DataException, message)
+          _                                              ->
+            trace (show code ++ " :: " ++ show message) $ (DataException, message)
 
         PGSyntaxErrorOrAccessRuleViolation code -> (ConstraintError,) $ case code of
           Just (PGErrorSpecific PGInvalidColumnReference) ->
@@ -166,7 +172,9 @@ withUserInfo :: UserInfo -> LazyTx QErr a -> LazyTx QErr a
 withUserInfo uInfo = \case
   LTErr e  -> LTErr e
   LTNoTx a -> LTNoTx a
-  LTTx tx  -> LTTx $ setHeadersTx (_uiSession uInfo) >> tx
+  LTTx tx  ->
+    let vars = _uiSession uInfo
+    in trace ("session vars: " ++ show vars) $  LTTx $ setHeadersTx vars >> tx
 
 instance Functor (LazyTx e) where
   fmap f = \case

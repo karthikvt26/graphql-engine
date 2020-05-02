@@ -37,7 +37,6 @@ import qualified Network.Wreq                           as Wreq
 
 import           Hasura.EncJSON
 import           Hasura.GraphQL.Context
-import           Hasura.GraphQL.Logging
 import           Hasura.GraphQL.Resolve.Action
 import           Hasura.GraphQL.Resolve.Context
 import           Hasura.GraphQL.Schema
@@ -48,9 +47,8 @@ import           Hasura.Prelude
 import           Hasura.RQL.DDL.Headers
 import           Hasura.RQL.Types
 import           Hasura.Server.Logging                  (QueryLogger (..))
-import           Hasura.Server.Utils                    (IpAddress, RequestId, filterRequestHeaders)
-import           Hasura.Server.Utils                    (RequestId, mkClientHeadersForward,
-                                                         mkSetCookieHeaders)
+import           Hasura.Server.Utils                    (IpAddress, RequestId,
+                                                         mkClientHeadersForward, mkSetCookieHeaders)
 import           Hasura.Server.Version                  (HasVersion)
 import           Hasura.Session
 
@@ -170,7 +168,6 @@ getExecPlanPartial userInfo sc enableAL req = do
   where
     -- role = userRole userInfo
     roleName = _uiRole userInfo
-    gCtxRoleMap = scGCtxMap sc
     getTxAccess rootSelSet = case rootSelSet of
       VQ.RQuery{}        -> getGQLQueryTxAccess rootSelSet
       VQ.RMutation{}     -> return Q.ReadWrite
@@ -244,14 +241,20 @@ getResolvedExecPlan isPgCtx planCache userInfo sqlGenCtx
       forM partialExecPlan $ \(gCtx, rootSelSet, txAccess) ->
         case rootSelSet of
           VQ.RMutation selSet -> do
+            liftIO $ putStrLn "Inside getResolvedExecPlan for Mutation ==>"
             (tx, respHeaders) <- getMutOp gCtx sqlGenCtx userInfo httpManager reqHeaders selSet
+            liftIO $ putStrLn "done with getMutOp ==>"
             pure $ (ExOpMutation respHeaders tx, Q.ReadWrite)
           VQ.RQuery selSet -> do
-            (queryTx, plan, genSql) <- getQueryOp gCtx sqlGenCtx userInfo queryReusability (allowQueryActionExecuter httpManager reqHeaders) selSet
+            (queryTx, plan, genSql) <-
+              getQueryOp gCtx sqlGenCtx userInfo queryReusability (allowQueryActionExecuter httpManager reqHeaders) selSet
             traverse_ (addPlanToCache . flip EP.RPQuery txAccess) plan
             return $ (ExOpQuery queryTx (Just genSql), txAccess)
           VQ.RSubscription fld -> do
-            (lqOp, plan) <- getSubsOp isPgCtx gCtx sqlGenCtx userInfo queryReusability (restrictActionExecuter "query actions cannot be run as a subscription") fld
+            (lqOp, plan) <-
+              getSubsOp isPgCtx gCtx sqlGenCtx userInfo queryReusability
+              (restrictActionExecuter "query actions cannot be run as a subscription")
+              fld
             traverse_ (addPlanToCache . flip EP.RPSubs txAccess) plan
             return $ (ExOpSubs lqOp, txAccess)
 

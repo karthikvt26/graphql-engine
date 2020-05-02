@@ -21,12 +21,6 @@ module Hasura.Server.Auth
   ) where
 
 import           Control.Concurrent.Extended (forkImmortal)
-import           Control.Exception      (try)
-import           Control.Lens
-import           Data.Aeson
-import           Data.IORef             (newIORef)
-import           Data.Time.Clock        (UTCTime)
-import           Hasura.Server.Version  (HasVersion)
 import           Data.IORef                  (newIORef)
 import           Data.Time.Clock             (UTCTime)
 import           Hasura.Server.Version       (HasVersion)

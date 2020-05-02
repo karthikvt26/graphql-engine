@@ -6,31 +6,6 @@ module Hasura.App where
 import           Control.Concurrent.STM.TVar               (readTVarIO)
 import           Control.Monad.Base
 import           Control.Monad.Stateless
--- <<<<<<< HEAD
--- import           Control.Monad.STM                      (atomically)
--- import           Control.Monad.Trans.Control            (MonadBaseControl (..))
--- import           Data.Aeson                             ((.=))
--- import           Data.Time.Clock                        (UTCTime, getCurrentTime)
--- import           GHC.AssertNF
--- import           Options.Applicative
--- import           System.Environment                     (getEnvironment, lookupEnv)
--- import           System.Exit                            (exitFailure)
-
--- import qualified Control.Concurrent.Async.Lifted.Safe   as LA
--- import qualified Control.Concurrent.Extended            as C
--- import qualified Data.Aeson                             as A
--- import qualified Data.ByteString.Char8                  as BC
--- import qualified Data.ByteString.Lazy.Char8             as BLC
--- import qualified Data.Text                              as T
--- import qualified Data.Time.Clock                        as Clock
--- import qualified Data.Yaml                              as Y
--- import qualified Database.PG.Query                      as Q
--- import qualified Network.HTTP.Client                    as HTTP
--- import qualified Network.HTTP.Client.TLS                as HTTP
--- import qualified Network.Wai.Handler.Warp               as Warp
--- import qualified System.Posix.Signals                   as Signals
--- import qualified Text.Mustache.Compile                  as M
--- =======
 import           Control.Monad.STM                         (atomically)
 import           Control.Monad.Trans.Control               (MonadBaseControl (..))
 import           Data.Aeson                                ((.=))
@@ -59,12 +34,6 @@ import qualified Text.Mustache.Compile                     as M
 import           Hasura.Db
 import           Hasura.EncJSON
 import           Hasura.Events.Lib
--- import           Hasura.RQL.Types                       (CacheRWM, Code (..), HasHttpManager,
---                                                          HasSQLGenCtx, HasSystemDefined, QErr (..),
---                                                          SQLGenCtx (..), SchemaCache (..),
---                                                          UserInfoM, adminRole, adminUserInfo,
---                                                          buildSchemaCacheStrict, decodeValue,
---                                                          throw400, userRole, withPathK)
 import           Hasura.GraphQL.Execute                    (GQLApiAuthorization (..))
 import           Hasura.GraphQL.Logging                    (QueryLog (..))
 import           Hasura.GraphQL.Transport.HTTP.Protocol    (toParsed)
@@ -86,7 +55,6 @@ import           Hasura.Server.Auth
 import           Hasura.Server.CheckUpdates                (checkForUpdates)
 import           Hasura.Server.Init
 import           Hasura.Server.Logging
-import           Hasura.Server.Migrate                     (migrateCatalog)
 import           Hasura.Server.SchemaUpdate
 import           Hasura.Server.Telemetry
 import           Hasura.Server.Version
@@ -181,7 +149,7 @@ initialiseCtx hgeCmd rci = do
   httpManager <- liftIO $ HTTP.newManager HTTP.tlsManagerSettings
   instanceId <- liftIO generateInstanceId
   connInfo <- liftIO procConnInfo
-  (loggers, pool, isPGCtx) <- case hgeCmd of
+  (loggers, _, isPGCtx) <- case hgeCmd of
     -- for server command generate a proper pool
     HCServe so@ServeOptions{..} -> do
       l@(Loggers _ logger pgLogger) <- mkLoggers soEnabledLogTypes soLogLevel
