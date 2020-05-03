@@ -15,7 +15,6 @@ import qualified Network.HTTP.Types                     as HTTP
 import           Hasura.EncJSON
 import           Hasura.GraphQL.Transport.HTTP.Protocol
 import           Hasura.HTTP
-import           Hasura.Logging
 import           Hasura.Prelude
 import           Hasura.RQL.Types
 import           Hasura.Server.Init.Config
@@ -110,7 +109,7 @@ runHasuraGQ
 runHasuraGQ reqId query userInfo txAccess resolvedOp = do
   E.ExecutionCtx logger _ isPgCtx _ _ _ _ _ <- ask
   logQuery' logger
-  (telemTimeIO, respE) <- withElapsedTime $ runExceptT $ executeTx logger isPgCtx
+  (telemTimeIO, respE) <- withElapsedTime $ runExceptT $ executeTx isPgCtx
   (respHdrs, resp)     <- liftEither respE
 
   let !json          = encodeGQResp $ GQSuccess $ encJToLBS resp
@@ -121,15 +120,11 @@ runHasuraGQ reqId query userInfo txAccess resolvedOp = do
       Q.ReadOnly  -> runLazyROTx'
       Q.ReadWrite -> runLazyRWTx'
 
-    executeTx logger isPgCtx = case resolvedOp of
+    executeTx isPgCtx = case resolvedOp of
       E.ExOpQuery tx _    ->
         ([],) <$> runLazyTx' isPgCtx tx
       E.ExOpMutation respHeaders tx -> do
-        unLogger logger $ debugT "running mutation"
-        let authorizedTx = withUserInfo userInfo tx
-        unLogger logger $ debugT "with sess headers"
-        -- unLogger logger $ debugT $ T.pack $ show authorizedTx
-        (respHeaders,) <$> (runLazyTx' isPgCtx authorizedTx)
+        (respHeaders,) <$> runLazyTx Q.ReadWrite isPgCtx (withUserInfo userInfo tx)
       E.ExOpSubs _ ->
         throw400 UnexpectedPayload
         "subscriptions are not supported over HTTP, use websockets instead"
@@ -140,3 +135,24 @@ runHasuraGQ reqId query userInfo txAccess resolvedOp = do
       -- log the graphql query
       E.ExOpMutation _ _   -> logQuery logger query Nothing reqId
       E.ExOpSubs _         -> return ()
+
+
+-- =======
+-- runHasuraGQ reqId query userInfo resolvedOp = do
+--   E.ExecutionCtx logger _ pgExecCtx _ _ _ _ _ <- ask
+--   (telemTimeIO, respE) <- withElapsedTime $ liftIO $ runExceptT $ case resolvedOp of
+--     E.ExOpQuery tx genSql  -> do
+--       -- log the generated SQL and the graphql query
+--       L.unLogger logger $ QueryLog query genSql reqId
+--       ([],) <$> runLazyTx' pgExecCtx tx
+--     E.ExOpMutation respHeaders tx -> do
+--       -- log the graphql query
+--       L.unLogger logger $ QueryLog query Nothing reqId
+--       L.unLogger logger $ L.debugT "=============> MUTATION IS RUNNING ==============>> "
+--       (respHeaders,) <$> runLazyTx pgExecCtx Q.ReadWrite (withUserInfo userInfo tx)
+--     E.ExOpSubs _ ->
+--       throw400 UnexpectedPayload
+--       "subscriptions are not supported over HTTP, use websockets instead"
+--   (respHdrs, resp) <- liftEither respE
+--   let !json = encodeGQResp $ GQSuccess $ encJToLBS resp
+-- >>>>>>> Stashed changes
