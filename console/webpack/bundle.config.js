@@ -32,11 +32,10 @@ const cleanOptions = {
 };
 
 module.exports = {
-  externals: [nodeExternals({ importType: 'umd' })],
+  externals: [nodeExternals()],
   mode: 'production',
   context: path.resolve(__dirname, '..'),
   entry: './pro-index.js',
-  devtool: 'eval-source-map',
   output: {
     path: assetsPath,
     filename: '[name].js',
@@ -54,13 +53,16 @@ module.exports = {
       {
         test: /\.(j|t)sx?$/,
         exclude: /node_modules/,
-        use: 'babel-loader',
-        /*
+        // use: 'babel-loader',
         use: {
           loader: 'babel-loader',
           options: {
             babelrc: false,
-            presets: ['@babel/preset-env', '@babel/preset-react'],
+            presets: [
+              '@babel/preset-env',
+              '@babel/preset-react',
+              '@babel/preset-typescript',
+            ],
             plugins: [
               '@babel/plugin-proposal-export-default-from',
               'transform-es2015-modules-commonjs',
@@ -68,7 +70,6 @@ module.exports = {
             ],
           },
         },
-        */
       },
       {
         test: /\.flow$/,
@@ -208,12 +209,12 @@ module.exports = {
     new webpack.DefinePlugin({
       CONSOLE_ASSET_VERSION: JSON.stringify(getRandomHexString()),
     }),
-    // new BundleAnalyzerPlugin()
     new ForkTsCheckerWebpackPlugin({
       compilerOptions: {
         allowJs: true,
         checkJs: false,
       },
     }),
+    // new BundleAnalyzerPlugin()
   ],
 };
