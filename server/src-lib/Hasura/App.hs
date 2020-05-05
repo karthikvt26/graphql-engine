@@ -170,7 +170,8 @@ initialiseCtx hgeCmd rci = do
       pool <- getMinimalPool pgLogger connInfo
       return (l, pool, mkIsPgCtx pool Q.Serializable)
 
-  -- get the unique db id
+  -- -- get the unique db id, get it in this init step because Pro needs it before the server is run
+  -- -- but you can't get the DbUid unless the catalog is initialized (in case of an empty database)
   -- eDbId <- liftIO $ runExceptT $ Q.runTx pool (Q.Serializable, Nothing) getDbId
   -- dbId <- either printErrJExit return eDbId
 
@@ -196,6 +197,13 @@ runTxIO pool isoLevel tx = do
   eVal <- liftIO $ runExceptT $ runLazyTx isoLevel pool $ liftTx tx
   either printErrJExit return eVal
 
+
+class Monad m => Telemetry m where
+  -- an abstract method to start telemetry
+  startTelemetry
+    :: HasVersion
+    => Logger Hasura -> ServeOptions impl -> SchemaCacheRef -> InitCtx -> m ()
+
 runHGEServer
   :: ( HasVersion
      , MonadIO m
@@ -209,13 +217,15 @@ runHGEServer
      , ConsoleRenderer m
      , ConfigApiHandler m
      , LA.Forall (LA.Pure m)
+     , CatalogInitialise m
+     , Telemetry m
      )
   => ServeOptions impl
   -> InitCtx
   -> UTCTime
   -- ^ start time
   -> m ()
-runHGEServer ServeOptions{..} InitCtx{..} initTime = do
+runHGEServer serveOpts@ServeOptions{..} initCtx@InitCtx{..} initTime = do
   -- Comment this to enable expensive assertions from "GHC.AssertNF". These will log lines to
   -- STDOUT containing "not in normal form". In the future we could try to integrate this into
   -- our tests. For now this is a development tool.
@@ -281,21 +291,7 @@ runHGEServer ServeOptions{..} InitCtx{..} initTime = do
   _updateThread <- C.forkImmortal "checkForUpdates" logger $ liftIO $
     checkForUpdates loggerCtx _icHttpManager
 
-  -- start a background thread for telemetry
-  when soEnableTelemetry $ do
-    unLogger logger $ mkGenericStrLog LevelInfo "telemetry" telemetryNotice
-
-    (dbId, pgVersion) <- liftIO $ runTxIO _icPgExecCtx Q.ReadOnly $
-      (,) <$> getDbId <*> getPgVersion
-
-    void $ C.forkImmortal "runTelemetry" logger $ liftIO $
-      runTelemetry logger _icHttpManager (getSCFromRef cacheRef) dbId _icInstanceId pgVersion
--- =======
---     (dbId, pgVersion) <- liftIO $ runTxIO _icPgPool (Q.ReadCommitted, Nothing) $
---       (,) <$> getDbId <*> getPgVersion
---     void $ C.forkImmortal "runTelemetry" logger $ liftIO $
---       runTelemetry logger _icHttpManager (getSCFromRef cacheRef) dbId _icInstanceId pgVersion
--- >>>>>>> stable
+  startTelemetry logger serveOpts cacheRef initCtx
 
   finishTime <- liftIO Clock.getCurrentTime
   let apiInitTime = realToFrac $ Clock.diffUTCTime finishTime initTime
@@ -441,6 +437,19 @@ instance GQLApiAuthorization AppM where
 instance ConfigApiHandler AppM where
   runConfigApiHandler = configApiGetHandler
 
+instance Telemetry AppM where
+  startTelemetry logger serveOptions cacheRef InitCtx{..} = do
+    -- start a background thread for telemetry
+    when (soEnableTelemetry serveOptions) $ do
+      unLogger logger $ mkGenericStrLog LevelInfo "telemetry" telemetryNotice
+
+      (dbId, pgVersion) <- liftIO $ runTxIO _icPgExecCtx Q.ReadOnly $
+        (,) <$> getDbId <*> getPgVersion
+
+      void $ C.forkImmortal "runTelemetry" logger $ liftIO $
+        runTelemetry logger _icHttpManager (getSCFromRef cacheRef) dbId _icInstanceId pgVersion
+
+
 instance ConsoleRenderer AppM where
   renderConsole path authMode enableTelemetry consoleAssetsDir =
     return $ mkConsoleHTML path authMode enableTelemetry consoleAssetsDir
@@ -462,6 +471,9 @@ mkConsoleHTML path authMode enableTelemetry consoleAssetsDir =
         r  -> "/console/" <> r
 
       consoleTmplt = $(M.embedSingleTemplate "src-rsr/console.html")
+
+instance CatalogInitialise AppM where
+  initialiseCatalog = migrateAndInitialiseSchemaCache
 
 
 telemetryNotice :: String

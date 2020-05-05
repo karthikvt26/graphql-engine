@@ -206,11 +206,13 @@ library
                      , Control.Arrow.Trans
                      , Control.Monad.Stateless
                      , Control.Monad.Unique
+                     , Control.Concurrent.Extended
                      , Data.Time.Clock.Units
 
                      -- exposed for tests
                      , Data.Parser.CacheControl
                      , Data.URL.Template
+                     , Data.Parser.JSONPath
 
                      , Hasura.Prelude
                      , Hasura.App
@@ -239,7 +241,8 @@ library
                      , Hasura.Server.API.PGDump
                      -- Exposed for testing:
                      , Hasura.Server.Telemetry.Counters
-                     , Data.Parser.JSONPath
+                     -- exposed for Pro
+                     , Hasura.Server.Telemetry
 
                      , Hasura.GraphQL.Execute
                      , Hasura.GraphQL.Execute.LiveQuery
@@ -273,7 +276,6 @@ library
                      , Hasura.Server.Middleware
                      , Hasura.Server.Cors
                      , Hasura.Server.CheckUpdates
-                     , Hasura.Server.Telemetry
                      , Hasura.Server.SchemaUpdate
                      , Hasura.Server.Migrate.Version
                      , Hasura.Server.Auth.JWT.Internal
@@ -380,7 +382,6 @@ library
                      , Hasura.Events.Lib
                      , Hasura.Events.HTTP
 
-                     , Control.Concurrent.Extended
                      , Control.Lens.Extended
                      , Data.Aeson.Extended
                      , Data.List.Extended

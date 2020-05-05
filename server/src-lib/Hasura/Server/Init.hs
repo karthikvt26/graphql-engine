@@ -1,39 +1,39 @@
 -- | Types and functions related to the server initialisation
 {-# LANGUAGE CPP #-}
 module Hasura.Server.Init
-  ( DbUid(..)
-  , getDbId
+  -- ( DbUid(..)
+  -- , getDbId
 
-  , PGVersion(..)
-  , getPgVersion
+  -- , PGVersion(..)
+  -- , getPgVersion
 
-  , InstanceId(..)
-  , generateInstanceId
+  -- , InstanceId(..)
+  -- , generateInstanceId
 
-  , StartupTimeInfo(..)
+  -- , StartupTimeInfo(..)
 
-  -- * Server command related
-  , parseRawConnInfo
-  , mkRawConnInfo
-  , mkHGEOptions
-  , mkConnInfo
-  , serveOptionsParser
+  -- -- * Server command related
+  -- , parseRawConnInfo
+  -- , mkRawConnInfo
+  -- , mkHGEOptions
+  -- , mkConnInfo
+  -- , serveOptionsParser
 
-  -- * Downgrade command related
-  , downgradeShortcuts
-  , downgradeOptionsParser
+  -- -- * Downgrade command related
+  -- , downgradeShortcuts
+  -- , downgradeOptionsParser
 
-  -- * Help footers
-  , mainCmdFooter
-  , serveCmdFooter
+  -- -- * Help footers
+  -- , mainCmdFooter
+  -- , serveCmdFooter
 
-  -- * Startup logs
-  , mkGenericStrLog
-  , mkGenericLog
-  , inconsistentMetadataLog
-  , serveOptsToLog
-  , connInfoToLog
-
+  -- -- * Startup logs
+  -- , mkGenericStrLog
+  -- , mkGenericLog
+  -- , inconsistentMetadataLog
+  -- , serveOptsToLog
+  -- , connInfoToLog
+  ( module Hasura.Server.Init
   , module Hasura.Server.Init.Config
   ) where
 

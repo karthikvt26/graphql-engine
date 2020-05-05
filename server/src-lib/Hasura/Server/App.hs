@@ -498,6 +498,7 @@ mkWaiApp
      , E.GQLApiAuthorization m
      , ConfigApiHandler m
      , LA.Forall (LA.Pure m)
+     , CatalogInitialise m
      )
   -- ^ postgres transaction isolation to be used in the entire app
   => L.Logger L.Hasura
@@ -554,7 +555,7 @@ mkWaiApp
 mkWaiApp logger sqlGenCtx enableAL isPgCtx ci httpManager mode corsCfg enableConsole consoleAssetsDir
          enableTelemetry instanceId apis lqOpts planCacheOptions responseErrorsConfig = do
 
-    (planCache, schemaCacheRef, cacheBuiltTime) <- migrateAndInitialiseSchemaCache
+    (planCache, schemaCacheRef, cacheBuiltTime) <- initialiseCatalog logger isPgCtx sqlGenCtx httpManager planCacheOptions
     let getSchemaCache = first lastBuiltSchemaCache <$> readIORef (_scrCache schemaCacheRef)
 
     let corsPolicy = mkDefaultCorsPolicy corsCfg
@@ -602,44 +603,54 @@ mkWaiApp logger sqlGenCtx enableAL isPgCtx ci httpManager mode corsCfg enableCon
     getTimeMs :: IO Int64
     getTimeMs = (round . (* 1000)) `fmap` getPOSIXTime
 
-    migrateAndInitialiseSchemaCache :: m (E.PlanCache, SchemaCacheRef, Maybe UTCTime)
-    migrateAndInitialiseSchemaCache = do
-        -- let isPgSerCtx = withTxIsolation Q.Serializable isPgCtx
-        --     runCtx = RunCtx adminUserInfo httpManager sqlGenCtx
 
-        -- (cacheRef, cacheBuiltTime) <- do
-        --   pgResp <- runExceptT $ peelRun runCtx isPgSerCtx (runLazyTx Q.ReadWrite) $
-        --     (,) <$> buildRebuildableSchemaCache <*> liftTx fetchLastUpdate
-        --   (schemaCache, event) <- liftIO $ either initErrExit return pgResp
-        --   scRef <- liftIO $ newIORef (schemaCache, initSchemaCacheVer)
-        --   return (scRef, view _2 <$> event)
+class MonadIO m => CatalogInitialise m where
+  initialiseCatalog
+    :: HasVersion
+    => L.Logger L.Hasura -> IsPGExecCtx -> SQLGenCtx -> HTTP.Manager -> E.PlanCacheOptions
+    -> m (E.PlanCache, SchemaCacheRef, Maybe UTCTime)
 
-        -- cacheLock <- liftIO $ newMVar ()
-        -- planCache <- liftIO $ E.initPlanCache planCacheOptions
+migrateAndInitialiseSchemaCache
+  :: (HasVersion, MonadIO m)
+  => L.Logger L.Hasura -> IsPGExecCtx -> SQLGenCtx -> HTTP.Manager -> E.PlanCacheOptions
+  -> m (E.PlanCache, SchemaCacheRef, Maybe UTCTime)
+migrateAndInitialiseSchemaCache logger isPgCtx sqlGenCtx httpManager planCacheOptions = do
+    -- let isPgSerCtx = withTxIsolation Q.Serializable isPgCtx
+    --     runCtx = RunCtx adminUserInfo httpManager sqlGenCtx
 
-      let isPgSerCtx = withTxIsolation Q.Serializable isPgCtx
-          -- pgExecCtx = PGExecCtx isPgCtx Q.Serializable
-          adminRunCtx = RunCtx adminUserInfo httpManager sqlGenCtx
-      currentTime <- liftIO getCurrentTime
-      initialiseResult <- runExceptT $ peelRun adminRunCtx isPgSerCtx (runLazyTx Q.ReadWrite) do
-        (,) <$> migrateCatalog currentTime <*> liftTx fetchLastUpdate
+    -- (cacheRef, cacheBuiltTime) <- do
+    --   pgResp <- runExceptT $ peelRun runCtx isPgSerCtx (runLazyTx Q.ReadWrite) $
+    --     (,) <$> buildRebuildableSchemaCache <*> liftTx fetchLastUpdate
+    --   (schemaCache, event) <- liftIO $ either initErrExit return pgResp
+    --   scRef <- liftIO $ newIORef (schemaCache, initSchemaCacheVer)
+    --   return (scRef, view _2 <$> event)
 
-      ((migrationResult, schemaCache), lastUpdateEvent) <-
-        initialiseResult `onLeft` \err -> do
-          L.unLogger logger StartupLog
-            { slLogLevel = L.LevelError
-            , slKind = "db_migrate"
-            , slInfo = toJSON err
-            }
-          liftIO exitFailure
-      L.unLogger logger migrationResult
+    -- cacheLock <- liftIO $ newMVar ()
+    -- planCache <- liftIO $ E.initPlanCache planCacheOptions
 
-      cacheLock <- liftIO $ newMVar ()
-      cacheCell <- liftIO $ newIORef (schemaCache, initSchemaCacheVer)
-      planCache <- liftIO $ E.initPlanCache planCacheOptions
-      let cacheRef = SchemaCacheRef cacheLock cacheCell (E.clearPlanCache planCache)
+  let isPgSerCtx = withTxIsolation Q.Serializable isPgCtx
+      -- pgExecCtx = PGExecCtx isPgCtx Q.Serializable
+      adminRunCtx = RunCtx adminUserInfo httpManager sqlGenCtx
+  currentTime <- liftIO getCurrentTime
+  initialiseResult <- runExceptT $ peelRun adminRunCtx isPgSerCtx (runLazyTx Q.ReadWrite) do
+    (,) <$> migrateCatalog currentTime <*> liftTx fetchLastUpdate
 
-      pure (planCache, cacheRef, view _2 <$> lastUpdateEvent)
+  ((migrationResult, schemaCache), lastUpdateEvent) <-
+    initialiseResult `onLeft` \err -> do
+      L.unLogger logger StartupLog
+        { slLogLevel = L.LevelError
+        , slKind = "db_migrate"
+        , slInfo = toJSON err
+        }
+      liftIO exitFailure
+  L.unLogger logger migrationResult
+
+  cacheLock <- liftIO $ newMVar ()
+  cacheCell <- liftIO $ newIORef (schemaCache, initSchemaCacheVer)
+  planCache <- liftIO $ E.initPlanCache planCacheOptions
+  let cacheRef = SchemaCacheRef cacheLock cacheCell (E.clearPlanCache planCache)
+
+  pure (planCache, cacheRef, view _2 <$> lastUpdateEvent)
 
 httpApp
   :: ( HasVersion
