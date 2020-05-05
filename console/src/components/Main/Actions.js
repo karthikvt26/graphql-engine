@@ -229,11 +229,7 @@ const mainReducer = (state = defaultState, action) => {
       return {
         ...state,
         latestStableServerVersion: action.data.latest,
-<<<<<<< HEAD
-        latestServerVersion: action.data.prerelease,
-=======
         latestPreReleaseServerVersion: action.data.prerelease,
->>>>>>> stable
       };
     case SET_LATEST_SERVER_VERSION_ERROR:
       return {

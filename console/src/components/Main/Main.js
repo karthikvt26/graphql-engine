@@ -65,17 +65,11 @@ class Main extends React.Component {
     dispatch(loadServerVersion()).then(() => {
       dispatch(featureCompatibilityInit());
 
-<<<<<<< HEAD
-      dispatch(loadInconsistentObjects()).then(() => {
-        this.handleMetadataRedirect();
-      });
-=======
       dispatch(loadInconsistentObjects({ shouldReloadMetadata: false })).then(
         () => {
           this.handleMetadataRedirect();
         }
       );
->>>>>>> stable
 
       dispatch(loadLatestServerVersion()).then(() => {
         this.setShowUpdateNotification();
@@ -94,11 +88,7 @@ class Main extends React.Component {
   setShowUpdateNotification() {
     const {
       latestStableServerVersion,
-<<<<<<< HEAD
-      latestServerVersion,
-=======
       latestPreReleaseServerVersion,
->>>>>>> stable
       serverVersion,
       console_opts,
     } = this.props;
@@ -106,11 +96,6 @@ class Main extends React.Component {
     const allowPreReleaseNotifications =
       !console_opts || !console_opts.disablePreReleaseUpdateNotifications;
 
-<<<<<<< HEAD
-    const latestServerVersionToCheck = allowPreReleaseNotifications
-      ? latestServerVersion
-      : latestStableServerVersion;
-=======
     let latestServerVersionToCheck;
     if (
       allowPreReleaseNotifications &&
@@ -120,7 +105,6 @@ class Main extends React.Component {
     } else {
       latestServerVersionToCheck = latestStableServerVersion;
     }
->>>>>>> stable
 
     try {
       const lastUpdateCheckClosed = getLocalStorageItem(
@@ -332,14 +316,10 @@ class Main extends React.Component {
               <a href={'#'} onClick={handlePreRelNotifOptOut}>
                 Opt out of pre-release notifications
               </a>
-<<<<<<< HEAD
-              <ToolTip message={'Only be notified about stable releases'} />
-=======
               <ToolTip
                 message={'Only be notified about stable releases'}
                 placement={'top'}
               />
->>>>>>> stable
             </i>
           </React.Fragment>
         );
