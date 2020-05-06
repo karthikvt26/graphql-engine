@@ -241,9 +241,7 @@ getResolvedExecPlan isPgCtx planCache userInfo sqlGenCtx
       forM partialExecPlan $ \(gCtx, rootSelSet, txAccess) ->
         case rootSelSet of
           VQ.RMutation selSet -> do
-            liftIO $ putStrLn "Inside getResolvedExecPlan for Mutation ==>"
             (tx, respHeaders) <- getMutOp gCtx sqlGenCtx userInfo httpManager reqHeaders selSet
-            liftIO $ putStrLn "done with getMutOp ==>"
             pure $ (ExOpMutation respHeaders tx, Q.ReadWrite)
           VQ.RQuery selSet -> do
             (queryTx, plan, genSql) <-
