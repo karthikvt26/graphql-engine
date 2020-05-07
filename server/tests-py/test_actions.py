@@ -384,7 +384,7 @@ class TestActionsAsync:
         }
         # Query the action as user-id 1
         # Make request without auth using admin_secret
-        check_query_timeout(hge_ctx, conf_user_1, add_auth = False, timeout =10)
+        check_query_timeout(hge_ctx, conf_user_1, add_auth = False, timeout = 10)
 
 def check_query_timeout(hge_ctx, conf, add_auth, timeout):
     wait_until = time.time() + timeout
