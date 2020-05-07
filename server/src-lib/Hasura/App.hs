@@ -217,7 +217,6 @@ runHGEServer
      , ConsoleRenderer m
      , ConfigApiHandler m
      , LA.Forall (LA.Pure m)
-     , CatalogInitialise m
      , Telemetry m
      )
   => ServeOptions impl
@@ -471,10 +470,6 @@ mkConsoleHTML path authMode enableTelemetry consoleAssetsDir =
         r  -> "/console/" <> r
 
       consoleTmplt = $(M.embedSingleTemplate "src-rsr/console.html")
-
-instance CatalogInitialise AppM where
-  initialiseCatalog = migrateAndInitialiseSchemaCache
-
 
 telemetryNotice :: String
 telemetryNotice =
