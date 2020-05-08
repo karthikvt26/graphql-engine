@@ -38,7 +38,6 @@ import           Control.Concurrent.Extended                 (sleep)
 import           Control.Exception.Lifted
 import           Data.String
 import           GHC.AssertNF
-import qualified ListT
 
 import           Hasura.EncJSON
 import           Hasura.GraphQL.Transport.HTTP.Protocol
@@ -83,13 +82,13 @@ data ErrRespType
 
 data WsClientState
   = WsClientState
-  { wscsUserInfo   :: !UserInfo
+  { wscsUserInfo     :: !UserInfo
   -- ^ the 'UserInfo' required to execute the query and various other things
   , wscsTokenExpTime :: !(Maybe TC.UTCTime)
   -- ^ the JWT expiry time, if any
-  , wscsReqHeaders :: ![H.Header]
+  , wscsReqHeaders   :: ![H.Header]
   -- ^ headers from the client (in conn params) to forward to the remote schema
-  , wscsIpAddress  :: !IpAddress
+  , wscsIpAddress    :: !IpAddress
   -- ^ IP address required for 'GQLApiAuthorization'
   }
 
@@ -241,7 +240,7 @@ onConn (L.Logger logger) corsPolicy wsId requestHead ipAddress = do
         case connState of
           CSNotInitialised _ _      -> STM.retry
           CSInitError _             -> STM.retry
-          CSInitialised clientState -> maybe STM.retry return $ wscsJwtExpTime clientState
+          CSInitialised clientState -> maybe STM.retry return $ wscsTokenExpTime clientState
       currTime <- TC.getCurrentTime
       sleep $ fromUnits $ TC.diffUTCTime expTime currTime
 
@@ -330,8 +329,7 @@ onStart serverEnv wsConn (StartMsg opId q) = catchAndIgnore $ do
   -- (sc, scVer) <- liftIO $ IORef.readIORef gCtxMapRef
   (sc, scVer) <- liftIO getSchemaCache
   execPlanE <- runExceptT $ E.getResolvedExecPlan pgExecCtx
-               planCache userInfo sqlGenCtx enableAL sc scVer (q, reqParsed)
-               -- planCache userInfo sqlGenCtx enableAL sc scVer httpMgr reqHdrs q
+               planCache userInfo sqlGenCtx enableAL sc scVer httpMgr reqHdrs (q, reqParsed)
 
   (telemCacheHit, execPlan) <- either (withComplete . preExecErr requestId) return execPlanE
   let execCtx = E.ExecutionCtx logger sqlGenCtx pgExecCtx planCache sc scVer httpMgr enableAL
@@ -549,7 +547,7 @@ logWSEvent
 logWSEvent (L.Logger logger) wsConn wsEv = do
   userInfoME <- liftIO $ STM.readTVarIO userInfoR
   let (userVarsM, tokenExpM) = case userInfoME of
-        CSInitialised WsClientState{..} -> ( Just $ userVars wscsUserInfo
+        CSInitialised WsClientState{..} -> ( Just $ _uiSession wscsUserInfo
                                            , wscsTokenExpTime
                                            )
         _                               -> (Nothing, Nothing)

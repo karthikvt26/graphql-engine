@@ -357,10 +357,10 @@ data ActionLogItem
 asyncActionsProcessor
   :: HasVersion
   => IORef (RebuildableSchemaCache Run, SchemaCacheVer)
-  -> Q.PGPool
+  -> IsPGExecCtx
   -> HTTP.Manager
   -> IO void
-asyncActionsProcessor cacheRef pgPool httpManager = forever $ do
+asyncActionsProcessor cacheRef isPgExecCtx httpManager = forever $ do
   asyncInvocations <- getUndeliveredEvents
   actionCache <- scActions . lastBuiltSchemaCache . fst <$> readIORef cacheRef
   A.mapConcurrently_ (callHandler actionCache) asyncInvocations
@@ -368,7 +368,7 @@ asyncActionsProcessor cacheRef pgPool httpManager = forever $ do
   where
     runTx :: (Monoid a) => Q.TxE QErr a -> IO a
     runTx q = do
-      res <- runExceptT $ Q.runTx' pgPool q
+      res <- runExceptT $ runLazyRWTx' isPgExecCtx $ liftTx q
       either mempty return res
 
     callHandler :: ActionCache -> ActionLogItem -> IO ()

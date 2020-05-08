@@ -37,7 +37,6 @@ import qualified Network.Wreq                           as Wreq
 
 import           Hasura.EncJSON
 import           Hasura.GraphQL.Context
-import           Hasura.GraphQL.Logging
 import           Hasura.GraphQL.Resolve.Action
 import           Hasura.GraphQL.Resolve.Context
 import           Hasura.GraphQL.Schema
@@ -47,11 +46,9 @@ import           Hasura.HTTP
 import           Hasura.Prelude
 import           Hasura.RQL.DDL.Headers
 import           Hasura.RQL.Types
-import           Hasura.Server.Context
 import           Hasura.Server.Logging                  (QueryLogger (..))
-import           Hasura.Server.Utils                    (IpAddress, RequestId, filterRequestHeaders)
-import           Hasura.Server.Utils                    (RequestId, mkClientHeadersForward,
-                                                         mkSetCookieHeaders)
+import           Hasura.Server.Utils                    (IpAddress, RequestId,
+                                                         mkClientHeadersForward, mkSetCookieHeaders)
 import           Hasura.Server.Version                  (HasVersion)
 import           Hasura.Session
 
@@ -171,7 +168,6 @@ getExecPlanPartial userInfo sc enableAL req = do
   where
     -- role = userRole userInfo
     roleName = _uiRole userInfo
-    gCtxRoleMap = scGCtxMap sc
     getTxAccess rootSelSet = case rootSelSet of
       VQ.RQuery{}        -> getGQLQueryTxAccess rootSelSet
       VQ.RMutation{}     -> return Q.ReadWrite
@@ -199,7 +195,7 @@ getExecPlanPartial userInfo sc enableAL req = do
 -- to be executed
 data ExecOp
   = ExOpQuery !LazyRespTx !(Maybe EQ.GeneratedSqlMap)
-  | ExOpMutation !N.ResponseHeaders !LazyRespTx
+  | ExOpMutation !HTTP.ResponseHeaders !LazyRespTx
   | ExOpSubs !EL.LiveQueryPlan
 
 -- The graphql query is resolved into an execution operation
@@ -216,7 +212,7 @@ getResolvedExecPlan
   -> SchemaCache
   -> SchemaCacheVer
   -> HTTP.Manager
-  -> [N.Header]
+  -> [HTTP.Header]
   -> (GQLReqUnparsed, GQLReqParsed)
   -> m (Telem.CacheHit, ExecPlanResolved)
 getResolvedExecPlan isPgCtx planCache userInfo sqlGenCtx
@@ -248,11 +244,15 @@ getResolvedExecPlan isPgCtx planCache userInfo sqlGenCtx
             (tx, respHeaders) <- getMutOp gCtx sqlGenCtx userInfo httpManager reqHeaders selSet
             pure $ (ExOpMutation respHeaders tx, Q.ReadWrite)
           VQ.RQuery selSet -> do
-            (queryTx, plan, genSql) <- getQueryOp gCtx sqlGenCtx userInfo queryReusability (allowQueryActionExecuter httpManager reqHeaders) selSet
+            (queryTx, plan, genSql) <-
+              getQueryOp gCtx sqlGenCtx userInfo queryReusability (allowQueryActionExecuter httpManager reqHeaders) selSet
             traverse_ (addPlanToCache . flip EP.RPQuery txAccess) plan
             return $ (ExOpQuery queryTx (Just genSql), txAccess)
           VQ.RSubscription fld -> do
-            (lqOp, plan) <- getSubsOp isPgCtx gCtx sqlGenCtx userInfo queryReusability (restrictActionExecuter "query actions cannot be run as a subscription") fld
+            (lqOp, plan) <-
+              getSubsOp isPgCtx gCtx sqlGenCtx userInfo queryReusability
+              (restrictActionExecuter "query actions cannot be run as a subscription")
+              fld
             traverse_ (addPlanToCache . flip EP.RPSubs txAccess) plan
             return $ (ExOpSubs lqOp, txAccess)
 
@@ -312,11 +312,11 @@ resolveMutSelSet
      , Has SQLGenCtx r
      , Has InsCtxMap r
      , Has HTTP.Manager r
-     , Has [N.Header] r
+     , Has [HTTP.Header] r
      , MonadIO m
      )
   => VQ.SelSet
-  -> m (LazyRespTx, N.ResponseHeaders)
+  -> m (LazyRespTx, HTTP.ResponseHeaders)
 resolveMutSelSet fields = do
   aliasedTxs <- forM (toList fields) $ \fld -> do
     fldRespTx <- case VQ._fName fld of
@@ -342,9 +342,9 @@ getMutOp
   -> SQLGenCtx
   -> UserInfo
   -> HTTP.Manager
-  -> [N.Header]
+  -> [HTTP.Header]
   -> VQ.SelSet
-  -> m (LazyRespTx, N.ResponseHeaders)
+  -> m (LazyRespTx, HTTP.ResponseHeaders)
 getMutOp ctx sqlGenCtx userInfo manager reqHeaders selSet =
   peelReaderT $ resolveMutSelSet selSet
   where

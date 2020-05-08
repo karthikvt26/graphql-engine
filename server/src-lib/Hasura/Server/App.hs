@@ -4,53 +4,6 @@
 module Hasura.Server.App where
 
 import           Control.Concurrent.MVar.Lifted
--- <<<<<<< HEAD
--- import           Control.Exception                         (IOException, try)
--- import           Control.Lens                              (view, _2)
--- import           Control.Monad.Stateless
--- import           Control.Monad.Trans.Control               (MonadBaseControl)
--- import           Data.Aeson                                hiding (json)
--- import           Data.Either                               (isRight)
--- import           Data.Int                                  (Int64)
--- import           Data.IORef
--- import           Data.Time.Clock                           (UTCTime)
--- import           Data.Time.Clock.POSIX                     (getPOSIXTime)
--- import           Network.Mime                              (defaultMimeLookup)
--- import           System.Exit                               (exitFailure)
--- import           System.FilePath                           (joinPath, takeFileName)
--- import           Web.Spock.Core                            ((<//>))
-
--- import qualified Control.Concurrent.Async.Lifted.Safe      as LA
--- import qualified Data.ByteString.Lazy                      as BL
--- import qualified Data.HashMap.Strict                       as M
--- import qualified Data.HashSet                              as S
--- import qualified Data.Text                                 as T
--- import qualified Database.PG.Query                         as Q
--- import qualified Network.HTTP.Client                       as HTTP
--- import qualified Network.HTTP.Types                        as HTTP
--- import qualified Network.Wai                               as Wai
--- import qualified Network.Wai.Handler.WebSockets.Custom     as WSC
--- import qualified Network.WebSockets                        as WS
--- import qualified System.Metrics                            as EKG
--- import qualified System.Metrics.Json                       as EKG
--- import qualified Text.Mustache                             as M
--- import qualified Web.Spock.Core                            as Spock
-
--- import           Hasura.EncJSON
--- import           Hasura.Prelude                            hiding (get, put)
--- import           Hasura.RQL.DDL.Schema
--- import           Hasura.RQL.Types
--- import           Hasura.RQL.Types.Run
--- import           Hasura.Server.Auth                        (AuthMode (..), UserAuthentication (..))
--- import           Hasura.Server.Compression
--- import           Hasura.Server.Config                      (runGetConfig)
--- import           Hasura.Server.Context
--- import           Hasura.Server.Cors
--- import           Hasura.Server.Init
--- import           Hasura.Server.Logging
--- import           Hasura.Server.Middleware                  (corsMiddleware)
--- import           Hasura.Server.Query
--- =======
 import           Control.Exception                      (IOException, try)
 import           Control.Lens                           (view, _2)
 import           Control.Monad.Stateless
@@ -76,7 +29,7 @@ import qualified Database.PG.Query                      as Q
 import qualified Network.HTTP.Client                    as HTTP
 import qualified Network.HTTP.Types                     as HTTP
 import qualified Network.Wai                            as Wai
-import qualified Network.Wai.Handler.WebSockets         as WS
+import qualified Network.Wai.Handler.WebSockets.Custom     as WSC
 import qualified Network.WebSockets                     as WS
 import qualified System.Metrics                         as EKG
 import qualified System.Metrics.Json                    as EKG
@@ -104,17 +57,7 @@ import           Hasura.Server.Version
 import           Hasura.Session
 import           Hasura.SQL.Types
 
--- <<<<<<< HEAD
--- import qualified Hasura.GraphQL.Execute                    as E
--- import qualified Hasura.GraphQL.Execute.LiveQuery          as EL
--- import qualified Hasura.GraphQL.Explain                    as GE
--- import qualified Hasura.GraphQL.Transport.HTTP             as GH
--- import qualified Hasura.GraphQL.Transport.HTTP.Protocol    as GH
--- import qualified Hasura.GraphQL.Transport.WebSocket        as WS
--- import qualified Hasura.GraphQL.Transport.WebSocket.Server as WS
--- import qualified Hasura.Logging                            as L
--- import qualified Hasura.Server.PGDump                      as PGD
--- =======
+import qualified Hasura.GraphQL.Transport.WebSocket.Server as WS
 import qualified Hasura.GraphQL.Execute                 as E
 import qualified Hasura.GraphQL.Execute.LiveQuery       as EL
 import qualified Hasura.GraphQL.Explain                 as GE
@@ -302,7 +245,7 @@ mkSpockAction serverCtx qErrEncoder qErrModifier apiHandler = do
     let handlerState = HandlerCtx serverCtx userInfo headers ipAddress requestId
         includeInternal = shouldIncludeInternal (_uiRole userInfo) $
                           scResponseInternalErrorsConfig serverCtx
-        curRole = userRole userInfo
+        -- curRole = userRole userInfo
 
     (serviceTime, (result, q)) <- withElapsedTime $ case apiHandler of
       AHGet handler -> do
@@ -523,7 +466,8 @@ configApiGetHandler serverCtx =
                   (scAuthMode serverCtx)
                   (scEnableAllowlist serverCtx)
                   (EL._lqsOptions $ scLQState serverCtx)
-      return $ JSONResp $ HttpResponse res Nothing
+      return $ JSONResp $ HttpResponse res []
+
 
 initErrExit :: QErr -> IO a
 initErrExit e = do
@@ -585,28 +529,6 @@ mkWaiApp
   -> E.PlanCacheOptions
   -> ResponseInternalErrorsConfig
   -> m HasuraApp
--- mkWaiApp logger sqlGenCtx enableAL isPgCtx ci httpManager mode corsCfg enableConsole consoleAssetsDir
---          enableTelemetry instanceId apis lqOpts planCacheOptions = do
-
---     let isPgSerCtx = withTxIsolation Q.Serializable isPgCtx
---         runCtx = RunCtx adminUserInfo httpManager sqlGenCtx
-
---     (cacheRef, cacheBuiltTime) <- do
---       pgResp <- runExceptT $ peelRun runCtx isPgSerCtx (runLazyTx Q.ReadWrite) $
---         (,) <$> buildRebuildableSchemaCache <*> liftTx fetchLastUpdate
---       (schemaCache, event) <- liftIO $ either initErrExit return pgResp
---       scRef <- liftIO $ newIORef (schemaCache, initSchemaCacheVer)
---       return (scRef, view _2 <$> event)
-
---     cacheLock <- liftIO $ newMVar ()
---     planCache <- liftIO $ E.initPlanCache planCacheOptions
-
---     let corsPolicy = mkDefaultCorsPolicy corsCfg
---         getSchemaCache = first lastBuiltSchemaCache <$> readIORef cacheRef
-
---     lqState <- liftIO $ EL.initLiveQueriesState lqOpts isPgCtx
---     wsServerEnv <- WS.createWSServerEnv logger isPgCtx lqState getSchemaCache httpManager
--- =======
 mkWaiApp logger sqlGenCtx enableAL isPgCtx ci httpManager mode corsCfg enableConsole consoleAssetsDir
          enableTelemetry instanceId apis lqOpts planCacheOptions responseErrorsConfig = do
 
@@ -658,26 +580,11 @@ mkWaiApp logger sqlGenCtx enableAL isPgCtx ci httpManager mode corsCfg enableCon
     getTimeMs :: IO Int64
     getTimeMs = (round . (* 1000)) `fmap` getPOSIXTime
 
-    migrateAndInitialiseSchemaCache :: m (E.PlanCache, SchemaCacheRef, Maybe UTCTime)
     migrateAndInitialiseSchemaCache = do
-        -- let isPgSerCtx = withTxIsolation Q.Serializable isPgCtx
-        --     runCtx = RunCtx adminUserInfo httpManager sqlGenCtx
-
-        -- (cacheRef, cacheBuiltTime) <- do
-        --   pgResp <- runExceptT $ peelRun runCtx isPgSerCtx (runLazyTx Q.ReadWrite) $
-        --     (,) <$> buildRebuildableSchemaCache <*> liftTx fetchLastUpdate
-        --   (schemaCache, event) <- liftIO $ either initErrExit return pgResp
-        --   scRef <- liftIO $ newIORef (schemaCache, initSchemaCacheVer)
-        --   return (scRef, view _2 <$> event)
-
-        -- cacheLock <- liftIO $ newMVar ()
-        -- planCache <- liftIO $ E.initPlanCache planCacheOptions
-
       let isPgSerCtx = withTxIsolation Q.Serializable isPgCtx
-          pgExecCtx = PGExecCtx pool Q.Serializable
           adminRunCtx = RunCtx adminUserInfo httpManager sqlGenCtx
       currentTime <- liftIO getCurrentTime
-      initialiseResult <- runExceptT $ peelRun adminRunCtx isPgSerCtx Q.ReadWrite do
+      initialiseResult <- runExceptT $ peelRun adminRunCtx isPgSerCtx (runLazyTx Q.ReadWrite) do
         (,) <$> migrateCatalog currentTime <*> liftTx fetchLastUpdate
 
       ((migrationResult, schemaCache), lastUpdateEvent) <-
@@ -696,6 +603,7 @@ mkWaiApp logger sqlGenCtx enableAL isPgCtx ci httpManager mode corsCfg enableCon
       let cacheRef = SchemaCacheRef cacheLock cacheCell (E.clearPlanCache planCache)
 
       pure (planCache, cacheRef, view _2 <$> lastUpdateEvent)
+
 
 httpApp
   :: ( HasVersion
@@ -752,24 +660,10 @@ httpApp corsCfg serverCtx enableConsole consoleAssetsDir enableTelemetry = do
           mkAPIRespHandler $ legacyQueryHandler (TableName tableName) queryType
 
     when enablePGDump $
-
       Spock.post "v1alpha1/pg_dump" $ spockAction encodeQErr id $
         mkPostHandler v1Alpha1PGDumpHandler
 
--- <<<<<<< HEAD
---     when enableConfig $ runConfigApiHandler serverCtx
--- =======
-    -- FIXME(anon): change this to runConfigApiHandler
-    when enableConfig $
-      Spock.get "v1alpha1/config" $ spockAction encodeQErr id $
-        mkGetHandler $ do
-          onlyAdmin
-          let res = encJFromJValue $ runGetConfig
-                      (scAuthMode serverCtx)
-                      (scEnableAllowlist serverCtx)
-                      (EL._lqsOptions $ scLQState serverCtx)
-
-          return $ JSONResp $ HttpResponse res []
+    when enableConfig $ runConfigApiHandler serverCtx
 
     when enableGraphQL $ do
       Spock.post "v1alpha1/graphql" $ spockAction GH.encodeGQErr id $
