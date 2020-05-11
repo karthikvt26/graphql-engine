@@ -1,3 +1,4 @@
+-- | See: https://github.com/apollographql/subscriptions-transport-ws/blob/master/PROTOCOL.md
 module Hasura.GraphQL.Transport.WebSocket.Protocol
   ( OperationId(..)
   , ConnParams(..)
@@ -5,7 +6,9 @@ module Hasura.GraphQL.Transport.WebSocket.Protocol
   , StopMsg(..)
   , ClientMsg(..)
   , ServerMsg(..)
+  , ServerMsgType(..)
   , encodeServerMsg
+  , serverMsgType
   , DataMsg(..)
   , ErrorMsg(..)
   , ConnErrMsg(..)
@@ -22,6 +25,7 @@ import           Hasura.EncJSON
 import           Hasura.GraphQL.Transport.HTTP.Protocol
 import           Hasura.Prelude
 
+-- | These come from the client and are websocket connection-local.
 newtype OperationId
   = OperationId { unOperationId :: Text }
   deriving (Show, Eq, J.ToJSON, J.FromJSON, Hashable)
@@ -111,6 +115,14 @@ instance Show ServerMsgType where
 
 instance J.ToJSON ServerMsgType where
   toJSON = J.toJSON . show
+
+serverMsgType :: ServerMsg -> ServerMsgType
+serverMsgType SMConnAck       = SMT_GQL_CONNECTION_ACK
+serverMsgType SMConnKeepAlive = SMT_GQL_CONNECTION_KEEP_ALIVE
+serverMsgType (SMConnErr _)   = SMT_GQL_CONNECTION_ERROR
+serverMsgType (SMData _)      = SMT_GQL_DATA
+serverMsgType (SMErr _)       = SMT_GQL_ERROR
+serverMsgType (SMComplete _)  = SMT_GQL_COMPLETE
 
 encodeServerMsg :: ServerMsg -> BL.ByteString
 encodeServerMsg msg =

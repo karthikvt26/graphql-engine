@@ -11,7 +11,7 @@ import           Hasura.RQL.DDL.Metadata    (fetchMetadata)
 import           Hasura.RQL.DDL.Schema
 import           Hasura.RQL.Types
 import           Hasura.Server.Init
-import           Hasura.Server.Migrate      (dropCatalog)
+import           Hasura.Server.Migrate      (downgradeCatalog, dropCatalog)
 import           Hasura.Server.Version
 
 import qualified Data.ByteString.Lazy       as BL
@@ -23,10 +23,11 @@ main = parseArgs >>= unAppM . runApp
 
 runApp :: HGEOptions Hasura -> AppM ()
 runApp (HGEOptionsG rci hgeCmd) =
-  withVersion $$(getVersionFromEnvironment) case hgeCmd of
+  withVersion $$(getVersionFromEnvironment) $ case hgeCmd of
     HCServe serveOptions -> do
       (initCtx, initTime) <- initialiseCtx hgeCmd rci
       runHGEServer serveOptions initCtx initTime
+
     HCExport -> do
       (initCtx, _) <- initialiseCtx hgeCmd rci
       res <- runTx' initCtx fetchMetadata
@@ -41,7 +42,7 @@ runApp (HGEOptionsG rci hgeCmd) =
       (InitCtx{..}, _) <- initialiseCtx hgeCmd rci
       queryBs <- liftIO BL.getContents
       let sqlGenCtx = SQLGenCtx False
-      res <- runAsAdmin _icPgPool sqlGenCtx _icHttpManager do
+      res <- runAsAdmin _icPgExecCtx sqlGenCtx _icHttpManager $ do
         schemaCache <- buildRebuildableSchemaCache
         execQuery queryBs
           & runHasSystemDefinedT (SystemDefined False)
@@ -49,9 +50,20 @@ runApp (HGEOptionsG rci hgeCmd) =
           & fmap (\(res, _, _) -> res)
       either printErrJExit (liftIO . BLC.putStrLn) res
 
+    HCDowngrade opts -> do
+      (InitCtx{..}, initTime) <- initialiseCtx hgeCmd rci
+      let sqlGenCtx = SQLGenCtx False
+      res <- downgradeCatalog opts initTime
+             & runAsAdmin _icPgExecCtx sqlGenCtx _icHttpManager
+      either printErrJExit (liftIO . print) res
+
     HCVersion -> liftIO $ putStrLn $ "Hasura GraphQL Engine: " ++ convertText currentVersion
   where
-    runTx' initCtx tx =
-      liftIO $ runExceptT $ Q.runTx (_icPgPool initCtx) (Q.Serializable, Nothing) tx
+    runTx' InitCtx{..} tx =
+      liftIO $ runExceptT $ runLazyTx Q.ReadWrite (withTxIsolation Q.Serializable _icPgExecCtx) $ liftTx tx
+-- =======
+--     runTx' initCtx tx txIso =
+--       liftIO $ runExceptT $ Q.runTx (_icPgPool initCtx) (txIso, Nothing) tx
+-- >>>>>>> stable
 
     cleanSuccess = liftIO $ putStrLn "successfully cleaned graphql-engine related data"

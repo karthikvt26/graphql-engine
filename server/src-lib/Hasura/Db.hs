@@ -5,10 +5,14 @@
 module Hasura.Db
   ( MonadTx(..)
   , LazyTx
+  , RunLazyTx
 
   , PGExecCtx(..)
+  , IsPGExecCtx(..)
+  , withTxIsolation
   , runLazyTx
-  , runLazyTx'
+  , runLazyROTx'
+  , runLazyRWTx'
   , withUserInfo
   , sessionInfoJsonExp
 
@@ -30,7 +34,7 @@ import qualified Database.PG.Query.Connection as Q
 import           Hasura.EncJSON
 import           Hasura.Prelude
 import           Hasura.RQL.Types.Error
-import           Hasura.RQL.Types.Permission
+import           Hasura.Session
 import           Hasura.SQL.Error
 import           Hasura.SQL.Types
 
@@ -41,6 +45,43 @@ data PGExecCtx
   { _pecPool        :: !Q.PGPool
   , _pecTxIsolation :: !Q.TxIsolation
   }
+
+data IsPGExecCtx
+  = IsPGExecCtx
+  { getPGExecCtx :: Q.TxAccess -> IO PGExecCtx
+  , getPGPools   :: [Q.PGPool]
+  }
+
+withTxIsolation :: Q.TxIsolation -> IsPGExecCtx -> IsPGExecCtx
+withTxIsolation txIso isPGExecCtx = isPGExecCtx { getPGExecCtx = getPGCtx' }
+  where
+    getPGCtx' txAccess = fmap (flip PGExecCtx txIso . _pecPool) $
+      getPGExecCtx isPGExecCtx txAccess
+
+type RunLazyTx m a = IsPGExecCtx -> LazyTx QErr a -> ExceptT QErr m a
+
+runLazyTx :: (MonadIO m) => Q.TxAccess -> RunLazyTx m a
+runLazyTx txAccess = \isPGCtx -> \case
+  LTErr e -> throwError e
+  LTNoTx a -> return a
+  LTTx tx -> do
+    PGExecCtx pgPool txIso <- liftIO $ getPGExecCtx isPGCtx txAccess
+    ExceptT <$> liftIO $ runExceptT $ Q.runTx pgPool (txIso, Just txAccess) tx
+
+runLazyTx' :: MonadIO m => Q.TxAccess -> RunLazyTx m a
+runLazyTx' txAccess = \isPGCtx -> \case
+  LTErr e  -> throwError e
+  LTNoTx a -> return a
+  LTTx tx  -> do
+    PGExecCtx pgPool _ <- liftIO $ getPGExecCtx isPGCtx txAccess
+    ExceptT <$> liftIO $ runExceptT $ Q.runTx' pgPool tx
+
+runLazyRWTx' :: MonadIO m => RunLazyTx m a
+runLazyRWTx' = runLazyTx' Q.ReadWrite
+
+runLazyROTx' :: MonadIO m => RunLazyTx m a
+runLazyROTx' = runLazyTx' Q.ReadOnly
+
 
 class (MonadError QErr m) => MonadTx m where
   liftTx :: Q.TxE QErr a -> m a
@@ -73,34 +114,17 @@ lazyTxToQTx = \case
   LTNoTx r -> return r
   LTTx tx  -> tx
 
-runLazyTx
-  :: (MonadIO m)
-  => PGExecCtx
-  -> Q.TxAccess
-  -> LazyTx QErr a -> ExceptT QErr m a
-runLazyTx (PGExecCtx pgPool txIso) txAccess = \case
-  LTErr e  -> throwError e
-  LTNoTx a -> return a
-  LTTx tx  -> ExceptT <$> liftIO $ runExceptT $ Q.runTx pgPool (txIso, Just txAccess) tx
-
-runLazyTx'
-  :: MonadIO m => PGExecCtx -> LazyTx QErr a -> ExceptT QErr m a
-runLazyTx' (PGExecCtx pgPool _) = \case
-  LTErr e  -> throwError e
-  LTNoTx a -> return a
-  LTTx tx  -> ExceptT <$> liftIO $ runExceptT $ Q.runTx' pgPool tx
-
 type RespTx = Q.TxE QErr EncJSON
 type LazyRespTx = LazyTx QErr EncJSON
 
-setHeadersTx :: UserVars -> Q.TxE QErr ()
-setHeadersTx uVars =
+setHeadersTx :: SessionVariables -> Q.TxE QErr ()
+setHeadersTx session = do
   Q.unitQE defaultTxErrorHandler setSess () False
   where
     setSess = Q.fromText $
-      "SET LOCAL \"hasura.user\" = " <> toSQLTxt (sessionInfoJsonExp uVars)
+      "SET LOCAL \"hasura.user\" = " <> toSQLTxt (sessionInfoJsonExp session)
 
-sessionInfoJsonExp :: UserVars -> S.SQLExp
+sessionInfoJsonExp :: SessionVariables -> S.SQLExp
 sessionInfoJsonExp = S.SELit . J.encodeToStrictText
 
 defaultTxErrorHandler :: Q.PGTxErr -> QErr
@@ -111,7 +135,7 @@ defaultTxErrorHandler = mkTxErrorHandler (const False)
 mkTxErrorHandler :: (PGErrorType -> Bool) -> Q.PGTxErr -> QErr
 mkTxErrorHandler isExpectedError txe = fromMaybe unexpectedError expectedError
   where
-    unexpectedError = (internalError "postgres query error") { qeInternal = Just $ J.toJSON txe }
+    unexpectedError = (internalError "database query error") { qeInternal = Just $ J.toJSON txe }
     expectedError = uncurry err400 <$> do
       errorDetail <- Q.getPGStmtErr txe
       message <- Q.edMessage errorDetail
@@ -142,7 +166,9 @@ withUserInfo :: UserInfo -> LazyTx QErr a -> LazyTx QErr a
 withUserInfo uInfo = \case
   LTErr e  -> LTErr e
   LTNoTx a -> LTNoTx a
-  LTTx tx  -> LTTx $ setHeadersTx (userVars uInfo) >> tx
+  LTTx tx  ->
+    let vars = _uiSession uInfo
+    in LTTx $ setHeadersTx vars >> tx
 
 instance Functor (LazyTx e) where
   fmap f = \case

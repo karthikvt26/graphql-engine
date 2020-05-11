@@ -1,4 +1,5 @@
-const path = require('path'); const webpack = require('webpack');
+const path = require('path');
+const webpack = require('webpack');
 const CleanPlugin = require('clean-webpack-plugin');
 const MiniCssExtractPlugin = require('mini-css-extract-plugin');
 // const hasuraConfig = require('../hasuraconfig');
@@ -13,9 +14,10 @@ const webpackIsomorphicToolsPlugin = new WebpackIsomorphicToolsPlugin(
 
 const TerserPlugin = require('terser-webpack-plugin');
 const OptimizeCssAssetsPlugin = require('optimize-css-assets-webpack-plugin');
+const ForkTsCheckerWebpackPlugin = require('fork-ts-checker-webpack-plugin');
 const nodeExternals = require('webpack-node-externals');
 
-const BundleAnalyzerPlugin = require('webpack-bundle-analyzer').BundleAnalyzerPlugin;
+// const BundleAnalyzerPlugin = require('webpack-bundle-analyzer').BundleAnalyzerPlugin;
 
 const getRandomHexString = () => {
   return Math.random()
@@ -49,13 +51,18 @@ module.exports = {
         type: 'javascript/auto',
       },
       {
-        test: /\.jsx?$/,
+        test: /\.(j|t)sx?$/,
         exclude: /node_modules/,
+        // use: 'babel-loader',
         use: {
           loader: 'babel-loader',
           options: {
             babelrc: false,
-            presets: ['@babel/preset-env', '@babel/preset-react'],
+            presets: [
+              '@babel/preset-env',
+              '@babel/preset-react',
+              '@babel/preset-typescript',
+            ],
             plugins: [
               '@babel/plugin-proposal-export-default-from',
               'transform-es2015-modules-commonjs',
@@ -136,7 +143,7 @@ module.exports = {
   },
   resolve: {
     modules: ['src', 'node_modules'],
-    extensions: ['.json', '.js', '.jsx', '.mjs'],
+    extensions: ['.json', '.js', '.jsx', '.mjs', '.ts', '.tsx'],
   },
   optimization: {
     minimize: true,
@@ -197,10 +204,17 @@ module.exports = {
         // Useful to reduce the size of client-side libraries, e.g. react
         NODE_ENV: JSON.stringify('production'),
       },
+      'process.hrtime': () => null,
     }),
     new webpack.DefinePlugin({
       CONSOLE_ASSET_VERSION: JSON.stringify(getRandomHexString()),
     }),
-    new BundleAnalyzerPlugin()
+    new ForkTsCheckerWebpackPlugin({
+      compilerOptions: {
+        allowJs: true,
+        checkJs: false,
+      },
+    }),
+    // new BundleAnalyzerPlugin()
   ],
 };

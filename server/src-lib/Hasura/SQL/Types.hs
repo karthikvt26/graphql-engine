@@ -11,12 +11,12 @@ module Hasura.SQL.Types
   , isView
 
   , QualifiedTable
-  , snakeCaseTable
   , QualifiedFunction
 
   , PGDescription(..)
 
   , PGCol
+  , unsafePGCol
   , getPGColTxt
   , showPGCols
 
@@ -32,6 +32,7 @@ module Hasura.SQL.Types
 
   , DQuote(..)
   , dquote
+  , dquoteList
 
   , IsIden(..)
   , Iden(..)
@@ -120,11 +121,17 @@ instance DQuote T.Text where
   dquoteTxt = id
   {-# INLINE dquoteTxt #-}
 
+deriving instance DQuote G.NamedType
 deriving instance DQuote G.Name
+deriving instance DQuote G.EnumValue
 
 dquote :: (DQuote a) => a -> T.Text
 dquote = T.dquote . dquoteTxt
 {-# INLINE dquote #-}
+
+dquoteList :: (DQuote a, Foldable t) => t a -> T.Text
+dquoteList = T.intercalate ", " . map dquote . toList
+{-# INLINE dquoteList #-}
 
 infixr 6 <>>
 (<>>) :: (DQuote a) => T.Text -> a -> T.Text
@@ -292,10 +299,6 @@ snakeCaseQualObject (QualifiedObject sn o)
 
 type QualifiedTable = QualifiedObject TableName
 
-snakeCaseTable :: QualifiedObject TableName -> T.Text
-snakeCaseTable (QualifiedObject sn tn) =
-  getSchemaTxt sn <> "_" <> getTableTxt tn
-
 type QualifiedFunction = QualifiedObject FunctionName
 
 newtype PGDescription
@@ -316,6 +319,9 @@ instance ToSQL PGCol where
 instance DQuote PGCol where
   dquoteTxt (PGCol t) = t
 
+unsafePGCol :: Text -> PGCol
+unsafePGCol = PGCol
+
 showPGCols :: (Foldable t) => t PGCol -> T.Text
 showPGCols cols =
   T.intercalate ", " $ map (T.dquote . getPGColTxt) $ toList cols
@@ -329,11 +335,14 @@ data PGScalarType
   | PGFloat
   | PGDouble
   | PGNumeric
+  | PGMoney
   | PGBoolean
   | PGChar
   | PGVarchar
   | PGText
+  | PGCitext
   | PGDate
+  | PGTimeStamp
   | PGTimeStampTZ
   | PGTimeTZ
   | PGJSON
@@ -341,6 +350,7 @@ data PGScalarType
   | PGGeometry
   | PGGeography
   | PGRaster
+  | PGUUID
   | PGUnknown !T.Text
   deriving (Show, Eq, Lift, Generic, Data)
 instance NFData PGScalarType
@@ -357,11 +367,14 @@ instance ToSQL PGScalarType where
     PGFloat       -> "real"
     PGDouble      -> "float8"
     PGNumeric     -> "numeric"
+    PGMoney       -> "money"
     PGBoolean     -> "boolean"
     PGChar        -> "character"
     PGVarchar     -> "varchar"
     PGText        -> "text"
+    PGCitext      -> "citext"
     PGDate        -> "date"
+    PGTimeStamp   -> "timestamp"
     PGTimeStampTZ -> "timestamptz"
     PGTimeTZ      -> "timetz"
     PGJSON        -> "json"
@@ -369,6 +382,7 @@ instance ToSQL PGScalarType where
     PGGeometry    -> "geometry"
     PGGeography   -> "geography"
     PGRaster      -> "raster"
+    PGUUID        -> "uuid"
     PGUnknown t   -> TB.text t
 
 instance ToJSON PGScalarType where
@@ -403,6 +417,8 @@ textToPGScalarType t = case t of
   "numeric"                  -> PGNumeric
   "decimal"                  -> PGNumeric
 
+  "money"                    -> PGMoney
+
   "boolean"                  -> PGBoolean
   "bool"                     -> PGBoolean
 
@@ -412,9 +428,12 @@ textToPGScalarType t = case t of
   "character varying"        -> PGVarchar
 
   "text"                     -> PGText
-  "citext"                   -> PGText
+  "citext"                   -> PGCitext
 
   "date"                     -> PGDate
+
+  "timestamp"                -> PGTimeStamp
+  "timestamp without time zone" -> PGTimeStamp
 
   "timestamptz"              -> PGTimeStampTZ
   "timestamp with time zone" -> PGTimeStampTZ
@@ -429,6 +448,7 @@ textToPGScalarType t = case t of
   "geography"                -> PGGeography
 
   "raster"                   -> PGRaster
+  "uuid"                     -> PGUUID
   _                          -> PGUnknown t
 
 
@@ -445,20 +465,22 @@ pgTypeOid PGBigSerial   = PTI.int8
 pgTypeOid PGFloat       = PTI.float4
 pgTypeOid PGDouble      = PTI.float8
 pgTypeOid PGNumeric     = PTI.numeric
+pgTypeOid PGMoney       = PTI.numeric
 pgTypeOid PGBoolean     = PTI.bool
 pgTypeOid PGChar        = PTI.char
 pgTypeOid PGVarchar     = PTI.varchar
 pgTypeOid PGText        = PTI.text
+pgTypeOid PGCitext      = PTI.text -- Explict type cast to citext needed, See also Note [Type casting prepared params]
 pgTypeOid PGDate        = PTI.date
+pgTypeOid PGTimeStamp   = PTI.timestamp
 pgTypeOid PGTimeStampTZ = PTI.timestamptz
 pgTypeOid PGTimeTZ      = PTI.timetz
 pgTypeOid PGJSON        = PTI.json
 pgTypeOid PGJSONB       = PTI.jsonb
--- we are using the ST_GeomFromGeoJSON($i) instead of $i
-pgTypeOid PGGeometry    = PTI.text
+pgTypeOid PGGeometry    = PTI.text -- we are using the ST_GeomFromGeoJSON($i) instead of $i
 pgTypeOid PGGeography   = PTI.text
--- we are using the ST_RastFromHexWKB($i) instead of $i
-pgTypeOid PGRaster      = PTI.text
+pgTypeOid PGRaster      = PTI.text -- we are using the ST_RastFromHexWKB($i) instead of $i
+pgTypeOid PGUUID        = PTI.uuid
 pgTypeOid (PGUnknown _) = PTI.auto
 
 isIntegerType :: PGScalarType -> Bool
@@ -471,10 +493,12 @@ isNumType :: PGScalarType -> Bool
 isNumType PGFloat   = True
 isNumType PGDouble  = True
 isNumType PGNumeric = True
+isNumType PGMoney   = True
 isNumType ty        = isIntegerType ty
 
 stringTypes :: [PGScalarType]
-stringTypes = [PGVarchar, PGText]
+stringTypes = [PGVarchar, PGText, PGCitext]
+
 isStringType :: PGScalarType -> Bool
 isStringType = (`elem` stringTypes)
 
@@ -499,6 +523,7 @@ isBigNum = \case
   PGBigSerial -> True
   PGNumeric   -> True
   PGDouble    -> True
+  PGMoney     -> True
   _           -> False
 
 geoTypes :: [PGScalarType]
