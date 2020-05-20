@@ -135,24 +135,3 @@ runHasuraGQ reqId query userInfo txAccess resolvedOp = do
       -- log the graphql query
       E.ExOpMutation _ _   -> logQuery logger query Nothing reqId
       E.ExOpSubs _         -> return ()
-
-
--- =======
--- runHasuraGQ reqId query userInfo resolvedOp = do
---   E.ExecutionCtx logger _ pgExecCtx _ _ _ _ _ <- ask
---   (telemTimeIO, respE) <- withElapsedTime $ liftIO $ runExceptT $ case resolvedOp of
---     E.ExOpQuery tx genSql  -> do
---       -- log the generated SQL and the graphql query
---       L.unLogger logger $ QueryLog query genSql reqId
---       ([],) <$> runLazyTx' pgExecCtx tx
---     E.ExOpMutation respHeaders tx -> do
---       -- log the graphql query
---       L.unLogger logger $ QueryLog query Nothing reqId
---       L.unLogger logger $ L.debugT "=============> MUTATION IS RUNNING ==============>> "
---       (respHeaders,) <$> runLazyTx pgExecCtx Q.ReadWrite (withUserInfo userInfo tx)
---     E.ExOpSubs _ ->
---       throw400 UnexpectedPayload
---       "subscriptions are not supported over HTTP, use websockets instead"
---   (respHdrs, resp) <- liftEither respE
---   let !json = encodeGQResp $ GQSuccess $ encJToLBS resp
--- >>>>>>> Stashed changes

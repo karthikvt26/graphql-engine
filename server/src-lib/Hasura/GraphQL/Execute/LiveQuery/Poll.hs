@@ -466,20 +466,6 @@ pollQuery logger pollerId metrics lqOpts isPgCtx pgQuery handler = do
                 , _plLiveQueryOptions = lqOpts
                 }
   L.unLogger logger pollerLog
--- =======
---       let queryVarsBatches = chunksOf (unBatchSize batchSize) $ getQueryVars cohortSnapshotMap
---       return (cohortSnapshotMap, queryVarsBatches)
-
---     flip A.mapConcurrently_ queryVarsBatches $ \queryVars -> do
---       (dt, mxRes) <- timing _rmQuery $
---         runExceptT $ runLazyTx' pgExecCtx $ executeMultiplexedQuery pgQuery queryVars
---       let lqMeta = LiveQueryMetadata $ fromUnits dt
---           operations = getCohortOperations cohortSnapshotMap lqMeta mxRes
-
---       void $ timing _rmPush $
---         -- concurrently push each unique result
---         A.mapConcurrently_ (uncurry4 pushResultToCohort) operations
--- >>>>>>> stable
 
   where
     timing :: (RefetchMetrics -> Metrics.Distribution) -> IO b -> IO (DiffTime, b)

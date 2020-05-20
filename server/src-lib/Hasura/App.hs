@@ -159,8 +159,6 @@ initialiseCtx hgeCmd rci = do
       unLogger logger $ connInfoToLog connInfo
       pool <- liftIO $ Q.initPGPool connInfo soConnParams pgLogger
       let isPgCtx = mkIsPgCtx pool soTxIso
-      -- safe init catalog
-      -- initialiseCatalog isPgCtx (SQLGenCtx soStringifyNum) httpManager logger
 
       return (l, pool, isPgCtx)
 
@@ -169,11 +167,6 @@ initialiseCtx hgeCmd rci = do
       l@(Loggers _ _ pgLogger) <- mkLoggers defaultEnabledLogTypes LevelInfo
       pool <- getMinimalPool pgLogger connInfo
       return (l, pool, mkIsPgCtx pool Q.Serializable)
-
-  -- -- get the unique db id, get it in this init step because Pro needs it before the server is run
-  -- -- but you can't get the DbUid unless the catalog is initialized (in case of an empty database)
-  -- eDbId <- liftIO $ runExceptT $ Q.runTx pool (Q.Serializable, Nothing) getDbId
-  -- dbId <- either printErrJExit return eDbId
 
   return (InitCtx httpManager instanceId loggers connInfo isPGCtx, initTime)
   where

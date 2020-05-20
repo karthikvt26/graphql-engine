@@ -28,26 +28,6 @@ module Hasura.GraphQL.Transport.WebSocket.Server
   , shutdown
   ) where
 
--- <<<<<<< HEAD
--- import           Data.Word                                   (Word16)
--- import           GHC.AssertNF
--- import           GHC.Int                                     (Int64)
-
--- import           Hasura.Prelude
-
--- import qualified Control.Concurrent.Async                    as A
--- import qualified Control.Concurrent.Async.Lifted.Safe        as LA
--- import qualified Control.Concurrent.STM                      as STM
--- import           Control.Exception.Lifted
--- import qualified Control.Monad.Trans.Control                 as MC
--- import qualified Data.Aeson                                  as J
--- import qualified Data.Aeson.Casing                           as J
--- import qualified Data.Aeson.TH                               as J
--- import qualified Data.ByteString.Lazy                        as BL
--- import           Data.String
--- import qualified Data.TByteString                            as TBS
--- import qualified Data.UUID                                   as UUID
--- import qualified Data.UUID.V4                                as UUID
 import qualified Control.Concurrent.Async                    as A
 import qualified Control.Concurrent.Async.Lifted.Safe        as LA
 import qualified Control.Concurrent.STM                      as STM

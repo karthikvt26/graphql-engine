@@ -1,38 +1,7 @@
 -- | Types and functions related to the server initialisation
 {-# LANGUAGE CPP #-}
 module Hasura.Server.Init
-  -- ( DbUid(..)
-  -- , getDbId
-
-  -- , PGVersion(..)
-  -- , getPgVersion
-
-  -- , InstanceId(..)
-  -- , generateInstanceId
-
-  -- , StartupTimeInfo(..)
-
-  -- -- * Server command related
-  -- , parseRawConnInfo
-  -- , mkRawConnInfo
-  -- , mkHGEOptions
-  -- , mkConnInfo
-  -- , serveOptionsParser
-
-  -- -- * Downgrade command related
-  -- , downgradeShortcuts
-  -- , downgradeOptionsParser
-
-  -- -- * Help footers
-  -- , mainCmdFooter
-  -- , serveCmdFooter
-
-  -- -- * Startup logs
-  -- , mkGenericStrLog
-  -- , mkGenericLog
-  -- , inconsistentMetadataLog
-  -- , serveOptsToLog
-  -- , connInfoToLog
+  -- * Hasura pro needs most of the functions from these modules
   ( module Hasura.Server.Init
   , module Hasura.Server.Init.Config
   ) where

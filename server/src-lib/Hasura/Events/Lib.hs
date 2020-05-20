@@ -32,21 +32,6 @@ import           Hasura.RQL.Types
 import           Hasura.Server.Version       (HasVersion)
 import           Hasura.SQL.Types
 
--- <<<<<<< HEAD
--- import qualified Data.ByteString               as BS
--- import qualified Data.CaseInsensitive          as CI
--- import qualified Data.HashMap.Strict           as M
--- import qualified Data.TByteString              as TBS
--- import qualified Data.Text                     as T
--- import qualified Data.Text.Encoding            as T
--- import qualified Data.Text.Encoding            as TE
--- import qualified Data.Text.Encoding.Error      as TE
--- import qualified Data.Time.Clock               as Time
--- import qualified Database.PG.Query             as Q
--- import qualified Hasura.Logging                as L
--- import qualified Network.HTTP.Client           as HTTP
--- import qualified Network.HTTP.Types            as HTTP
--- =======
 -- remove these when array encoding is merged
 import qualified Database.PG.Query.PTI       as PTI
 import qualified PostgreSQL.Binary.Encoding  as PE
