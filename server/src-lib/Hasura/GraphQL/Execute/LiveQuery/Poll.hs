@@ -337,9 +337,6 @@ dumpPollerMap extended lqMap =
 
 
 -- | create an ID to track unique 'Poller's, so that we can gather metrics about each poller
--- TODO(anon): but does it make sense? if there are hundreds of threads running to serve
--- subscriptions to 100s of clients, does it make sense to generate uuids for each thread?
--- shouldn't we just use thread id?
 newtype PollerId = PollerId { unPollerId :: UUID.UUID }
   deriving (Show, Eq, Generic, J.ToJSON)
 
