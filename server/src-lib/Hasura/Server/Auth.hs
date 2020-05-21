@@ -23,7 +23,9 @@ module Hasura.Server.Auth
   , UserAuthentication (..)
   ) where
 
+import qualified Control.Concurrent.Async.Lifted.Safe as LA
 import           Control.Concurrent.Extended (forkImmortal)
+import           Control.Monad.Trans.Control (MonadBaseControl)
 import           Data.Aeson                  (ToJSON, FromJSON)
 import           Data.IORef                  (newIORef)
 import           Data.Time.Clock             (UTCTime)
@@ -40,7 +42,7 @@ import           Hasura.Server.Auth.JWT
 import           Hasura.Server.Auth.WebHook
 import           Hasura.Server.Utils
 import           Hasura.Session
-import           Hasura.Tracing              (TraceT)
+import qualified Hasura.Tracing              as Tracing
 
 -- | Typeclass representing the @UserInfo@ authorization and resolving effect
 class (Monad m) => UserAuthentication m where
@@ -52,9 +54,6 @@ class (Monad m) => UserAuthentication m where
     -- ^ request headers
     -> AuthMode
     -> m (Either QErr (UserInfo, Maybe UTCTime))
-
-instance UserAuthentication m => UserAuthentication (TraceT m) where
-  resolveUserInfo a b c d = lift $ resolveUserInfo a b c d
 
 newtype AdminSecret
   = AdminSecret { getAdminSecret :: T.Text }
@@ -72,7 +71,9 @@ data AuthMode
 mkAuthMode
   :: ( HasVersion
      , MonadIO m
-     , MonadError T.Text m
+     , MonadBaseControl IO m
+     , LA.Forall (LA.Pure m)
+     , Tracing.HasReporter m
      )
   => Maybe AdminSecret
   -> Maybe AuthHook
@@ -80,7 +81,7 @@ mkAuthMode
   -> Maybe RoleName
   -> H.Manager
   -> Logger Hasura
-  -> m AuthMode
+  -> ExceptT T.Text m AuthMode
 mkAuthMode mAdminSecret mWebHook mJwtSecret mUnAuthRole httpManager logger =
   case (mAdminSecret, mWebHook, mJwtSecret) of
     (Nothing,  Nothing,   Nothing)      -> return AMNoAuth
@@ -112,12 +113,14 @@ mkAuthMode mAdminSecret mWebHook mJwtSecret mUnAuthRole httpManager logger =
 mkJwtCtx
   :: ( HasVersion
      , MonadIO m
-     , MonadError T.Text m
+     , MonadBaseControl IO m
+     , LA.Forall (LA.Pure m)
+     , Tracing.HasReporter m
      )
   => JWTConfig
   -> H.Manager
   -> Logger Hasura
-  -> m JWTCtx
+  -> ExceptT T.Text m JWTCtx
 mkJwtCtx JWTConfig{..} httpManager logger = do
   jwkRef <- case jcKeyOrUrl of
     Left jwk  -> liftIO $ newIORef (JWKSet [jwk])
@@ -129,11 +132,11 @@ mkJwtCtx JWTConfig{..} httpManager logger = do
     -- header), do not start a background thread for refreshing the JWK
     getJwkFromUrl url = do
       ref <- liftIO $ newIORef $ JWKSet []
-      maybeExpiry <- withJwkError $ updateJwkRef logger httpManager url ref
+      maybeExpiry <- withJwkError $ Tracing.runTraceT "jwk init" $ updateJwkRef logger httpManager url ref
       case maybeExpiry of
         Nothing   -> return ref
         Just time -> do
-          void $ liftIO $ forkImmortal "jwkRefreshCtrl" logger $
+          void . lift $ forkImmortal "jwkRefreshCtrl" logger $
             jwkRefreshCtrl logger httpManager url ref (fromUnits time)
           return ref
 
@@ -149,7 +152,7 @@ mkJwtCtx JWTConfig{..} httpManager logger = do
           JFEExpiryParseError _ _ -> return Nothing
 
 getUserInfo
-  :: (HasVersion, MonadIO m, MonadError QErr m)
+  :: (HasVersion, MonadIO m, MonadBaseControl IO m, MonadError QErr m, Tracing.MonadTrace m)
   => Logger Hasura
   -> H.Manager
   -> [N.Header]
@@ -158,7 +161,7 @@ getUserInfo
 getUserInfo l m r a = fst <$> getUserInfoWithExpTime l m r a
 
 getUserInfoWithExpTime
-  :: forall m. (HasVersion, MonadIO m, MonadError QErr m)
+  :: forall m. (HasVersion, MonadIO m, MonadBaseControl IO m, MonadError QErr m, Tracing.MonadTrace m)
   => Logger Hasura
   -> H.Manager
   -> [N.Header]

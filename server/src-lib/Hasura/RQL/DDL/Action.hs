@@ -34,6 +34,7 @@ import           Hasura.SQL.Types
 import qualified Hasura.GraphQL.Validate.Types as VT
 
 import qualified Data.Aeson                    as J
+import qualified Data.Environment              as Env
 import qualified Data.Aeson.Casing             as J
 import qualified Data.Aeson.TH                 as J
 import qualified Data.HashMap.Strict           as Map
@@ -98,15 +99,16 @@ referred scalars.
 -}
 
 resolveAction
-  :: (QErrM m, MonadIO m)
-  => (NonObjectTypeMap, AnnotatedObjects)
+  :: QErrM m
+  => Env.Environment
+  -> (NonObjectTypeMap, AnnotatedObjects)
   -> HashSet PGScalarType -- ^ List of all Postgres scalar types.
   -> ActionDefinitionInput
   -> m ( ResolvedActionDefinition
        , AnnotatedObjectType
        , HashSet PGScalarType -- ^ see Note [Postgres scalars in action input arguments].
        )
-resolveAction customTypes allPGScalars actionDefinition = do
+resolveAction env customTypes allPGScalars actionDefinition = do
   let responseType = unGraphQLType $ _adOutputType actionDefinition
       responseBaseType = G.getBaseType responseType
 
@@ -142,7 +144,7 @@ resolveAction customTypes allPGScalars actionDefinition = do
       in Map.lookup typeName inputTypeInfos
 
     resolveWebhook (InputWebhook urlTemplate) = do
-      eitherRenderedTemplate <- renderURLTemplate urlTemplate
+      let eitherRenderedTemplate = renderURLTemplate env urlTemplate
       either (throw400 Unexpected . T.pack) (pure . ResolvedWebhook) eitherRenderedTemplate
 
     getObjectTypeInfo typeName =

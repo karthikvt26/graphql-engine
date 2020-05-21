@@ -33,6 +33,7 @@ import qualified Network.HTTP.Client                         as H
 import qualified Network.HTTP.Types                          as H
 import qualified Network.WebSockets                          as WS
 import qualified StmContainers.Map                           as STMMap
+import qualified Data.Environment                            as Env
 
 import           Control.Concurrent.Extended                 (sleep)
 import           Control.Exception.Lifted
@@ -304,8 +305,8 @@ onConn (L.Logger logger) corsPolicy wsId requestHead ipAddress = do
 
 
 onStart :: forall m. (HasVersion, MonadIO m, E.GQLApiAuthorization m, QueryLogger m, Tracing.MonadTrace m)
-        => WSServerEnv -> WSConn -> StartMsg -> m ()
-onStart serverEnv wsConn (StartMsg opId q) = catchAndIgnore $ do
+        => Env.Environment -> WSServerEnv -> WSConn -> StartMsg -> m ()
+onStart env serverEnv wsConn (StartMsg opId q) = catchAndIgnore $ do
   timerTot <- startTimer
   opM <- liftIO $ STM.atomically $ STMMap.lookup opId opMap
 
@@ -329,7 +330,7 @@ onStart serverEnv wsConn (StartMsg opId q) = catchAndIgnore $ do
   reqParsed <- either (withComplete . preExecErr requestId) return reqParsedE
   -- (sc, scVer) <- liftIO $ IORef.readIORef gCtxMapRef
   (sc, scVer) <- liftIO getSchemaCache
-  execPlanE <- runExceptT $ E.getResolvedExecPlan pgExecCtx
+  execPlanE <- runExceptT $ E.getResolvedExecPlan env pgExecCtx
                planCache userInfo sqlGenCtx enableAL sc scVer httpMgr reqHdrs (q, reqParsed)
 
   (telemCacheHit, execPlan) <- either (withComplete . preExecErr requestId) return execPlanE
@@ -352,10 +353,10 @@ onStart serverEnv wsConn (StartMsg opId q) = catchAndIgnore $ do
 --                 -> ExceptT () IO ()
 --     runHasuraGQ timerTot telemCacheHit reqId query userInfo = \case
 -- >>>>>>> stable
-      E.ExOpQuery opTx genSql ->
+      E.ExOpQuery opTx genSql -> Tracing.trace "pg" do
         execQueryOrMut Telem.Query genSql $ runLazyTx' pgExecCtx opTx
       -- Response headers discarded over websockets
-      E.ExOpMutation _ opTx ->
+      E.ExOpMutation _ opTx -> Tracing.trace "pg" do
         execQueryOrMut Telem.Mutation Nothing $
           runLazyTx Q.ReadWrite pgExecCtx $ withUserInfo userInfo opTx
       E.ExOpSubs lqOp -> do
@@ -407,7 +408,7 @@ onStart serverEnv wsConn (StartMsg opId q) = catchAndIgnore $ do
 
       -- if it's not a subscription, use HTTP to execute the query on the remote
       (runExceptT $ flip runReaderT execCtx $
-        E.execRemoteGQ reqId userInfo reqHdrs q rsi opDef) >>= \case
+        E.execRemoteGQ env reqId userInfo reqHdrs q rsi opDef) >>= \case
           Left  err           -> postExecErr reqId err
           Right (telemTimeIO_DT, !val) -> do
             -- Telemetry. NOTE: don't time network IO:
@@ -492,11 +493,12 @@ onStart serverEnv wsConn (StartMsg opId q) = catchAndIgnore $ do
     catchAndIgnore m = void $ runExceptT m
 
 onMessage
-  :: (HasVersion, MonadIO m, UserAuthentication m, E.GQLApiAuthorization m, QueryLogger m, Tracing.HasReporter m)
-  => AuthMode
+  :: (HasVersion, MonadIO m, UserAuthentication (Tracing.TraceT m), E.GQLApiAuthorization m, QueryLogger m, Tracing.HasReporter m)
+  => Env.Environment
+  -> AuthMode
   -> WSServerEnv
   -> WSConn -> BL.ByteString -> m ()
-onMessage authMode serverEnv wsConn msgRaw = Tracing.runTraceT "websocket" do
+onMessage env authMode serverEnv wsConn msgRaw = Tracing.runTraceT "websocket" do
   case J.eitherDecode msgRaw of
     Left e    -> do
       let err = ConnErrMsg $ "parsing ClientMessage failed: " <> T.pack e
@@ -507,7 +509,7 @@ onMessage authMode serverEnv wsConn msgRaw = Tracing.runTraceT "websocket" do
       CMConnInit params -> onConnInit (_wseLogger serverEnv)
                            (_wseHManager serverEnv)
                            wsConn authMode params
-      CMStart startMsg  -> onStart serverEnv wsConn startMsg
+      CMStart startMsg  -> onStart env serverEnv wsConn startMsg
       CMStop stopMsg    -> liftIO $ onStop serverEnv wsConn stopMsg
       -- The idea is cleanup will be handled by 'onClose', but...
       -- NOTE: we need to close the websocket connection when we receive the
@@ -578,8 +580,8 @@ logWSEvent (L.Logger logger) wsConn wsEv = do
         ODStopped    -> False
 
 onConnInit
-  :: (HasVersion, MonadIO m, UserAuthentication m)
-  => L.Logger L.Hasura -> H.Manager -> WSConn -> AuthMode -> Maybe ConnParams -> m ()
+  :: (HasVersion, MonadIO m, UserAuthentication (Tracing.TraceT m))
+  => L.Logger L.Hasura -> H.Manager -> WSConn -> AuthMode -> Maybe ConnParams -> Tracing.TraceT m ()
 onConnInit logger manager wsConn authMode connParamsM = do
   connState <- liftIO (STM.readTVarIO (_wscUser $ WS.getData wsConn))
   case getIpAddress connState of
@@ -696,23 +698,24 @@ createWSServerApp
      , MonadIO m
      , MC.MonadBaseControl IO m
      , LA.Forall (LA.Pure m)
-     , UserAuthentication m
+     , UserAuthentication (Tracing.TraceT m)
      , E.GQLApiAuthorization m
      , QueryLogger m
      , WS.WSServerLogger m
      , Tracing.HasReporter m
      )
-  => AuthMode
+  => Env.Environment
+  -> AuthMode
   -> WSServerEnv
   -> WS.HasuraServerApp m
-createWSServerApp authMode serverEnv = \ !ipAddress !pendingConn ->
+createWSServerApp env authMode serverEnv = \ !ipAddress !pendingConn ->
   WS.createServerApp (_wseServer serverEnv) handlers ipAddress pendingConn
   where
     handlers =
       WS.WSHandlers
       -- Mask async exceptions during event processing to help maintain integrity of mutable vars:
       (\rid rh ip -> mask_ $ onConn (_wseLogger serverEnv) (_wseCorsPolicy serverEnv) rid rh ip)
-      (\conn bs -> mask_ $ onMessage authMode serverEnv conn bs)
+      (\conn bs -> mask_ $ onMessage env authMode serverEnv conn bs)
       (\conn ->    mask_ $ onClose (_wseLogger serverEnv) (_wseLiveQMap serverEnv) conn)
 
 stopWSServerApp :: WSServerEnv -> IO ()

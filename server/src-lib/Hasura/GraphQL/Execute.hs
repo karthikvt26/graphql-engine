@@ -35,6 +35,7 @@ import qualified Language.GraphQL.Draft.Syntax          as G
 import qualified Network.HTTP.Client                    as HTTP
 import qualified Network.HTTP.Types                     as HTTP
 import qualified Network.Wreq                           as Wreq
+import qualified Data.Environment                       as Env
 
 import           Hasura.EncJSON
 import           Hasura.GraphQL.Context
@@ -208,8 +209,13 @@ type ExecPlanResolved
   = GQExecPlan (ExecOp, Q.TxAccess)
 
 getResolvedExecPlan
-  :: (HasVersion, MonadError QErr m, MonadIO m)
-  => IsPGExecCtx
+  :: ( HasVersion
+     , MonadError QErr m
+     , MonadIO m
+     , Tracing.MonadTrace m
+     )
+  => Env.Environment
+  -> IsPGExecCtx
   -> EP.PlanCache
   -> UserInfo
   -> SQLGenCtx
@@ -220,7 +226,7 @@ getResolvedExecPlan
   -> [HTTP.Header]
   -> (GQLReqUnparsed, GQLReqParsed)
   -> m (Telem.CacheHit, ExecPlanResolved)
-getResolvedExecPlan isPgCtx planCache userInfo sqlGenCtx
+getResolvedExecPlan env isPgCtx planCache userInfo sqlGenCtx
   enableAL sc scVer httpManager reqHeaders (reqUnparsed, reqParsed) = do
 
   planM <- liftIO $ EP.getPlan scVer (_uiRole userInfo)
@@ -246,16 +252,16 @@ getResolvedExecPlan isPgCtx planCache userInfo sqlGenCtx
       forM partialExecPlan $ \(gCtx, rootSelSet, txAccess) ->
         case rootSelSet of
           VQ.RMutation selSet -> do
-            (tx, respHeaders) <- getMutOp gCtx sqlGenCtx userInfo httpManager reqHeaders selSet
+            (tx, respHeaders) <- getMutOp env gCtx sqlGenCtx userInfo httpManager reqHeaders selSet
             pure $ (ExOpMutation respHeaders tx, Q.ReadWrite)
           VQ.RQuery selSet -> do
             (queryTx, plan, genSql) <-
-              getQueryOp gCtx sqlGenCtx userInfo queryReusability (allowQueryActionExecuter httpManager reqHeaders) selSet
+              getQueryOp env gCtx sqlGenCtx userInfo queryReusability (allowQueryActionExecuter httpManager reqHeaders) selSet
             traverse_ (addPlanToCache . flip EP.RPQuery txAccess) plan
             return $ (ExOpQuery queryTx (Just genSql), txAccess)
           VQ.RSubscription fld -> do
             (lqOp, plan) <-
-              getSubsOp isPgCtx gCtx sqlGenCtx userInfo queryReusability
+              getSubsOp env isPgCtx gCtx sqlGenCtx userInfo queryReusability
               (restrictActionExecuter "query actions cannot be run as a subscription")
               fld
             traverse_ (addPlanToCache . flip EP.RPSubs txAccess) plan
@@ -295,16 +301,19 @@ runE ctx sqlGenCtx userInfo action = do
 getQueryOp
   :: ( HasVersion
      , MonadError QErr m
-     , MonadIO m)
-  => GCtx
+     , MonadIO m
+     , Tracing.MonadTrace m
+     )
+  => Env.Environment
+  -> GCtx
   -> SQLGenCtx
   -> UserInfo
   -> QueryReusability
   -> QueryActionExecuter
   -> VQ.SelSet
   -> m (LazyRespTx, Maybe EQ.ReusableQueryPlan, EQ.GeneratedSqlMap)
-getQueryOp gCtx sqlGenCtx userInfo queryReusability actionExecuter selSet =
-  runE gCtx sqlGenCtx userInfo $ EQ.convertQuerySelSet queryReusability selSet actionExecuter
+getQueryOp env gCtx sqlGenCtx userInfo queryReusability actionExecuter selSet =
+  runE gCtx sqlGenCtx userInfo $ EQ.convertQuerySelSet env queryReusability selSet actionExecuter
 
 resolveMutSelSet
   :: ( HasVersion
@@ -319,14 +328,16 @@ resolveMutSelSet
      , Has HTTP.Manager r
      , Has [HTTP.Header] r
      , MonadIO m
+     , Tracing.MonadTrace m
      )
-  => VQ.SelSet
+  => Env.Environment
+  -> VQ.SelSet
   -> m (LazyRespTx, HTTP.ResponseHeaders)
-resolveMutSelSet fields = do
+resolveMutSelSet env fields = do
   aliasedTxs <- forM (toList fields) $ \fld -> do
     fldRespTx <- case VQ._fName fld of
       "__typename" -> return (return $ encJFromJValue mutationRootNamedType, [])
-      _            -> evalReusabilityT $ GR.mutFldToTx fld
+      _            -> evalReusabilityT $ GR.mutFldToTx env fld
     return (G.unName $ G.unAlias $ VQ._fAlias fld, fldRespTx)
 
   -- combines all transactions into a single transaction
@@ -342,16 +353,21 @@ resolveMutSelSet fields = do
       forM aliasedTxs $ \(al, (tx, _)) -> (,) al <$> tx
 
 getMutOp
-  :: (HasVersion, MonadError QErr m, MonadIO m)
-  => GCtx
+  :: ( HasVersion
+     , MonadError QErr m
+     , MonadIO m
+     , Tracing.MonadTrace m
+     )
+  => Env.Environment
+  -> GCtx
   -> SQLGenCtx
   -> UserInfo
   -> HTTP.Manager
   -> [HTTP.Header]
   -> VQ.SelSet
   -> m (LazyRespTx, HTTP.ResponseHeaders)
-getMutOp ctx sqlGenCtx userInfo manager reqHeaders selSet =
-  peelReaderT $ resolveMutSelSet selSet
+getMutOp env ctx sqlGenCtx userInfo manager reqHeaders selSet =
+  peelReaderT $ resolveMutSelSet env selSet
   where
     peelReaderT action =
       runReaderT action
@@ -377,19 +393,21 @@ getSubsOpM
      , Has UserInfo r
      , MonadIO m
      , HasVersion
+     , Tracing.MonadTrace m
      )
-  => IsPGExecCtx
+  => Env.Environment
+  -> IsPGExecCtx
   -> QueryReusability
   -> VQ.Field
   -> QueryActionExecuter
   -> m (EL.LiveQueryPlan, Maybe EL.ReusableLiveQueryPlan)
-getSubsOpM isPgCtx initialReusability fld actionExecuter =
+getSubsOpM env isPgCtx initialReusability fld actionExecuter =
   case VQ._fName fld of
     "__typename" ->
       throwVE "you cannot create a subscription on '__typename' field"
     _            -> do
       (astUnresolved, finalReusability) <- runReusabilityTWith initialReusability $
-        GR.queryFldToPGAST fld actionExecuter
+        GR.queryFldToPGAST env fld actionExecuter
       let varTypes = finalReusability ^? _Reusable
       EL.buildLiveQueryPlan isPgCtx (VQ._fAlias fld) astUnresolved varTypes
 
@@ -397,8 +415,10 @@ getSubsOp
   :: ( MonadError QErr m
      , MonadIO m
      , HasVersion
+     , Tracing.MonadTrace m
      )
-  => IsPGExecCtx
+  => Env.Environment
+  -> IsPGExecCtx
   -> GCtx
   -> SQLGenCtx
   -> UserInfo
@@ -406,8 +426,8 @@ getSubsOp
   -> QueryActionExecuter
   -> VQ.Field
   -> m (EL.LiveQueryPlan, Maybe EL.ReusableLiveQueryPlan)
-getSubsOp isPgCtx gCtx sqlGenCtx userInfo queryReusability actionExecuter fld =
-  runE gCtx sqlGenCtx userInfo $ getSubsOpM isPgCtx queryReusability fld actionExecuter
+getSubsOp env isPgCtx gCtx sqlGenCtx userInfo queryReusability actionExecuter fld =
+  runE gCtx sqlGenCtx userInfo $ getSubsOpM env isPgCtx queryReusability fld actionExecuter
 
 execRemoteGQ
   :: ( HasVersion
@@ -417,7 +437,8 @@ execRemoteGQ
      , QueryLogger m
      , Tracing.MonadTrace m
      )
-  => RequestId
+  => Env.Environment
+  -> RequestId
   -> UserInfo
   -> [HTTP.Header]
   -> GQLReqUnparsed
@@ -425,14 +446,14 @@ execRemoteGQ
   -> G.TypedOperationDefinition
   -> m (DiffTime, HttpResponse EncJSON)
   -- ^ Also returns time spent in http request, for telemetry.
-execRemoteGQ reqId userInfo reqHdrs q rsi opDef = Tracing.traceHttpRequest (fromString (show url)) do
+execRemoteGQ env reqId userInfo reqHdrs q rsi opDef = Tracing.traceHttpRequest (fromString (show url)) do
   execCtx <- ask
   let logger  = _ecxLogger execCtx
       manager = _ecxHttpManager execCtx
       opTy    = G._todType opDef
   when (opTy == G.OperationTypeSubscription) $
     throw400 NotSupported "subscription to remote server is not supported"
-  confHdrs <- makeHeadersFromConf hdrConf
+  confHdrs <- makeHeadersFromConf env hdrConf
   let clientHdrs = bool [] (mkClientHeadersForward reqHdrs) fwdClientHdrs
       -- filter out duplicate headers
       -- priority: conf headers > resolved userinfo vars > client headers

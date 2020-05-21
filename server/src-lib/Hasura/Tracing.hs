@@ -5,8 +5,10 @@ module Hasura.Tracing
   ( MonadTrace(..)
   , TraceT
   , runTraceT
+  , interpTraceT
   , TraceContext(..)
   , HasReporter(..)
+  , NoReporter(..)
   , TracingMetadata
   , SuspendedRequest(..)
   , traceHttpRequest
@@ -41,6 +43,14 @@ class Monad m => HasReporter m where
 
   default report :: TraceContext -> Text -> m (a, TracingMetadata) -> m a
   report _ _ = fmap fst
+
+newtype NoReporter m a = NoReporter { runNoReporter :: m a }
+  deriving (Functor, Applicative, Monad, MonadIO, MonadBase b, MonadBaseControl b, MonadError e, MonadReader r)
+  
+instance MonadTrans NoReporter where
+  lift = NoReporter
+  
+instance Monad m => HasReporter (NoReporter m)
 
 instance HasReporter m => HasReporter (ReaderT r m) where
   report ctx name = mapReaderT $ report ctx name
@@ -100,6 +110,15 @@ class Monad m => MonadTrace m where
   
   -- | Log some metadata to be attached to the current span
   attachMetadata :: TracingMetadata -> m ()
+
+-- | Reinterpret a 'TraceT' action in another 'MonadTrace'.
+-- This can be useful when you need to reorganize a monad transformer stack.
+interpTraceT :: MonadTrace n => (forall x. m x -> n x) -> TraceT m a -> n a
+interpTraceT f (TraceT rwma) = do
+  ctx <- currentContext
+  (b, meta) <- f (runWriterT (runReaderT rwma ctx))
+  attachMetadata meta
+  pure b
    
 -- | If the underlying monad can report trace data, then 'TraceT' will 
 -- collect it and hand it off to that reporter.
@@ -117,6 +136,11 @@ instance (HasReporter m, MonadIO m) => MonadTrace (TraceT m) where
 
 instance MonadTrace m => MonadTrace (ReaderT r m) where
   trace = mapReaderT . trace
+  currentContext = lift currentContext
+  attachMetadata = lift . attachMetadata
+
+instance MonadTrace m => MonadTrace (StateT e m) where
+  trace = mapStateT . trace
   currentContext = lift currentContext
   attachMetadata = lift . attachMetadata
 

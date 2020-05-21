@@ -9,6 +9,7 @@ import qualified Data.Aeson.TH                          as J
 import qualified Data.HashMap.Strict                    as Map
 import qualified Database.PG.Query                      as Q
 import qualified Language.GraphQL.Draft.Syntax          as G
+import qualified Data.Environment                       as Env
 
 import           Hasura.EncJSON
 import           Hasura.GraphQL.Context
@@ -28,6 +29,7 @@ import qualified Hasura.GraphQL.Resolve                 as RS
 import qualified Hasura.GraphQL.Transport.HTTP.Protocol as GH
 import qualified Hasura.GraphQL.Validate                as GV
 import qualified Hasura.SQL.DML                         as S
+import qualified Hasura.Tracing                         as Tracing
 
 data GQLExplain
   = GQLExplain
@@ -84,14 +86,15 @@ getSessVarVal userInfo sessVar =
     sessionVariables = _uiSession userInfo
 
 explainField
-  :: (MonadError QErr m, MonadTx m, HasVersion, MonadIO m)
-  => UserInfo
+  :: (MonadError QErr m, MonadTx m, HasVersion, MonadIO m, Tracing.MonadTrace m)
+  => Env.Environment
+  -> UserInfo
   -> GCtx
   -> SQLGenCtx
   -> QueryActionExecuter
   -> GV.Field
   -> m FieldPlan
-explainField userInfo gCtx sqlGenCtx actionExecuter fld =
+explainField env userInfo gCtx sqlGenCtx actionExecuter fld =
   case fName of
     "__type"     -> return $ FieldPlan fName Nothing Nothing
     "__schema"   -> return $ FieldPlan fName Nothing Nothing
@@ -99,7 +102,7 @@ explainField userInfo gCtx sqlGenCtx actionExecuter fld =
     _            -> do
       unresolvedAST <-
         runExplain (queryCtxMap, userInfo, fldMap, orderByCtx, sqlGenCtx) $
-        evalReusabilityT $ RS.queryFldToPGAST fld actionExecuter
+        evalReusabilityT $ RS.queryFldToPGAST env fld actionExecuter
       resolvedAST <- RS.traverseQueryRootFldAST (resolveVal userInfo) unresolvedAST
       let txtSQL = Q.getQueryText $ RS.toPGQuery resolvedAST
           withExplain = "EXPLAIN (FORMAT TEXT) " <> txtSQL
@@ -114,15 +117,24 @@ explainField userInfo gCtx sqlGenCtx actionExecuter fld =
     orderByCtx = _gOrdByCtx gCtx
 
 explainGQLQuery
-  :: (HasVersion, MonadError QErr m, MonadIO m)
-  => IsPGExecCtx
+  :: ( HasVersion
+     , MonadError QErr m
+     , MonadIO m
+     , Tracing.MonadTrace m
+     , MonadIO tx
+     , MonadTx tx
+     , Tracing.MonadTrace tx
+     )
+  => Env.Environment
+  -> IsPGExecCtx
+  -> (Q.TxAccess -> tx EncJSON -> m EncJSON)
   -> SchemaCache
   -> SQLGenCtx
   -> Bool
   -> QueryActionExecuter
   -> GQLExplain
   -> m EncJSON
-explainGQLQuery isPgCtx sc sqlGenCtx enableAL actionExecuter (GQLExplain query userVarsRaw) = do
+explainGQLQuery env isPgCtx runInTx sc sqlGenCtx enableAL actionExecuter (GQLExplain query userVarsRaw) = do
   userInfo <- mkUserInfo (URBPreDetermined adminRoleName) UAdminSecretSent sessionVariables
   (execPlan, queryReusability) <- runReusabilityT $
     E.getExecPlanPartial userInfo sc enableAL query
@@ -134,12 +146,12 @@ explainGQLQuery isPgCtx sc sqlGenCtx enableAL actionExecuter (GQLExplain query u
   case rootSelSet of
     GV.RQuery selSet ->
       runInTx txAccess $
-      encJFromJValue <$> traverse (explainField userInfo gCtx sqlGenCtx actionExecuter) (toList selSet)
+      encJFromJValue <$> traverse (explainField env userInfo gCtx sqlGenCtx actionExecuter) (toList selSet)
     GV.RMutation _ ->
       throw400 InvalidParams "only queries can be explained"
     GV.RSubscription rootField -> do
-      (plan, _) <- E.getSubsOp isPgCtx gCtx sqlGenCtx userInfo queryReusability actionExecuter rootField
+      (plan, _) <- E.getSubsOp env isPgCtx gCtx sqlGenCtx userInfo queryReusability actionExecuter rootField
       runInTx txAccess $ encJFromJValue <$> E.explainLiveQueryPlan plan
   where
-    runInTx txAccess = liftEither <=< liftIO . runExceptT . runLazyTx txAccess isPgCtx
+    -- runInTx txAccess = liftEither <=< liftIO . runExceptT . runLazyTx txAccess isPgCtx
     sessionVariables = mkSessionVariablesText $ maybe [] Map.toList userVarsRaw

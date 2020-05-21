@@ -22,6 +22,7 @@ import qualified Data.ByteString.Char8                     as BC
 import qualified Data.ByteString.Lazy.Char8                as BLC
 import qualified Data.Set                                  as Set
 import qualified Data.Text                                 as T
+import qualified Data.Environment                          as Env
 import qualified Data.Time.Clock                           as Clock
 import qualified Data.Yaml                                 as Y
 import qualified Database.PG.Query                         as Q
@@ -204,11 +205,13 @@ class Monad m => Telemetry m where
     :: HasVersion
     => Logger Hasura -> ServeOptions impl -> SchemaCacheRef -> InitCtx -> m ()
 
+-- TODO: Put Env into ServeOptions?
+
 runHGEServer
   :: ( HasVersion
      , MonadIO m
      , MonadStateless IO m
-     , UserAuthentication m
+     , UserAuthentication (Tracing.TraceT m)
      , MetadataApiAuthorization m
      , GQLApiAuthorization m
      , HttpLog m
@@ -220,14 +223,15 @@ runHGEServer
      , LA.Forall (LA.Pure m)
      , Telemetry m
      )
-  => ServeOptions impl
+  => Env.Environment
+  -> ServeOptions impl
   -> InitCtx
   -> UTCTime
   -- ^ start time
   -> C.MVar ()
   -- ^ shutdown latch
   -> m ()
-runHGEServer serveOpts@ServeOptions{..} initCtx@InitCtx{..} initTime shutdownLatch = do
+runHGEServer env serveOpts@ServeOptions{..} initCtx@InitCtx{..} initTime shutdownLatch = do
   -- Comment this to enable expensive assertions from "GHC.AssertNF". These will log lines to
   -- STDOUT containing "not in normal form". In the future we could try to integrate this into
   -- our tests. For now this is a development tool.
@@ -244,7 +248,8 @@ runHGEServer serveOpts@ServeOptions{..} initCtx@InitCtx{..} initTime shutdownLat
   authMode <- either (printErrExit . T.unpack) return authModeRes
 
   HasuraApp app cacheRef cacheInitTime shutdownApp <-
-    mkWaiApp logger
+    mkWaiApp env
+             logger
              sqlGenCtx
              soEnableAllowlist
              _icPgExecCtx
@@ -281,13 +286,13 @@ runHGEServer serveOpts@ServeOptions{..} initCtx@InitCtx{..} initTime shutdownLat
   eventEngineCtx <- liftIO $ atomically $ initEventEngineCtx maxEvThrds fetchI
   unLogger logger $ mkGenericStrLog LevelInfo "event_triggers" "starting workers"
 
-  _eventQueueThread <- C.forkImmortal "processEventQueue" logger $ liftIO $
+  _eventQueueThread <- C.forkImmortal "processEventQueue" logger $
     processEventQueue logger logEnvHeaders
     _icHttpManager _icPgExecCtx (getSCFromRef cacheRef) eventEngineCtx
 
   -- start a backgroud thread to handle async actions
-  _asyncActionsThread <- C.forkImmortal "asyncActionsProcessor" logger $ liftIO $
-    asyncActionsProcessor (_scrCache cacheRef) _icPgExecCtx _icHttpManager
+  _asyncActionsThread <- C.forkImmortal "asyncActionsProcessor" logger $
+    asyncActionsProcessor env (_scrCache cacheRef) _icPgExecCtx _icHttpManager
 
   -- start a background thread to check for updates
   _updateThread <- C.forkImmortal "checkForUpdates" logger $ liftIO $
@@ -341,13 +346,15 @@ runHGEServer serveOpts@ServeOptions{..} initCtx@InitCtx{..} initTime shutdownLat
             Right count -> logger $ mkGenericStrLog
                             LevelInfo "event_triggers" ((show count) ++ " events were updated")
 
+    -- This should be isolated to the few env variables required for starting the application server,
+    -- Not any variables supplied by the user for URL templating etc.
     getFromEnv :: (Read a) => a -> String -> IO a
-    getFromEnv defaults env = do
-      mEnv <- lookupEnv env
+    getFromEnv defaults k = do
+      mEnv <- lookupEnv k
       let mRes = case mEnv of
             Nothing  -> Just defaults
             Just val -> readMaybe val
-          eRes = maybe (Left $ "Wrong expected type for environment variable: " <> env) Right mRes
+          eRes = maybe (Left $ "Wrong expected type for environment variable: " <> k) Right mRes
       either printErrExit return eRes
 
     runTx :: IsPGExecCtx -> Q.TxAccess -> Q.TxE QErr a -> IO (Either QErr a)
@@ -389,14 +396,15 @@ execQuery
      , UserInfoM m
      , HasSystemDefined m
      )
-  => BLC.ByteString
+  => Env.Environment
+  -> BLC.ByteString
   -> m BLC.ByteString
-execQuery queryBs = do
+execQuery env queryBs = do
   query <- case A.decode queryBs of
     Just jVal -> decodeValue jVal
     Nothing   -> throw400 InvalidJSON "invalid json"
   buildSchemaCacheStrict
-  encJToLBS <$> runQueryM query
+  encJToLBS <$> runQueryM env query
 
 instance QueryLogger AppM where
   logQuery logger query genSqlM reqId =
@@ -416,7 +424,7 @@ instance HttpLog AppM where
     unLogger logger $ mkHttpLog $
       mkHttpAccessLogContext userInfoM reqId httpReq compressedResponse qTime cType headers
 
-instance UserAuthentication AppM where
+instance UserAuthentication (Tracing.TraceT AppM) where
   resolveUserInfo logger manager headers authMode =
     runExceptT $ getUserInfoWithExpTime logger manager headers authMode
 

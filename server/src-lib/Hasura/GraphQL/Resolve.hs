@@ -25,6 +25,7 @@ import qualified Database.PG.Query                 as Q
 import qualified Language.GraphQL.Draft.Syntax     as G
 import qualified Network.HTTP.Client               as HTTP
 import qualified Network.HTTP.Types                as HTTP
+import qualified Data.Environment                  as Env
 
 import           Hasura.GraphQL.Resolve.Context
 import           Hasura.Prelude
@@ -40,6 +41,7 @@ import qualified Hasura.GraphQL.Resolve.Select     as RS
 import qualified Hasura.GraphQL.Validate           as V
 import qualified Hasura.RQL.DML.Select             as DS
 import qualified Hasura.SQL.DML                    as S
+import qualified Hasura.Tracing                    as Tracing
 
 data QueryRootFldAST v
   = QRFPk !(DS.AnnSimpleSelG v)
@@ -94,11 +96,13 @@ queryFldToPGAST
      , Has QueryCtxMap r
      , HasVersion
      , MonadIO m
+     , Tracing.MonadTrace m
      )
-  => V.Field
+  => Env.Environment
+  -> V.Field
   -> RA.QueryActionExecuter
   -> m QueryRootFldUnresolved
-queryFldToPGAST fld actionExecuter = do
+queryFldToPGAST env fld actionExecuter = do
   opCtx <- getOpCtx $ V._fName fld
   userInfo <- asks getter
   case opCtx of
@@ -129,7 +133,7 @@ queryFldToPGAST fld actionExecuter = do
       let f = case jsonAggType of
              DS.JASMultipleRows -> QRFActionExecuteList
              DS.JASSingleObject -> QRFActionExecuteObject
-      f <$> actionExecuter (RA.resolveActionQuery fld ctx (_uiSession userInfo))
+      f <$> actionExecuter (RA.resolveActionQuery env fld ctx (_uiSession userInfo))
       where
         outputType = _saecOutputType ctx
         jsonAggType = RA.mkJsonAggSelect outputType
@@ -148,10 +152,12 @@ mutFldToTx
      , Has HTTP.Manager r
      , Has [HTTP.Header] r
      , MonadIO m
+     , Tracing.MonadTrace m
      )
-  => V.Field
+  => Env.Environment
+  -> V.Field
   -> m (RespTx, HTTP.ResponseHeaders)
-mutFldToTx fld = do
+mutFldToTx env fld = do
   userInfo <- asks getter
   opCtx <- getOpCtx $ V._fName fld
   let noRespHeaders = fmap (,[])
@@ -176,7 +182,7 @@ mutFldToTx fld = do
       validateHdrs userInfo (_docHeaders ctx)
       noRespHeaders $ RM.convertDeleteByPk ctx fld
     MCAction ctx ->
-      RA.resolveActionMutation fld ctx (_uiSession userInfo)
+      RA.resolveActionMutation env fld ctx (_uiSession userInfo)
 
 getOpCtx
   :: ( MonadReusability m

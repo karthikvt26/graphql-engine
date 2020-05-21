@@ -11,15 +11,16 @@ module Hasura.Events.Lib
   , EventEngineCtx(..)
   ) where
 
-import           Control.Concurrent.Async    (async, link, wait, withAsync)
+import           Control.Concurrent.Async.Lifted.Safe (async, link, wait, withAsync)
+import           Control.Concurrent.Async.Lifted.Safe as LA
 import           Control.Concurrent.Extended (sleep)
 import           Control.Concurrent.STM.TVar
 import           Control.Exception.Lifted    (finally, mask_, try)
+import           Control.Monad.Trans.Control (MonadBaseControl)
 import           Control.Monad.STM
 import           Data.Aeson
 import           Data.Aeson.Casing
 import           Data.Aeson.TH
-import           Data.Has
 import           Data.Int                    (Int64)
 import           Data.String
 import           Data.Time.Clock
@@ -61,6 +62,7 @@ import qualified Data.Text.Encoding          as T
 import qualified Data.Time.Clock             as Time
 import qualified Database.PG.Query           as Q
 import qualified Hasura.Logging              as L
+import qualified Hasura.Tracing              as Tracing
 import qualified Network.HTTP.Client         as HTTP
 import qualified Network.HTTP.Types          as HTTP
 
@@ -203,9 +205,20 @@ initEventEngineCtx maxT _eeCtxFetchInterval = do
 --   - try not to cause webhook workers to stall waiting on DB fetch
 --   - limit webhook HTTP concurrency per HASURA_GRAPHQL_EVENTS_HTTP_POOL_SIZE
 processEventQueue
-  :: (HasVersion) => L.Logger L.Hasura -> LogEnvHeaders -> HTTP.Manager -> IsPGExecCtx
-  -> IO SchemaCache -> EventEngineCtx
-  -> IO void
+  :: forall m void
+   . ( HasVersion
+     , MonadIO m
+     , Tracing.HasReporter m
+     , MonadBaseControl IO m
+     , LA.Forall (LA.Pure m)
+     )
+  => L.Logger L.Hasura
+  -> LogEnvHeaders
+  -> HTTP.Manager
+  -> IsPGExecCtx
+  -> IO SchemaCache
+  -> EventEngineCtx
+  -> m void
 processEventQueue logger logenv httpMgr isPgCtx getSchemaCache EventEngineCtx{..} = do
   events0 <- popEventsBatch
   go events0 0 False
@@ -224,7 +237,7 @@ processEventQueue logger logenv httpMgr isPgCtx getSchemaCache EventEngineCtx{..
     -- After the events are fetched from the DB, we store the locked events
     -- in a hash set(order doesn't matter and look ups are faster) in the
     -- event engine context
-    saveLockedEvents :: [Event] -> IO ()
+    saveLockedEvents :: [Event] -> m ()
     saveLockedEvents evts =
       liftIO $ atomically $ do
         lockedEvents <- readTVar _eeCtxLockedEvents
@@ -237,10 +250,10 @@ processEventQueue logger logenv httpMgr isPgCtx getSchemaCache EventEngineCtx{..
 
     -- work on this batch of events while prefetching the next. Recurse after we've forked workers
     -- for each in the batch, minding the requested pool size.
-    go :: [Event] -> Int -> Bool -> IO void
+    go :: [Event] -> Int -> Bool -> m void
     go events !fullFetchCount !alreadyWarned = do
       -- process events ASAP until we've caught up; only then can we sleep
-      when (null events) $ sleep _eeCtxFetchInterval
+      when (null events) . liftIO $ sleep _eeCtxFetchInterval
 
       -- Prefetch next events payload while concurrently working through our current batch.
       -- NOTE: we probably don't need to prefetch so early, but probably not
@@ -249,7 +262,7 @@ processEventQueue logger logenv httpMgr isPgCtx getSchemaCache EventEngineCtx{..
         -- process approximately in order, minding HASURA_GRAPHQL_EVENTS_HTTP_POOL_SIZE:
         forM_ events $ \event ->
           mask_ $ do
-            atomically $ do  -- block until < HASURA_GRAPHQL_EVENTS_HTTP_POOL_SIZE threads:
+            liftIO . atomically $ do  -- block until < HASURA_GRAPHQL_EVENTS_HTTP_POOL_SIZE threads:
               capacity <- readTVar _eeCtxEventThreadsCapacity
               check $ capacity > 0
               writeTVar _eeCtxEventThreadsCapacity $! (capacity - 1)
@@ -261,8 +274,8 @@ processEventQueue logger logenv httpMgr isPgCtx getSchemaCache EventEngineCtx{..
                              -- After the event has been processed, remove it from the
                              -- locked events cache
                              modifyTVar' _eeCtxLockedEvents (Set.delete (eId evt))
-            t <- async $ flip runReaderT (logger, httpMgr) $
-                    processEvent event `finally` (restoreCapacity event)
+            t <- async $ Tracing.runTraceT "process event" do
+                   processEvent event `finally` (restoreCapacity event)
             link t
 
         -- return when next batch ready; some 'processEvent' threads may be running.
@@ -288,14 +301,7 @@ processEventQueue logger logenv httpMgr isPgCtx getSchemaCache EventEngineCtx{..
                  "It looks like the events processor is keeping up again."
              go eventsNext 0 False
 
-    processEvent
-      :: ( HasVersion
-         , MonadReader r m
-         , Has HTTP.Manager r
-         , Has (L.Logger L.Hasura) r
-         , MonadIO m
-         )
-      => Event -> m ()
+    processEvent :: Event -> Tracing.TraceT m ()
     processEvent e = do
       cache <- liftIO getSchemaCache
       let meti = getEventTriggerInfoFromEvent cache e
@@ -304,12 +310,12 @@ processEventQueue logger logenv httpMgr isPgCtx getSchemaCache EventEngineCtx{..
           --  This rare error can happen in the following known cases:
           --  i) schema cache is not up-to-date (due to some bug, say during schema syncing across multiple instances)
           --  ii) the event trigger is dropped when this event was just fetched
-          logQErr $ err500 Unexpected "table or event-trigger not found in schema cache"
+          logQErr logger $ err500 Unexpected "table or event-trigger not found in schema cache"
           liftIO . runExceptT $ runLazyTx Q.ReadWrite isPgCtx $ liftTx $ do
             currentTime <- liftIO getCurrentTime
             -- For such an event, we unlock the event and retry after a minute
             setRetry e (addUTCTime 60 currentTime)
-          >>= flip onLeft logQErr
+          >>= flip onLeft (logQErr logger)
         Just eti -> do
           let webhook = T.unpack $ wciCachedValue $ etiWebhookInfo eti
               retryConf = etiRetryConf eti
@@ -319,12 +325,12 @@ processEventQueue logger logenv httpMgr isPgCtx getSchemaCache EventEngineCtx{..
               etHeaders = map encodeHeader headerInfos
               headers = addDefaultHeaders etHeaders
               ep = createEventPayload retryConf e
-          res <- runExceptT $ tryWebhook headers responseTimeout ep webhook
+          res <- runExceptT $ tryWebhook logger httpMgr headers responseTimeout ep webhook
           let decodedHeaders = map (decodeHeader logenv headerInfos) headers
           either
-            (processError isPgCtx e retryConf decodedHeaders ep)
+            (processError logger isPgCtx e retryConf decodedHeaders ep)
             (processSuccess isPgCtx e decodedHeaders ep) res
-            >>= flip onLeft logQErr
+            >>= flip onLeft (logQErr logger)
 
 createEventPayload :: RetryConf -> Event ->  EventPayload
 createEventPayload retryConf e = EventPayload
@@ -355,14 +361,17 @@ processSuccess isPgCtx e decodedHeaders ep resp = do
     isPgCtx' = withTxIsolation Q.RepeatableRead isPgCtx
 
 processError
-  :: ( MonadIO m
-     , MonadReader r m
-     , Has (L.Logger L.Hasura) r
-     )
-  => IsPGExecCtx -> Event -> RetryConf -> [HeaderConf] -> EventPayload -> HTTPErr
+  :: MonadIO m 
+  => L.Logger L.Hasura
+  -> IsPGExecCtx 
+  -> Event
+  -> RetryConf
+  -> [HeaderConf]
+  -> EventPayload
+  -> HTTPErr
   -> m (Either QErr ())
-processError isPgCtx e retryConf decodedHeaders ep err = do
-  logHTTPErr err
+processError logger isPgCtx e retryConf decodedHeaders ep err = do
+  logHTTPErr logger err
   let invocation = case err of
         HClient excp -> do
           let errMsg = TBS.fromLBS $ encode $ show excp
@@ -468,46 +477,40 @@ mkMaybe :: [a] -> Maybe [a]
 mkMaybe [] = Nothing
 mkMaybe x  = Just x
 
-logQErr :: ( MonadReader r m, Has (L.Logger L.Hasura) r, MonadIO m) => QErr -> m ()
-logQErr err = do
-  logger :: L.Logger L.Hasura <- asks getter
-  L.unLogger logger $ EventInternalErr err
+logQErr :: MonadIO m => L.Logger L.Hasura -> QErr -> m ()
+logQErr logger err = L.unLogger logger $ EventInternalErr err
 
-logHTTPErr
-  :: ( MonadReader r m
-     , Has (L.Logger L.Hasura) r
-     , MonadIO m
-     )
-  => HTTPErr -> m ()
-logHTTPErr err = do
-  logger :: L.Logger L.Hasura <- asks getter
-  L.unLogger logger $ err
+logHTTPErr :: MonadIO m => L.Logger L.Hasura -> HTTPErr -> m ()
+logHTTPErr logger err = L.unLogger logger $ err
 
 -- These run concurrently on their respective EventPayloads
 tryWebhook
-  :: ( Has (L.Logger L.Hasura) r
-     , Has HTTP.Manager r
-     , MonadReader r m
-     , MonadIO m
+  :: ( MonadIO m
      , MonadError HTTPErr m
+     , Tracing.MonadTrace m
      )
-  => [HTTP.Header] -> HTTP.ResponseTimeout -> EventPayload -> String
+  => L.Logger L.Hasura
+  -> HTTP.Manager
+  -> [HTTP.Header] 
+  -> HTTP.ResponseTimeout
+  -> EventPayload
+  -> String
   -> m HTTPResp
-tryWebhook headers responseTimeout ep webhook = do
+tryWebhook logger mgr headers responseTimeout ep webhook = do
   let context = ExtraContext (epCreatedAt ep) (epId ep)
   initReqE <- liftIO $ try $ HTTP.parseRequest webhook
   case initReqE of
     Left excp -> throwError $ HClient excp
-    Right initReq -> do
+    Right initReq -> Tracing.traceHttpRequest (T.pack webhook) do
       let req = initReq
                 { HTTP.method = "POST"
                 , HTTP.requestHeaders = headers
                 , HTTP.requestBody = HTTP.RequestBodyLBS (encode ep)
                 , HTTP.responseTimeout = responseTimeout
                 }
-
-      eitherResp <- runHTTP req (Just context)
-      onLeft eitherResp throwError
+      pure $ Tracing.SuspendedRequest req \req' -> do
+        eitherResp <- runReaderT (runHTTP req' (Just context)) (logger, mgr)
+        onLeft eitherResp throwError
 
 getEventTriggerInfoFromEvent :: SchemaCache -> Event -> Maybe EventTriggerInfo
 getEventTriggerInfoFromEvent sc e = let table = eTable e

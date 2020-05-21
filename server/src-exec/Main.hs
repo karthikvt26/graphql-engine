@@ -19,12 +19,16 @@ import qualified Data.ByteString.Lazy       as BL
 import qualified Data.ByteString.Lazy.Char8 as BLC
 import qualified Database.PG.Query          as Q
 import qualified System.Posix.Signals       as Signals
+import qualified Data.Environment           as Env
 
 main :: IO ()
-main = parseArgs >>= unAppM . runApp
+main = do
+  args <- parseArgs
+  env  <- Env.getEnvironment
+  unAppM (runApp env args)
 
-runApp :: HGEOptions Hasura -> AppM ()
-runApp (HGEOptionsG rci hgeCmd) =
+runApp :: Env.Environment -> HGEOptions Hasura -> AppM ()
+runApp env (HGEOptionsG rci hgeCmd) =
   withVersion $$(getVersionFromEnvironment) $ case hgeCmd of
     HCServe serveOptions -> do
       (initCtx, initTime) <- initialiseCtx hgeCmd rci
@@ -37,7 +41,7 @@ runApp (HGEOptionsG rci hgeCmd) =
         Signals.sigTERM
         (Signals.CatchOnce (Conc.putMVar shutdownLatch ()))
         Nothing
-      runHGEServer serveOptions initCtx initTime shutdownLatch
+      runHGEServer env serveOptions initCtx initTime shutdownLatch
 
     HCExport -> do
       (initCtx, _) <- initialiseCtx hgeCmd rci
@@ -54,8 +58,8 @@ runApp (HGEOptionsG rci hgeCmd) =
       queryBs <- liftIO BL.getContents
       let sqlGenCtx = SQLGenCtx False
       res <- runAsAdmin _icPgExecCtx sqlGenCtx _icHttpManager $ do
-        schemaCache <- buildRebuildableSchemaCache
-        execQuery queryBs
+        schemaCache <- buildRebuildableSchemaCache env
+        execQuery env queryBs
           & runHasSystemDefinedT (SystemDefined False)
           & runCacheRWT schemaCache
           & fmap (\(res, _, _) -> res)

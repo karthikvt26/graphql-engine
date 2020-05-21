@@ -11,8 +11,7 @@ module Hasura.GraphQL.Transport.HTTP
   ) where
 
 import qualified Network.HTTP.Types                     as HTTP
-
-import           Control.Monad.Trans.Control            (MonadBaseControl)
+import qualified Data.Environment                       as Env
 
 import           Hasura.EncJSON
 import           Hasura.GraphQL.Transport.HTTP.Protocol
@@ -24,7 +23,7 @@ import           Hasura.Server.Logging                  (QueryLogger (..))
 import           Hasura.Server.Utils                    (RequestId)
 import           Hasura.Server.Version                  (HasVersion)
 import           Hasura.Session
-import           Hasura.Tracing                         (MonadTrace)
+import           Hasura.Tracing                         (MonadTrace, trace)
 
 import qualified Database.PG.Query                      as Q
 import qualified Hasura.GraphQL.Execute                 as E
@@ -39,17 +38,18 @@ runGQ
      , QueryLogger m
      , MonadTrace m
      )
-  => RequestId
+  => Env.Environment
+  -> RequestId
   -> UserInfo
   -> [HTTP.Header]
   -> (GQLReqUnparsed, GQLReqParsed)
   -> m (HttpResponse EncJSON)
-runGQ reqId userInfo reqHdrs req@(reqUnparsed, _) = do
+runGQ env reqId userInfo reqHdrs req@(reqUnparsed, _) = do
   -- The response and misc telemetry data:
   let telemTransport = Telem.HTTP
   (telemTimeTot_DT, (telemCacheHit, telemLocality, (telemTimeIO_DT, telemQueryType, !resp))) <- withElapsedTime $ do
     E.ExecutionCtx _ sqlGenCtx pgExecCtx planCache sc scVer httpManager enableAL <- ask
-    (telemCacheHit, execPlan) <- E.getResolvedExecPlan pgExecCtx planCache
+    (telemCacheHit, execPlan) <- E.getResolvedExecPlan env pgExecCtx planCache
                                  userInfo sqlGenCtx enableAL sc scVer httpManager reqHdrs req
     case execPlan of
       E.GExPHasura (resolvedOp, txAccess) -> do
@@ -58,7 +58,7 @@ runGQ reqId userInfo reqHdrs req@(reqUnparsed, _) = do
       E.GExPRemote rsi opDef  -> do
         let telemQueryType | G._todType opDef == G.OperationTypeMutation = Telem.Mutation
                            | otherwise = Telem.Query
-        (telemTimeIO, resp) <- E.execRemoteGQ reqId userInfo reqHdrs reqUnparsed rsi opDef
+        (telemTimeIO, resp) <- E.execRemoteGQ env reqId userInfo reqHdrs reqUnparsed rsi opDef
         return (telemCacheHit, Telem.Remote, (telemTimeIO, telemQueryType, resp))
   let telemTimeIO = fromUnits telemTimeIO_DT
       telemTimeTot = fromUnits telemTimeTot_DT
@@ -73,16 +73,17 @@ runGQBatched
      , QueryLogger m
      , MonadTrace m
      )
-  => RequestId
+  => Env.Environment
+  -> RequestId
   -> ResponseInternalErrorsConfig
   -> UserInfo
   -> [HTTP.Header]
   -> (GQLBatchedReqs GQLQueryText, GQLBatchedReqs GQLExecDoc)
   -> m (HttpResponse EncJSON)
-runGQBatched reqId responseErrorsConfig userInfo reqHdrs reqs =
+runGQBatched env reqId responseErrorsConfig userInfo reqHdrs reqs =
   case reqs of
     (GQLSingleRequest req, GQLSingleRequest reqParsed) ->
-      runGQ reqId userInfo reqHdrs (req, reqParsed)
+      runGQ env reqId userInfo reqHdrs (req, reqParsed)
     (GQLBatchedReqs batch, GQLBatchedReqs batchParsed) -> do
       -- It's unclear what we should do if we receive multiple
       -- responses with distinct headers, so just do the simplest thing
@@ -93,7 +94,7 @@ runGQBatched reqId responseErrorsConfig userInfo reqHdrs reqs =
             . encJFromList
             . map (either (encJFromJValue . encodeGQErr includeInternal) _hrBody)
           try = flip catchError (pure . Left) . fmap Right
-      fmap removeHeaders $ traverse (try . runGQ reqId userInfo reqHdrs) $ zip batch batchParsed
+      fmap removeHeaders $ traverse (try . runGQ env reqId userInfo reqHdrs) $ zip batch batchParsed
     -- TODO: is this correct?
     _ -> throw500 "runGQBatched received different kinds of GQLBatchedReqs"
 
@@ -102,6 +103,7 @@ runHasuraGQ
      , MonadError QErr m
      , MonadReader E.ExecutionCtx m
      , QueryLogger m
+     , MonadTrace m
      )
   => RequestId
   -> GQLReqUnparsed
@@ -125,14 +127,15 @@ runHasuraGQ reqId query userInfo txAccess resolvedOp = do
       Q.ReadOnly  -> runLazyROTx'
       Q.ReadWrite -> runLazyRWTx'
 
-    executeTx isPgCtx = case resolvedOp of
-      E.ExOpQuery tx _    ->
-        ([],) <$> runLazyTx' isPgCtx tx
-      E.ExOpMutation respHeaders tx -> do
-        (respHeaders,) <$> runLazyTx Q.ReadWrite isPgCtx (withUserInfo userInfo tx)
-      E.ExOpSubs _ ->
-        throw400 UnexpectedPayload
-        "subscriptions are not supported over HTTP, use websockets instead"
+    executeTx isPgCtx =
+      case resolvedOp of
+        E.ExOpQuery tx _ -> ([],) <$> trace "pg" do
+          runLazyTx' isPgCtx tx
+        E.ExOpMutation respHeaders tx -> trace "pg" do
+          (respHeaders,) <$> runLazyTx Q.ReadWrite isPgCtx (withUserInfo userInfo tx)
+        E.ExOpSubs _ ->
+          throw400 UnexpectedPayload
+          "subscriptions are not supported over HTTP, use websockets instead"
 
     logQuery' logger = case resolvedOp of
       -- log the generated SQL and the graphql query

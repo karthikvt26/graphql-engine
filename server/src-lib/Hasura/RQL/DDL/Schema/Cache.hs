@@ -23,6 +23,7 @@ import           Hasura.Prelude
 import qualified Data.HashMap.Strict.Extended             as M
 import qualified Data.HashSet                             as HS
 import qualified Data.Text                                as T
+import qualified Data.Environment                         as Env
 import qualified Database.PG.Query                        as Q
 
 import           Control.Arrow.Extended
@@ -102,11 +103,12 @@ mergeCustomTypes gCtxMap remoteSchemaCtx customTypesState = do
 
 buildRebuildableSchemaCache
   :: (HasVersion, MonadIO m, MonadUnique m, MonadTx m, HasHttpManager m, HasSQLGenCtx m)
-  => m (RebuildableSchemaCache m)
-buildRebuildableSchemaCache = do
+  => Env.Environment
+  -> m (RebuildableSchemaCache m)
+buildRebuildableSchemaCache env = do
   catalogMetadata <- liftTx fetchCatalogData
   result <- flip runReaderT CatalogSync $
-    Inc.build buildSchemaCacheRule (catalogMetadata, initialInvalidationKeys)
+    Inc.build (buildSchemaCacheRule env) (catalogMetadata, initialInvalidationKeys)
   pure $ RebuildableSchemaCache (Inc.result result) initialInvalidationKeys (Inc.rebuildRule result)
 
 newtype CacheRWT m a
@@ -155,8 +157,9 @@ buildSchemaCacheRule
   -- what we want!
   :: ( HasVersion, ArrowChoice arr, Inc.ArrowDistribute arr, Inc.ArrowCache m arr
      , MonadIO m, MonadTx m, MonadReader BuildReason m, HasHttpManager m, HasSQLGenCtx m )
-  => (CatalogMetadata, InvalidationKeys) `arr` SchemaCache
-buildSchemaCacheRule = proc (catalogMetadata, invalidationKeys) -> do
+  => Env.Environment
+  -> (CatalogMetadata, InvalidationKeys) `arr` SchemaCache
+buildSchemaCacheRule env = proc (catalogMetadata, invalidationKeys) -> do
   invalidationKeysDep <- Inc.newDependency -< invalidationKeys
 
   -- Step 1: Process metadata and collect dependency information.
@@ -328,7 +331,7 @@ buildSchemaCacheRule = proc (catalogMetadata, invalidationKeys) -> do
 
     buildTableEventTriggers
       :: ( ArrowChoice arr, Inc.ArrowDistribute arr, ArrowWriter (Seq CollectedInfo) arr
-         , Inc.ArrowCache m arr, MonadIO m, MonadTx m, MonadReader BuildReason m, HasSQLGenCtx m )
+         , Inc.ArrowCache m arr, MonadTx m, MonadReader BuildReason m, HasSQLGenCtx m )
       => (TableCoreInfo, [CatalogEventTrigger]) `arr` EventTriggerInfoMap
     buildTableEventTriggers = buildInfoMap _cetName mkEventTriggerMetadataObject buildEventTrigger
       where
@@ -340,7 +343,7 @@ buildSchemaCacheRule = proc (catalogMetadata, invalidationKeys) -> do
           (| withRecordInconsistency (
              (| modifyErrA (do
                   etc <- bindErrorA -< decodeValue configuration
-                  (info, dependencies) <- bindErrorA -< subTableP2Setup qt etc
+                  (info, dependencies) <- bindErrorA -< subTableP2Setup env qt etc
                   let tableColumns = M.mapMaybe (^? _FIColumn) (_tciFieldInfoMap tableInfo)
                   recreateViewIfNeeded -< (qt, tableColumns, trn, etcDefinition etc)
                   recordDependencies -< (metadataObject, schemaObjectId, dependencies)
@@ -357,7 +360,7 @@ buildSchemaCacheRule = proc (catalogMetadata, invalidationKeys) -> do
 
     buildActions
       :: ( ArrowChoice arr, Inc.ArrowDistribute arr, Inc.ArrowCache m arr
-         , ArrowWriter (Seq CollectedInfo) arr, MonadIO m )
+         , ArrowWriter (Seq CollectedInfo) arr)
       => ( ((NonObjectTypeMap, AnnotatedObjects), HashSet PGScalarType)
          , [ActionMetadata]
          ) `arr` HashMap ActionName ActionInfo
@@ -369,7 +372,7 @@ buildSchemaCacheRule = proc (catalogMetadata, invalidationKeys) -> do
           (| withRecordInconsistency (
              (| modifyErrA (do
                   (resolvedDef, outObject, reusedPgScalars) <- liftEitherA <<< bindA -<
-                    runExceptT $ resolveAction resolvedCustomTypes pgScalars def
+                    runExceptT $ resolveAction env resolvedCustomTypes pgScalars def
                   let permissionInfos = map (ActionPermissionInfo . _apmRole) actionPermissions
                       permissionMap = mapFromL _apiRole permissionInfos
                   returnA -< ActionInfo name outObject resolvedDef permissionMap reusedPgScalars comment)
@@ -390,7 +393,7 @@ buildSchemaCacheRule = proc (catalogMetadata, invalidationKeys) -> do
         buildRemoteSchema = Inc.cache proc (invalidationKeys, remoteSchema) -> do
           Inc.dependOn -< Inc.selectKeyD (_arsqName remoteSchema) invalidationKeys
           (| withRecordInconsistency (liftEitherA <<< bindA -<
-               runExceptT $ addRemoteSchemaP2Setup remoteSchema)
+               runExceptT $ addRemoteSchemaP2Setup env remoteSchema)
            |) (mkRemoteSchemaMetadataObject remoteSchema)
 
     -- Builds the GraphQL schema and merges in remote schemas. This function is kind of gross, as

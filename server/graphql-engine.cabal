@@ -211,6 +211,7 @@ library
                      , Control.Monad.Unique
                      , Control.Concurrent.Extended
                      , Data.Time.Clock.Units
+                     , Data.Environment
 
                      -- exposed for tests
                      , Data.Parser.CacheControl

@@ -12,6 +12,7 @@ import qualified Data.Aeson                    as J
 import qualified Data.ByteString.Lazy          as BL
 import qualified Data.HashMap.Strict           as Map
 import qualified Data.Text                     as T
+import qualified Data.Environment              as Env
 import qualified Language.GraphQL.Draft.Parser as G
 import qualified Language.GraphQL.Draft.Syntax as G
 import qualified Network.HTTP.Client           as HTTP
@@ -32,12 +33,13 @@ introspectionQuery = $(embedStringFile "src-rsr/introspection.json")
 
 fetchRemoteSchema
   :: (HasVersion, MonadIO m, MonadError QErr m)
-  => HTTP.Manager
+  => Env.Environment
+  -> HTTP.Manager
   -> RemoteSchemaName
   -> RemoteSchemaInfo
   -> m GC.RemoteGCtx
-fetchRemoteSchema manager name def@(RemoteSchemaInfo url headerConf _ timeout) = do
-  headers <- makeHeadersFromConf headerConf
+fetchRemoteSchema env manager name def@(RemoteSchemaInfo url headerConf _ timeout) = do
+  headers <- makeHeadersFromConf env headerConf
   let hdrsWithDefaults = addDefaultHeaders headers
 
   initReqE <- liftIO $ try $ HTTP.parseRequest (show url)
