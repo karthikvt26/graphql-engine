@@ -34,7 +34,8 @@ import qualified Text.Mustache.Compile                     as M
 import           Hasura.Db
 import           Hasura.EncJSON
 import           Hasura.Events.Lib
-import           Hasura.GraphQL.Execute                    (GQLApiAuthorization (..))
+import           Hasura.GraphQL.Execute                    (GQLApiAuthorization (..),
+                                                            checkQueryInAllowlist)
 import           Hasura.GraphQL.Logging                    (QueryLog (..))
 import           Hasura.GraphQL.Transport.HTTP.Protocol    (toParsed)
 import           Hasura.GraphQL.Transport.WebSocket.Server (WSServerLogger (..))
@@ -424,7 +425,11 @@ instance MetadataApiAuthorization AppM where
       errMsg = "restricted access : admin only"
 
 instance GQLApiAuthorization AppM where
-  authorizeGQLApi _ _ query = runExceptT $ toParsed query
+  authorizeGQLApi userInfo _ enableAL sc query = do
+    runExceptT $ do
+      req <- toParsed query
+      checkQueryInAllowlist enableAL userInfo req sc
+      return req
 
 instance ConfigApiHandler AppM where
   runConfigApiHandler = configApiGetHandler

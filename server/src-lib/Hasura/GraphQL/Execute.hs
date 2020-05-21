@@ -19,6 +19,7 @@ module Hasura.GraphQL.Execute
   , EQ.PreparedSql(..)
   , ExecutionCtx(..)
   , GQLApiAuthorization(..)
+  , checkQueryInAllowlist
   ) where
 
 import           Control.Exception                      (try)
@@ -87,15 +88,27 @@ data ExecutionCtx
 -- | Typeclass representing rules/authorization to be enforced on the GraphQL API (over both HTTP & Websockets)
 -- | This is separate from the permissions system. Permissions apply on GraphQL related objects, but
 -- this is applicable on other general things
-class Monad m => GQLApiAuthorization m where
+class (Monad m) => GQLApiAuthorization m where
   authorizeGQLApi
     :: UserInfo
     -> ([HTTP.Header], IpAddress)
     -- ^ request headers and IP address
+    -> Bool
+    -- ^ allow list enabled?
+    -> SchemaCache
+    -- ^ needs allow list
     -> GQLReqUnparsed
     -- ^ the unparsed GraphQL query string (and related values)
     -> m (Either QErr GQLReqParsed)
     -- ^ after enforcing authorization, it should return the parsed GraphQL query
+
+instance GQLApiAuthorization m => GQLApiAuthorization (ExceptT e m) where
+  authorizeGQLApi ui det enableAL sc req =
+    lift $ authorizeGQLApi ui det enableAL sc req
+
+instance GQLApiAuthorization m => GQLApiAuthorization (ReaderT r m) where
+  authorizeGQLApi ui det enableAL sc req =
+    lift $ authorizeGQLApi ui det enableAL sc req
 
 -- Enforces the current limitation
 assertSameLocationNodes
@@ -142,9 +155,6 @@ getExecPlanPartial
   -> m ExecPlanPartial
 getExecPlanPartial userInfo sc enableAL req = do
 
-  -- check if query is in allowlist
-  when enableAL checkQueryInAllowlist
-
   let gCtx = getGCtx (_uiBackendOnlyFieldAccess userInfo) sc roleName
   queryParts <- flip runReaderT gCtx $ VQ.getQueryParts req
 
@@ -166,7 +176,6 @@ getExecPlanPartial userInfo sc enableAL req = do
     VT.TLCustom ->
       throw500 "unexpected custom type for top level field"
   where
-    -- role = userRole userInfo
     roleName = _uiRole userInfo
     getTxAccess rootSelSet = case rootSelSet of
       VQ.RQuery{}        -> getGQLQueryTxAccess rootSelSet
@@ -178,16 +187,20 @@ getExecPlanPartial userInfo sc enableAL req = do
     -- for executing the query. For now, we default to Q.readOnly
     getGQLQueryTxAccess _ = return Q.ReadOnly
 
-    checkQueryInAllowlist =
-      -- only for non-admin roles
-      when (roleName /= adminRoleName) $ do
-        let notInAllowlist =
-              not $ VQ.isQueryInAllowlist (_grQuery req) (scAllowlist sc)
-        when notInAllowlist $ modifyQErr modErr $ throwVE "query is not allowed"
-
+checkQueryInAllowlist
+  :: (MonadError QErr m) => Bool -> UserInfo -> GQLReqParsed -> SchemaCache -> m ()
+checkQueryInAllowlist enableAL userInfo req sc =
+  -- only for non-admin roles
+  -- check if query is in allowlist
+  when (enableAL && (_uiRole userInfo /= adminRoleName)) $ do
+      let notInAllowlist =
+            not $ VQ.isQueryInAllowlist (_grQuery req) (scAllowlist sc)
+      when notInAllowlist $ modifyQErr modErr $ throwVE "query is not allowed"
+  where
     modErr e =
       let msg = "query is not in any of the allowlists"
       in e{qeInternal = Just $ J.object [ "message" J..= J.String msg]}
+
 
 
 -- An execution operation, in case of
@@ -408,7 +421,8 @@ execRemoteGQ
   :: ( HasVersion
      , MonadIO m
      , MonadError QErr m
-     , MonadReader ExecutionCtx m
+     , MonadReader r m
+     , Has ExecutionCtx r
      , QueryLogger m
      )
   => RequestId
@@ -420,7 +434,7 @@ execRemoteGQ
   -> m (DiffTime, HttpResponse EncJSON)
   -- ^ Also returns time spent in http request, for telemetry.
 execRemoteGQ reqId userInfo reqHdrs q rsi opDef = do
-  execCtx <- ask
+  execCtx <- asks getter
   let logger  = _ecxLogger execCtx
       manager = _ecxHttpManager execCtx
       opTy    = G._todType opDef

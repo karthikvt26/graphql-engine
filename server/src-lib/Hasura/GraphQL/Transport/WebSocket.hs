@@ -324,10 +324,9 @@ onStart serverEnv wsConn (StartMsg opId q) = catchAndIgnore $ do
       withComplete $ sendStartErr e
 
   requestId <- getRequestId reqHdrs
-  reqParsedE <- lift $ E.authorizeGQLApi userInfo (reqHdrs, ipAddress) q
-  reqParsed <- either (withComplete . preExecErr requestId) return reqParsedE
-  -- (sc, scVer) <- liftIO $ IORef.readIORef gCtxMapRef
   (sc, scVer) <- liftIO getSchemaCache
+  reqParsedE <- lift $ E.authorizeGQLApi userInfo (reqHdrs, ipAddress) enableAL sc q
+  reqParsed <- either (withComplete . preExecErr requestId) return reqParsedE
   execPlanE <- runExceptT $ E.getResolvedExecPlan pgExecCtx
                planCache userInfo sqlGenCtx enableAL sc scVer httpMgr reqHdrs (q, reqParsed)
 
