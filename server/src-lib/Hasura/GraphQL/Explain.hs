@@ -118,14 +118,15 @@ explainGQLQuery
   => IsPGExecCtx
   -> SchemaCache
   -> SQLGenCtx
-  -> Bool
   -> QueryActionExecuter
   -> GQLExplain
   -> m EncJSON
-explainGQLQuery isPgCtx sc sqlGenCtx enableAL actionExecuter (GQLExplain query userVarsRaw) = do
+explainGQLQuery isPgCtx sc sqlGenCtx actionExecuter (GQLExplain query userVarsRaw) = do
   userInfo <- mkUserInfo (URBPreDetermined adminRoleName) UAdminSecretSent sessionVariables
-  (execPlan, queryReusability) <- runReusabilityT $
-    E.getExecPlanPartial userInfo sc enableAL query
+  -- NOTE: previously 'E.getExecPlanPartial' would perform allow-list checking. This has been moved
+  -- into a separate `E.GQLApiAuthorization` class. But here we don't need to check for allow-lists
+  -- because this is an admin only endpoint. Allow-list checking ignores requests from admin role
+  (execPlan, queryReusability) <- runReusabilityT $ E.getExecPlanPartial userInfo sc query
   (gCtx, rootSelSet, txAccess) <- case execPlan of
     E.GExPHasura (gCtx, rootSelSet, txAccess) ->
       return (gCtx, rootSelSet, txAccess)

@@ -43,9 +43,9 @@ runGQ reqId userInfo reqHdrs req@(reqUnparsed, _) = do
   -- The response and misc telemetry data:
   let telemTransport = Telem.HTTP
   (telemTimeTot_DT, (telemCacheHit, telemLocality, (telemTimeIO_DT, telemQueryType, !resp))) <- withElapsedTime $ do
-    E.ExecutionCtx _ sqlGenCtx pgExecCtx planCache sc scVer httpManager enableAL <- ask
+    E.ExecutionCtx _ sqlGenCtx pgExecCtx planCache sc scVer httpManager _ <- ask
     (telemCacheHit, execPlan) <- E.getResolvedExecPlan pgExecCtx planCache
-                                 userInfo sqlGenCtx enableAL sc scVer httpManager reqHdrs req
+                                 userInfo sqlGenCtx sc scVer httpManager reqHdrs req
     case execPlan of
       E.GExPHasura (resolvedOp, txAccess) -> do
         (telemTimeIO, telemQueryType, respHdrs, resp) <- runHasuraGQ reqId reqUnparsed userInfo txAccess resolvedOp

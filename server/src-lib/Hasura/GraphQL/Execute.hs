@@ -150,10 +150,9 @@ getExecPlanPartial
   :: (MonadReusability m, MonadError QErr m)
   => UserInfo
   -> SchemaCache
-  -> Bool
   -> GQLReqParsed
   -> m ExecPlanPartial
-getExecPlanPartial userInfo sc enableAL req = do
+getExecPlanPartial userInfo sc req = do
 
   let gCtx = getGCtx (_uiBackendOnlyFieldAccess userInfo) sc roleName
   queryParts <- flip runReaderT gCtx $ VQ.getQueryParts req
@@ -221,7 +220,6 @@ getResolvedExecPlan
   -> EP.PlanCache
   -> UserInfo
   -> SQLGenCtx
-  -> Bool
   -> SchemaCache
   -> SchemaCacheVer
   -> HTTP.Manager
@@ -229,7 +227,7 @@ getResolvedExecPlan
   -> (GQLReqUnparsed, GQLReqParsed)
   -> m (Telem.CacheHit, ExecPlanResolved)
 getResolvedExecPlan isPgCtx planCache userInfo sqlGenCtx
-  enableAL sc scVer httpManager reqHeaders (reqUnparsed, reqParsed) = do
+  sc scVer httpManager reqHeaders (reqUnparsed, reqParsed) = do
 
   planM <- liftIO $ EP.getPlan scVer (_uiRole userInfo)
            opNameM queryStr planCache
@@ -250,7 +248,7 @@ getResolvedExecPlan isPgCtx planCache userInfo sqlGenCtx
       opNameM queryStr plan planCache
     noExistingPlan = do
       (partialExecPlan, queryReusability) <- runReusabilityT $
-        getExecPlanPartial userInfo sc enableAL reqParsed
+        getExecPlanPartial userInfo sc reqParsed
       forM partialExecPlan $ \(gCtx, rootSelSet, txAccess) ->
         case rootSelSet of
           VQ.RMutation selSet -> do
