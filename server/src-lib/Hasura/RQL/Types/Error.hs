@@ -99,9 +99,8 @@ data Code
   | InvalidCustomTypes
   -- Actions Webhook code
   | ActionWebhookCode !Text
-  -- API limits related TODO: parameterize this and move this to pro
-  | RateLimitExceeded
-  | DepthLimitExceeded
+  -- | Custom error code for other applications using graphql-engine as a library
+  | CustomCode !Text
   deriving (Eq)
 
 instance Show Code where
@@ -142,8 +141,7 @@ instance Show Code where
     StartFailed           -> "start-failed"
     InvalidCustomTypes    -> "invalid-custom-types"
     ActionWebhookCode t   -> T.unpack t
-    RateLimitExceeded     -> "rate-limit-exceeded"
-    DepthLimitExceeded    -> "depth-limit-exceeded"
+    CustomCode t          -> T.unpack t
 
 data QErr
   = QErr
