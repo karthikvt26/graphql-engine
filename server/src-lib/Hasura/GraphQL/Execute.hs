@@ -11,8 +11,7 @@ module Hasura.GraphQL.Execute
   , getSubsOp
 
   , EP.PlanCache
-  , EP.mkPlanCacheOptions
-  , EP.PlanCacheOptions
+  , EP.PlanCacheOptions(..)
   , EP.initPlanCache
   , EP.clearPlanCache
   , EP.dumpPlanCache
@@ -373,32 +372,35 @@ getMutOp ctx sqlGenCtx userInfo manager reqHeaders selSet =
         ordByCtx = _gOrdByCtx ctx
         insCtxMap = _gInsCtxMap ctx
 
-getSubsOpM
-  :: ( MonadError QErr m
-     , MonadReader r m
-     , Has QueryCtxMap r
-     , Has FieldMap r
-     , Has OrdByCtx r
-     , Has SQLGenCtx r
-     , Has UserInfo r
-     , MonadIO m
-     , HasVersion
-     )
-  => IsPGExecCtx
-  -> QueryReusability
-  -> VQ.Field
-  -> QueryActionExecuter
-  -> m (EL.LiveQueryPlan, Maybe EL.ReusableLiveQueryPlan)
-getSubsOpM isPgCtx initialReusability fld actionExecuter =
-  case VQ._fName fld of
-    "__typename" ->
-      throwVE "you cannot create a subscription on '__typename' field"
-    _            -> do
-      (astUnresolved, finalReusability) <- runReusabilityTWith initialReusability $
-        GR.queryFldToPGAST fld actionExecuter
-      let varTypes = finalReusability ^? _Reusable
-      EL.buildLiveQueryPlan isPgCtx (VQ._fAlias fld) astUnresolved varTypes
+-- <<<<<<< HEAD
+-- getSubsOpM
+--   :: ( MonadError QErr m
+--      , MonadReader r m
+--      , Has QueryCtxMap r
+--      , Has FieldMap r
+--      , Has OrdByCtx r
+--      , Has SQLGenCtx r
+--      , Has UserInfo r
+--      , MonadIO m
+--      , HasVersion
+--      )
+--   => IsPGExecCtx
+--   -> QueryReusability
+--   -> VQ.Field
+--   -> QueryActionExecuter
+--   -> m (EL.LiveQueryPlan, Maybe EL.ReusableLiveQueryPlan)
+-- getSubsOpM isPgCtx initialReusability fld actionExecuter =
+--   case VQ._fName fld of
+--     "__typename" ->
+--       throwVE "you cannot create a subscription on '__typename' field"
+--     _            -> do
+--       (astUnresolved, finalReusability) <- runReusabilityTWith initialReusability $
+--         GR.queryFldToPGAST fld actionExecuter
+--       let varTypes = finalReusability ^? _Reusable
+--       EL.buildLiveQueryPlan isPgCtx (VQ._fAlias fld) astUnresolved varTypes
 
+-- =======
+-- >>>>>>> stable
 getSubsOp
   :: ( MonadError QErr m
      , MonadIO m
@@ -410,10 +412,15 @@ getSubsOp
   -> UserInfo
   -> QueryReusability
   -> QueryActionExecuter
-  -> VQ.Field
+  -> VQ.SelSet
   -> m (EL.LiveQueryPlan, Maybe EL.ReusableLiveQueryPlan)
-getSubsOp isPgCtx gCtx sqlGenCtx userInfo queryReusability actionExecuter fld =
-  runE gCtx sqlGenCtx userInfo $ getSubsOpM isPgCtx queryReusability fld actionExecuter
+-- <<<<<<< HEAD
+-- getSubsOp isPgCtx gCtx sqlGenCtx userInfo queryReusability actionExecuter fld =
+--   runE gCtx sqlGenCtx userInfo $ getSubsOpM isPgCtx queryReusability fld actionExecuter
+-- =======
+getSubsOp isPgCtx gCtx sqlGenCtx userInfo queryReusability actionExecuter fields =
+  runE gCtx sqlGenCtx userInfo $ EL.buildLiveQueryPlan isPgCtx queryReusability actionExecuter fields
+--   runE gCtx sqlGenCtx userInfo $ getSubsOpM pgExecCtx queryReusability fld actionExecuter
 
 execRemoteGQ
   :: ( HasVersion

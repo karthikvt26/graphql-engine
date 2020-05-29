@@ -1,5 +1,19 @@
 # Hasura GraphQL Engine Changelog
 
+## Next release
+
+### Bug fixes and improvements
+
+(Add entries here in the order of: server, console, cli, docs, others)
+- server: fix explain queries with role permissions (fix #4816)
+- server: compile with GHC 8.10.1, closing a space leak with subscriptions. (close #4517) (#3388)
+
+- server: fixes an issue where introspection queries with variables would fail because of caching (fix #4547)
+- server: avoid loss of precision when passing values in scientific notation (fix #4733)
+- server: fix mishandling of GeoJSON inputs in subscriptions (fix #3239)
+- server: fix importing of allow list query from metadata (fix #4687)
+- server: fix edge case with printing logs on startup failure (fix #4772)
+
 ## `v1.2.0`
 
 Include the changelog from **v1.2.0-beta.1**, **v1.2.0-beta.2**, **v1.2.0-beta.3**, **v1.2.0-beta.4**, **v1.2.0-beta.5**

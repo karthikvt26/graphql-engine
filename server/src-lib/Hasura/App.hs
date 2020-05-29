@@ -5,6 +5,7 @@ module Hasura.App where
 
 import           Control.Concurrent.STM.TVar               (readTVarIO)
 import           Control.Monad.Base
+import           Control.Monad.Catch                       (MonadCatch, MonadThrow, onException)
 import           Control.Monad.Stateless
 import           Control.Monad.STM                         (atomically)
 import           Control.Monad.Trans.Control               (MonadBaseControl (..))
@@ -12,6 +13,24 @@ import           Data.Aeson                                ((.=))
 import           Data.Time.Clock                           (UTCTime)
 import           GHC.AssertNF
 import           Options.Applicative
+-- import           System.Environment                        (getEnvironment, lookupEnv)
+-- import           System.Exit                               (exitFailure)
+
+-- import qualified Control.Concurrent.Async.Lifted.Safe      as LA
+-- import qualified Control.Concurrent.Extended               as C
+-- import qualified Data.Aeson                                as A
+-- import qualified Data.ByteString.Char8                     as BC
+-- import qualified Data.ByteString.Lazy.Char8                as BLC
+-- import qualified Data.Set                                  as Set
+-- import qualified Data.Text                                 as T
+-- import qualified Data.Time.Clock                           as Clock
+-- import qualified Data.Yaml                                 as Y
+-- import qualified Database.PG.Query                         as Q
+-- import qualified Network.HTTP.Client                       as HTTP
+-- import qualified Network.HTTP.Client.TLS                   as HTTP
+-- import qualified Network.Wai.Handler.Warp                  as Warp
+-- import qualified System.Posix.Signals                      as Signals
+-- import qualified Text.Mustache.Compile                     as M
 import           System.Environment                        (getEnvironment, lookupEnv)
 import           System.Exit                               (exitFailure)
 
@@ -28,6 +47,7 @@ import qualified Database.PG.Query                         as Q
 import qualified Network.HTTP.Client                       as HTTP
 import qualified Network.HTTP.Client.TLS                   as HTTP
 import qualified Network.Wai.Handler.Warp                  as Warp
+import qualified System.Log.FastLogger                     as FL
 import qualified System.Posix.Signals                      as Signals
 import qualified Text.Mustache.Compile                     as M
 
@@ -132,7 +152,7 @@ data Loggers
   }
 
 newtype AppM a = AppM { unAppM :: IO a }
-  deriving (Functor, Applicative, Monad, MonadIO, MonadBase IO, MonadBaseControl IO)
+  deriving (Functor, Applicative, Monad, MonadIO, MonadBase IO, MonadBaseControl IO, MonadCatch, MonadThrow)
 
 -- | this function initializes the catalog and returns an @InitCtx@, based on the command given
 -- - for serve command it creates a proper PG connection pool
@@ -201,6 +221,7 @@ class Monad m => Telemetry m where
 runHGEServer
   :: ( HasVersion
      , MonadIO m
+     , MonadCatch m
      , MonadStateless IO m
      , UserAuthentication m
      , MetadataApiAuthorization m
@@ -234,7 +255,15 @@ runHGEServer serveOpts@ServeOptions{..} initCtx@InitCtx{..} initTime = do
 
   authMode <- either (printErrExit . T.unpack) return authModeRes
 
-  HasuraApp app cacheRef cacheInitTime shutdownApp <-
+-- <<<<<<< HEAD
+--   HasuraApp app cacheRef cacheInitTime shutdownApp <-
+--     mkWaiApp logger
+-- =======
+  -- If an exception is encountered in 'mkWaiApp', flush the log buffer and rethrow
+  -- If we do not flush the log buffer on exception, then log lines written in 'mkWaiApp' may be missed
+  -- See: https://github.com/hasura/graphql-engine/issues/4772
+  let flushLogger = liftIO $ FL.flushLogStr $ _lcLoggerSet loggerCtx
+  HasuraApp app cacheRef cacheInitTime shutdownApp <- flip onException flushLogger $
     mkWaiApp logger
              sqlGenCtx
              soEnableAllowlist

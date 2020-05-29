@@ -13,6 +13,7 @@ import           Data.Word                  (Word32)
 import           Language.Haskell.TH.Syntax (Lift)
 import           Network.Socket             (SockAddr (..))
 import           System.ByteOrder           (ByteOrder (..), byteOrder)
+import           Language.Haskell.TH.Syntax (Lift, Q, TExp)
 import           System.Environment
 import           System.Exit
 import           System.Process

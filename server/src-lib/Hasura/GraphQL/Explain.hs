@@ -122,7 +122,8 @@ explainGQLQuery
   -> GQLExplain
   -> m EncJSON
 explainGQLQuery isPgCtx sc sqlGenCtx actionExecuter (GQLExplain query userVarsRaw) = do
-  userInfo <- mkUserInfo (URBPreDetermined adminRoleName) UAdminSecretSent sessionVariables
+  -- userInfo <- mkUserInfo (URBPreDetermined adminRoleName) UAdminSecretSent sessionVariables
+  userInfo <- mkUserInfo (URBFromSessionVariablesFallback adminRoleName) UAdminSecretSent sessionVariables
   -- NOTE: previously 'E.getExecPlanPartial' would perform allow-list checking. This has been moved
   -- into a separate `E.GQLApiAuthorization` class. But here we don't need to check for allow-lists
   -- because this is an admin only endpoint. Allow-list checking ignores requests from admin role
@@ -130,6 +131,15 @@ explainGQLQuery isPgCtx sc sqlGenCtx actionExecuter (GQLExplain query userVarsRa
   (gCtx, rootSelSet, txAccess) <- case execPlan of
     E.GExPHasura (gCtx, rootSelSet, txAccess) ->
       return (gCtx, rootSelSet, txAccess)
+-- =======
+-- explainGQLQuery pgExecCtx sc sqlGenCtx enableAL actionExecuter (GQLExplain query userVarsRaw) = do
+--   userInfo <- mkUserInfo (URBFromSessionVariablesFallback adminRoleName) UAdminSecretSent sessionVariables
+--   (execPlan, queryReusability) <- runReusabilityT $
+--     E.getExecPlanPartial userInfo sc enableAL query
+--   (gCtx, rootSelSet) <- case execPlan of
+--     E.GExPHasura (gCtx, rootSelSet) ->
+--       return (gCtx, rootSelSet)
+-- >>>>>>> stable
     E.GExPRemote _ _  ->
       throw400 InvalidParams "only hasura queries can be explained"
   case rootSelSet of

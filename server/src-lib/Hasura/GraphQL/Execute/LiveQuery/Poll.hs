@@ -51,7 +51,6 @@ import qualified Data.Time.Clock                             as Clock
 import qualified Data.UUID                                   as UUID
 import qualified Data.UUID.V4                                as UUID
 import qualified Database.PG.Query                           as Q
-import qualified Language.GraphQL.Draft.Syntax               as G
 import qualified ListT
 import qualified StmContainers.Map                           as STMMap
 import qualified System.Metrics.Distribution                 as Metrics
@@ -88,14 +87,16 @@ $(J.deriveToJSON (J.aesonDrop 4 J.snakeCase) ''UniqueSubscriberId)
 
 data Subscriber
   = Subscriber
-  { _sRootAlias            :: !G.Alias
-  , _sOnChangeCallback     :: !OnChange
+  { _sOnChangeCallback     :: !OnChange
   , _sWebsocketOperationId :: !UniqueSubscriberId
   }
+-- =======
+-- newtype Subscriber = Subscriber { _sOnChangeCallback :: OnChange }
+-- >>>>>>> stable
 
 instance Show Subscriber where
-  show (Subscriber root _ wsOpId) =
-    "Subscriber { _sRootAlias = " <> show root <> ", _sOnChangeCallback = <fn> , _sWebsocketOperationId =" <> show wsOpId <> " }"
+  show (Subscriber _ wsOpId) =
+    "Subscriber { _sOnChangeCallback = <fn> , _sWebsocketOperationId =" <> show wsOpId <> " }"
 
 -- | live query onChange metadata, used for adding more extra analytics data
 data LiveQueryMetadata
@@ -110,7 +111,6 @@ data LiveQueryResponse
   }
 
 type LGQResponse = GQResult LiveQueryResponse
-
 type OnChange = LGQResponse -> IO ()
 
 newtype SubscriberId = SubscriberId { _unSinkId :: UUID.UUID }
@@ -208,7 +208,6 @@ data CohortSnapshot
 
 pushResultToCohort
   :: GQResult EncJSON
-  -- ^ a response that still needs to be wrapped with each 'Subscriber'’s root 'G.Alias'
   -> Maybe ResponseHash
   -> LiveQueryMetadata
   -> CohortSnapshot
@@ -227,13 +226,17 @@ pushResultToCohort result !respHashM (LiveQueryMetadata dTime) cohortSnapshot = 
   pushResultToSubscribers sinks
   where
     CohortSnapshot _ respRef curSinks newSinks = cohortSnapshot
-    pushResultToSubscribers = A.mapConcurrently_ $ \(Subscriber alias action _) ->
-      let aliasText = G.unName $ G.unAlias alias
-          wrapWithAlias response = LiveQueryResponse
-            { _lqrPayload = encJToLBS $ encJFromAssocList [(aliasText, response)]
-            , _lqrExecutionTime = dTime
-            }
-      in action (wrapWithAlias <$> result)
+-- <<<<<<< HEAD
+--     pushResultToSubscribers = A.mapConcurrently_ $ \(Subscriber alias action _) ->
+--       let aliasText = G.unName $ G.unAlias alias
+--           wrapWithAlias response = LiveQueryResponse
+--             { _lqrPayload = encJToLBS $ encJFromAssocList [(aliasText, response)]
+--             , _lqrExecutionTime = dTime
+--             }
+--       in action (wrapWithAlias <$> result)
+-- =======
+    response = result <&> \payload -> LiveQueryResponse (encJToLBS payload) dTime
+    pushResultToSubscribers = A.mapConcurrently_ $ \(Subscriber action _) -> action response
 
 -- -------------------------------------------------------------------------------------------------
 -- Pollers
