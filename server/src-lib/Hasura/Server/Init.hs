@@ -1,8 +1,7 @@
 -- | Types and functions related to the server initialisation
-{-# LANGUAGE CPP    #-}
+{-# LANGUAGE CPP #-}
 {-# OPTIONS_GHC -O0 #-}
 module Hasura.Server.Init
-  -- * Hasura pro needs most of the functions from these modules
   ( module Hasura.Server.Init
   , module Hasura.Server.Init.Config
   ) where

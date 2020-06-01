@@ -79,7 +79,7 @@ persistCreateAction (CreateAction actionName actionDefinition comment) = do
       VALUES ($1, $2, $3)
   |] (actionName, Q.AltJ actionDefinition, comment) True
 
-{- Note [Postgres scalars in action input arguments]
+{-| Note [Postgres scalars in action input arguments]
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 It's very comfortable to be able to reference Postgres scalars in actions
 input arguments. For example, see the following action mutation:
@@ -100,11 +100,13 @@ referred scalars.
 resolveAction
   :: (QErrM m, MonadIO m)
   => (NonObjectTypeMap, AnnotatedObjects)
-  -> HashSet PGScalarType -- ^ List of all Postgres scalar types.
+  -> HashSet PGScalarType
+  -- ^ List of all Postgres scalar types.
   -> ActionDefinitionInput
   -> m ( ResolvedActionDefinition
        , AnnotatedObjectType
-       , HashSet PGScalarType -- ^ see Note [Postgres scalars in action input arguments].
+       , HashSet PGScalarType
+       -- ^ see Note [Postgres scalars in action input arguments].
        )
 resolveAction customTypes allPGScalars actionDefinition = do
   let responseType = unGraphQLType $ _adOutputType actionDefinition
