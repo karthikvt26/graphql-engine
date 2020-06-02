@@ -228,7 +228,11 @@ class Monad m => ConfigApiHandler m where
 -- instance (MonadIO m, UserAuthentication m, HttpLog m, Tracing.HasReporter m) => ConfigApiHandler (Tracing.TraceT m) where
 --   runConfigApiHandler = configApiGetHandler
   
-mapActionT :: (Monad m, Monad n) => (forall x. m x -> n x) -> Spock.ActionT m a -> Spock.ActionT n a
+mapActionT 
+  :: (Monad m, Monad n)
+  => (m (MTC.StT (Spock.ActionCtxT ()) a) -> n (MTC.StT (Spock.ActionCtxT ()) a))
+  -> Spock.ActionT m a
+  -> Spock.ActionT n a
 mapActionT f tma = MTC.restoreT . pure =<< MTC.liftWith \run -> f (run tma)
   
 mkSpockAction
@@ -249,10 +253,23 @@ mkSpockAction serverCtx qErrEncoder qErrModifier apiHandler = do
         manager = scManager serverCtx
         ipAddress = getSourceFromFallback req
         pathInfo = Wai.rawPathInfo req
+        
+    tracingCtx <- liftIO $ Tracing.extractHttpContext headers
+    
+    let runTraceT 
+          :: forall m a
+           . (MonadIO m, Tracing.HasReporter m)
+          => Tracing.TraceT m a
+          -> m a
+        runTraceT = maybe 
+          Tracing.runTraceT
+          Tracing.runTraceTWith
+          tracingCtx
+          (fromString (B8.unpack pathInfo))
 
     requestId <- getRequestId headers
     
-    mapActionT (Tracing.runTraceT (fromString (B8.unpack pathInfo))) do
+    mapActionT runTraceT do
       userInfoE <- fmap fst <$> lift (resolveUserInfo logger manager headers authMode)
       userInfo  <- either (logErrorAndResp Nothing requestId req (Left reqBody) False headers . qErrModifier)
                    return userInfoE

@@ -5,12 +5,14 @@ module Hasura.Tracing
   ( MonadTrace(..)
   , TraceT
   , runTraceT
+  , runTraceTWith
   , interpTraceT
   , TraceContext(..)
   , HasReporter(..)
   , NoReporter(..)
   , TracingMetadata
   , SuspendedRequest(..)
+  , extractHttpContext
   , traceHttpRequest
   ) where
 
@@ -22,7 +24,9 @@ import           Data.String                 (fromString)
 import qualified Data.ByteString             as BS
 import qualified Data.ByteString.Lazy        as BL
 import qualified Network.HTTP.Client         as HTTP
+import qualified Network.HTTP.Types.Header   as HTTP
 import qualified System.Random               as Rand
+import qualified Web.HttpApiData             as HTTP
 
 -- | Any additional human-readable key-value pairs relevant
 -- to the execution of a block of code.
@@ -97,6 +101,12 @@ runTraceT name tma = do
            <$> liftIO Rand.randomIO 
            <*> liftIO Rand.randomIO
            <*> pure Nothing
+  runTraceTWith ctx name tma
+  
+-- | Run an action in the 'TraceT' monad transformer in an
+-- existing context.
+runTraceTWith :: HasReporter m => TraceContext -> Text -> TraceT m a -> m a
+runTraceTWith ctx name tma = do
   report ctx name $ runWriterT $ runReaderT (unTraceT tma) ctx
   
 -- | Monads which support tracing. 'TraceT' is the standard example.
@@ -151,6 +161,18 @@ instance MonadTrace m => MonadTrace (ExceptT e m) where
 
 -- | A HTTP request, which can be modified before execution.
 data SuspendedRequest m a = SuspendedRequest HTTP.Request (HTTP.Request -> m a)
+
+-- | Extract the trace and parent span headers from a HTTP request
+-- and create a new 'TraceContext'. The new context will contain
+-- a fresh span ID, and the provided span ID will be assigned as
+-- the immediate parent span.
+extractHttpContext :: [HTTP.Header] -> IO (Maybe TraceContext)
+extractHttpContext hdrs = do
+  freshSpanId <- liftIO Rand.randomIO
+  pure $ TraceContext 
+    <$> (HTTP.parseHeaderMaybe =<< lookup "X-Hasura-TraceId" hdrs)
+    <*> pure freshSpanId
+    <*> pure (HTTP.parseHeaderMaybe =<< lookup "X-Hasura-SpanId" hdrs)
 
 traceHttpRequest 
   :: MonadTrace m 
