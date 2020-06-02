@@ -19,21 +19,8 @@ module Hasura.Server.Logging
 import           Data.Aeson
 import           Data.Aeson.Casing
 import           Data.Aeson.TH
-import           Data.Bits                              (shift, (.&.))
-import           Data.ByteString.Char8                  (ByteString)
-import           Data.Int                               (Int64)
 import           Data.Int                               (Int64)
 import           Data.Time.Clock
-import           Data.Word                              (Word32)
-import           Network.Socket                         (SockAddr (..))
-import           System.ByteOrder                       (ByteOrder (..), byteOrder)
-import           Text.Printf                            (printf)
-
-import qualified Data.ByteString.Char8                  as BS
-import qualified Data.ByteString.Lazy                   as BL
-import qualified Data.Text                              as T
-import qualified Network.HTTP.Types                     as HTTP
-import qualified Network.Wai                            as Wai
 
 import qualified Data.ByteString.Lazy                   as BL
 import qualified Data.Text                              as T

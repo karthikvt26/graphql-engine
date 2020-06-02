@@ -47,8 +47,6 @@ import           GHC.Int                                     (Int64)
 import           Hasura.Prelude
 import qualified ListT
 import qualified Network.WebSockets                          as WS
-import qualified Network.WebSockets                          as WS
-import qualified StmContainers.Map                           as STMMap
 import qualified StmContainers.Map                           as STMMap
 import qualified System.IO.Error                             as E
 

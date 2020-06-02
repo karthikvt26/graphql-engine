@@ -8,17 +8,15 @@ import           Data.Aeson
 import           Data.Bits                  (shift, (.&.))
 import           Data.ByteString.Char8      (ByteString)
 import           Data.Char
-import           Data.List                  (find)
 import           Data.Word                  (Word32)
 import           Language.Haskell.TH.Syntax (Lift)
 import           Network.Socket             (SockAddr (..))
 import           System.ByteOrder           (ByteOrder (..), byteOrder)
-import           Language.Haskell.TH.Syntax (Lift, Q, TExp)
+import           Language.Haskell.TH.Syntax (Q, TExp)
 import           System.Environment
 import           System.Exit
 import           System.Process
 import           Text.Printf                (printf)
-import           Language.Haskell.TH.Syntax (Q, TExp)
 import           Data.Aeson.Internal
 
 import qualified Data.ByteString            as B
