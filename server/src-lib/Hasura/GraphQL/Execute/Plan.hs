@@ -1,8 +1,7 @@
 module Hasura.GraphQL.Execute.Plan
   ( ReusablePlan(..)
   , PlanCache
-  , PlanCacheOptions
-  , mkPlanCacheOptions
+  , PlanCacheOptions(..)
   , getPlan
   , addPlan
   , initPlanCache
@@ -61,13 +60,9 @@ newtype PlanCacheOptions
   deriving (Show, Eq)
 $(J.deriveJSON (J.aesonDrop 2 J.snakeCase) ''PlanCacheOptions)
 
-mkPlanCacheOptions :: Maybe Cache.CacheSize -> PlanCacheOptions
-mkPlanCacheOptions = PlanCacheOptions
-
 initPlanCache :: PlanCacheOptions -> IO PlanCache
 initPlanCache options =
-  PlanCache <$>
-  Cache.initialise (Cache.mkCacheOptions $ unPlanCacheSize options)
+  PlanCache <$> Cache.initialise (unPlanCacheSize options)
 
 getPlan
   :: SchemaCacheVer -> RoleName -> Maybe GH.OperationName -> GH.GQLQueryText

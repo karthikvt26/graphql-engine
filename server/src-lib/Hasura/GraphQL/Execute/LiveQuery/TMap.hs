@@ -1,4 +1,3 @@
-{-# LANGUAGE UndecidableInstances #-}
 module Hasura.GraphQL.Execute.LiveQuery.TMap
   ( TMap
   , new

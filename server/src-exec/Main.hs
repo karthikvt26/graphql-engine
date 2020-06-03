@@ -76,9 +76,5 @@ runApp env (HGEOptionsG rci hgeCmd) =
   where
     runTx' InitCtx{..} tx =
       liftIO $ runExceptT $ runLazyTx Q.ReadWrite (withTxIsolation Q.Serializable _icPgExecCtx) $ liftTx tx
--- =======
---     runTx' initCtx tx txIso =
---       liftIO $ runExceptT $ Q.runTx (_icPgPool initCtx) (txIso, Nothing) tx
--- >>>>>>> stable
 
     cleanSuccess = liftIO $ putStrLn "successfully cleaned graphql-engine related data"

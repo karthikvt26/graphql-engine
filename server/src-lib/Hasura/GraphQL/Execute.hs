@@ -11,14 +11,14 @@ module Hasura.GraphQL.Execute
   , getSubsOp
 
   , EP.PlanCache
-  , EP.mkPlanCacheOptions
-  , EP.PlanCacheOptions
+  , EP.PlanCacheOptions(..)
   , EP.initPlanCache
   , EP.clearPlanCache
   , EP.dumpPlanCache
   , EQ.PreparedSql(..)
   , ExecutionCtx(..)
   , GQLApiAuthorization(..)
+  , checkQueryInAllowlist
   ) where
 
 import           Control.Exception                      (try)
@@ -90,18 +90,31 @@ data ExecutionCtx
 -- | Typeclass representing rules/authorization to be enforced on the GraphQL API (over both HTTP & Websockets)
 -- | This is separate from the permissions system. Permissions apply on GraphQL related objects, but
 -- this is applicable on other general things
-class Monad m => GQLApiAuthorization m where
+class (Monad m) => GQLApiAuthorization m where
   authorizeGQLApi
     :: UserInfo
     -> ([HTTP.Header], IpAddress)
     -- ^ request headers and IP address
+    -> Bool
+    -- ^ allow list enabled?
+    -> SchemaCache
+    -- ^ needs allow list
     -> GQLReqUnparsed
     -- ^ the unparsed GraphQL query string (and related values)
     -> m (Either QErr GQLReqParsed)
     -- ^ after enforcing authorization, it should return the parsed GraphQL query
 
 instance GQLApiAuthorization m => GQLApiAuthorization (Tracing.TraceT m) where
-  authorizeGQLApi ui hs q = lift $ authorizeGQLApi ui hs q
+  authorizeGQLApi ui det enableAL sc req =
+    lift $ authorizeGQLApi ui det enableAL sc req
+
+instance GQLApiAuthorization m => GQLApiAuthorization (ExceptT e m) where
+  authorizeGQLApi ui det enableAL sc req =
+    lift $ authorizeGQLApi ui det enableAL sc req
+
+instance GQLApiAuthorization m => GQLApiAuthorization (ReaderT r m) where
+  authorizeGQLApi ui det enableAL sc req =
+    lift $ authorizeGQLApi ui det enableAL sc req
 
 -- Enforces the current limitation
 assertSameLocationNodes
@@ -143,13 +156,9 @@ getExecPlanPartial
   :: (MonadReusability m, MonadError QErr m)
   => UserInfo
   -> SchemaCache
-  -> Bool
   -> GQLReqParsed
   -> m ExecPlanPartial
-getExecPlanPartial userInfo sc enableAL req = do
-
-  -- check if query is in allowlist
-  when enableAL checkQueryInAllowlist
+getExecPlanPartial userInfo sc req = do
 
   let gCtx = getGCtx (_uiBackendOnlyFieldAccess userInfo) sc roleName
   queryParts <- flip runReaderT gCtx $ VQ.getQueryParts req
@@ -172,7 +181,6 @@ getExecPlanPartial userInfo sc enableAL req = do
     VT.TLCustom ->
       throw500 "unexpected custom type for top level field"
   where
-    -- role = userRole userInfo
     roleName = _uiRole userInfo
     getTxAccess rootSelSet = case rootSelSet of
       VQ.RQuery{}        -> getGQLQueryTxAccess rootSelSet
@@ -184,16 +192,20 @@ getExecPlanPartial userInfo sc enableAL req = do
     -- for executing the query. For now, we default to Q.readOnly
     getGQLQueryTxAccess _ = return Q.ReadOnly
 
-    checkQueryInAllowlist =
-      -- only for non-admin roles
-      when (roleName /= adminRoleName) $ do
-        let notInAllowlist =
-              not $ VQ.isQueryInAllowlist (_grQuery req) (scAllowlist sc)
-        when notInAllowlist $ modifyQErr modErr $ throwVE "query is not allowed"
-
+checkQueryInAllowlist
+  :: (MonadError QErr m) => Bool -> UserInfo -> GQLReqParsed -> SchemaCache -> m ()
+checkQueryInAllowlist enableAL userInfo req sc =
+  -- only for non-admin roles
+  -- check if query is in allowlist
+  when (enableAL && (_uiRole userInfo /= adminRoleName)) $ do
+      let notInAllowlist =
+            not $ VQ.isQueryInAllowlist (_grQuery req) (scAllowlist sc)
+      when notInAllowlist $ modifyQErr modErr $ throwVE "query is not allowed"
+  where
     modErr e =
       let msg = "query is not in any of the allowlists"
       in e{qeInternal = Just $ J.object [ "message" J..= J.String msg]}
+
 
 
 -- An execution operation, in case of
@@ -219,7 +231,6 @@ getResolvedExecPlan
   -> EP.PlanCache
   -> UserInfo
   -> SQLGenCtx
-  -> Bool
   -> SchemaCache
   -> SchemaCacheVer
   -> HTTP.Manager
@@ -227,7 +238,7 @@ getResolvedExecPlan
   -> (GQLReqUnparsed, GQLReqParsed)
   -> m (Telem.CacheHit, ExecPlanResolved)
 getResolvedExecPlan env isPgCtx planCache userInfo sqlGenCtx
-  enableAL sc scVer httpManager reqHeaders (reqUnparsed, reqParsed) = do
+  sc scVer httpManager reqHeaders (reqUnparsed, reqParsed) = do
 
   planM <- liftIO $ EP.getPlan scVer (_uiRole userInfo)
            opNameM queryStr planCache
@@ -248,7 +259,7 @@ getResolvedExecPlan env isPgCtx planCache userInfo sqlGenCtx
       opNameM queryStr plan planCache
     noExistingPlan = do
       (partialExecPlan, queryReusability) <- runReusabilityT $
-        getExecPlanPartial userInfo sc enableAL reqParsed
+        getExecPlanPartial userInfo sc reqParsed
       forM partialExecPlan $ \(gCtx, rootSelSet, txAccess) ->
         case rootSelSet of
           VQ.RMutation selSet -> do
@@ -383,34 +394,6 @@ getMutOp env ctx sqlGenCtx userInfo manager reqHeaders selSet =
         ordByCtx = _gOrdByCtx ctx
         insCtxMap = _gInsCtxMap ctx
 
-getSubsOpM
-  :: ( MonadError QErr m
-     , MonadReader r m
-     , Has QueryCtxMap r
-     , Has FieldMap r
-     , Has OrdByCtx r
-     , Has SQLGenCtx r
-     , Has UserInfo r
-     , MonadIO m
-     , HasVersion
-     , Tracing.MonadTrace m
-     )
-  => Env.Environment
-  -> IsPGExecCtx
-  -> QueryReusability
-  -> VQ.Field
-  -> QueryActionExecuter
-  -> m (EL.LiveQueryPlan, Maybe EL.ReusableLiveQueryPlan)
-getSubsOpM env isPgCtx initialReusability fld actionExecuter =
-  case VQ._fName fld of
-    "__typename" ->
-      throwVE "you cannot create a subscription on '__typename' field"
-    _            -> do
-      (astUnresolved, finalReusability) <- runReusabilityTWith initialReusability $
-        GR.queryFldToPGAST env fld actionExecuter
-      let varTypes = finalReusability ^? _Reusable
-      EL.buildLiveQueryPlan isPgCtx (VQ._fAlias fld) astUnresolved varTypes
-
 getSubsOp
   :: ( MonadError QErr m
      , MonadIO m
@@ -424,16 +407,17 @@ getSubsOp
   -> UserInfo
   -> QueryReusability
   -> QueryActionExecuter
-  -> VQ.Field
+  -> VQ.SelSet
   -> m (EL.LiveQueryPlan, Maybe EL.ReusableLiveQueryPlan)
-getSubsOp env isPgCtx gCtx sqlGenCtx userInfo queryReusability actionExecuter fld =
-  runE gCtx sqlGenCtx userInfo $ getSubsOpM env isPgCtx queryReusability fld actionExecuter
+getSubsOp _env isPgCtx gCtx sqlGenCtx userInfo queryReusability actionExecuter fields =
+  runE gCtx sqlGenCtx userInfo $ EL.buildLiveQueryPlan isPgCtx queryReusability actionExecuter fields
 
 execRemoteGQ
   :: ( HasVersion
      , MonadIO m
      , MonadError QErr m
-     , MonadReader ExecutionCtx m
+     , MonadReader r m
+     , Has ExecutionCtx r
      , QueryLogger m
      , Tracing.MonadTrace m
      )
@@ -447,7 +431,7 @@ execRemoteGQ
   -> m (DiffTime, HttpResponse EncJSON)
   -- ^ Also returns time spent in http request, for telemetry.
 execRemoteGQ env reqId userInfo reqHdrs q rsi opDef = Tracing.traceHttpRequest (fromString (show url)) do
-  execCtx <- ask
+  execCtx <- asks getter
   let logger  = _ecxLogger execCtx
       manager = _ecxHttpManager execCtx
       opTy    = G._todType opDef

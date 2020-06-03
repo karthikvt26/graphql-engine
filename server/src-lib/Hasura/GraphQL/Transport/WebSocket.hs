@@ -46,7 +46,6 @@ import           Hasura.GraphQL.Transport.WebSocket.Protocol
 import           Hasura.HTTP
 import           Hasura.Prelude
 import           Hasura.RQL.Types
-import           Hasura.RQL.Types.Error                      (Code (StartFailed))
 import           Hasura.Server.Auth                          (AuthMode, UserAuthentication,
                                                               resolveUserInfo)
 import           Hasura.Server.Cors
@@ -326,12 +325,11 @@ onStart env serverEnv wsConn (StartMsg opId q) = catchAndIgnore $ do
       withComplete $ sendStartErr e
 
   requestId <- getRequestId reqHdrs
-  reqParsedE <- lift $ E.authorizeGQLApi userInfo (reqHdrs, ipAddress) q
-  reqParsed <- either (withComplete . preExecErr requestId) return reqParsedE
-  -- (sc, scVer) <- liftIO $ IORef.readIORef gCtxMapRef
   (sc, scVer) <- liftIO getSchemaCache
+  reqParsedE <- lift $ E.authorizeGQLApi userInfo (reqHdrs, ipAddress) enableAL sc q
+  reqParsed <- either (withComplete . preExecErr requestId) return reqParsedE
   execPlanE <- runExceptT $ E.getResolvedExecPlan env pgExecCtx
-               planCache userInfo sqlGenCtx enableAL sc scVer httpMgr reqHdrs (q, reqParsed)
+               planCache userInfo sqlGenCtx sc scVer httpMgr reqHdrs (q, reqParsed)
 
   (telemCacheHit, execPlan) <- either (withComplete . preExecErr requestId) return execPlanE
   let execCtx = E.ExecutionCtx logger sqlGenCtx pgExecCtx planCache sc scVer httpMgr enableAL
@@ -347,12 +345,6 @@ onStart env serverEnv wsConn (StartMsg opId q) = catchAndIgnore $ do
                 -> Telem.CacheHit -> RequestId -> GQLReqUnparsed -> UserInfo -> Q.TxAccess
                 -> E.ExecOp -> ExceptT () m ()
     runHasuraGQ timerTot telemCacheHit reqId query userInfo txAccess = \case
--- =======
---     runHasuraGQ :: ExceptT () IO DiffTime
---                 -> Telem.CacheHit -> RequestId -> GQLReqUnparsed -> UserInfo -> E.ExecOp
---                 -> ExceptT () IO ()
---     runHasuraGQ timerTot telemCacheHit reqId query userInfo = \case
--- >>>>>>> stable
       E.ExOpQuery opTx genSql _asts -> Tracing.trace "pg" do
         execQueryOrMut Telem.Query genSql $ runLazyTx' pgExecCtx opTx
       -- Response headers discarded over websockets
@@ -519,6 +511,7 @@ onMessage env authMode serverEnv wsConn msgRaw = Tracing.runTraceT "websocket" d
   where
     logger = _wseLogger serverEnv
 
+
 onStop :: WSServerEnv -> WSConn -> StopMsg -> IO ()
 onStop serverEnv wsConn (StopMsg opId) = do
   -- When a stop message is received for an operation, it may not be present in OpMap
@@ -555,14 +548,6 @@ logWSEvent (L.Logger logger) wsConn wsEv = do
                                            )
         _                               -> (Nothing, Nothing)
   liftIO $ logger $ WSLog logLevel $ WSLogInfo userVarsM (WsConnInfo wsId tokenExpM Nothing) wsEv
--- =======
---   let (userVarsM, tokenExpM) = case userInfoME of
---         CSInitialised userInfo tokenM _ -> ( Just $ _uiSession userInfo
---                                            , tokenM
---                                            )
---         _                               -> (Nothing, Nothing)
---   liftIO $ logger $ WSLog logLevel $ WSLogInfo userVarsM (WsConnInfo wsId tokenExpM Nothing) wsEv
--- >>>>>>> stable
   where
     WSConnData userInfoR _ _ = WS.getData wsConn
     wsId = WS.getWSId wsConn
@@ -618,33 +603,6 @@ onConnInit logger manager wsConn authMode connParamsM = do
 
     mkHeaders connState =
       paramHeaders ++ getClientHeaders connState
--- =======
---   headers <- mkHeaders <$> liftIO (STM.readTVarIO (_wscUser $ WS.getData wsConn))
---   res <- resolveUserInfo logger manager headers authMode
---   case res of
---     Left e  -> do
---       let !initErr = CSInitError $ qeError e
---       liftIO $ do
---         $assertNFHere initErr  -- so we don't write thunks to mutable vars
---         STM.atomically $ STM.writeTVar (_wscUser $ WS.getData wsConn) initErr
-
---       let connErr = ConnErrMsg $ qeError e
---       logWSEvent logger wsConn $ EConnErr connErr
---       sendMsg wsConn $ SMConnErr connErr
---     Right (userInfo, expTimeM) -> do
---       let !csInit = CSInitialised userInfo expTimeM paramHeaders
---       liftIO $ do
---         $assertNFHere csInit  -- so we don't write thunks to mutable vars
---         STM.atomically $ STM.writeTVar (_wscUser $ WS.getData wsConn) csInit
-
---       sendMsg wsConn SMConnAck
---       -- TODO: send it periodically? Why doesn't apollo's protocol use
---       -- ping/pong frames of websocket spec?
---       sendMsg wsConn SMConnKeepAlive
---   where
---     mkHeaders st =
---       paramHeaders ++ getClientHdrs st
--- >>>>>>> stable
 
     paramHeaders =
       [ (CI.mk $ TE.encodeUtf8 h, TE.encodeUtf8 v)

@@ -5,6 +5,7 @@ module Hasura.App where
 
 import           Control.Concurrent.STM.TVar               (readTVarIO)
 import           Control.Monad.Base
+import           Control.Monad.Catch                       (MonadCatch, MonadThrow, onException)
 import           Control.Monad.Stateless
 import           Control.Monad.STM                         (atomically)
 import           Control.Monad.Trans.Control               (MonadBaseControl (..))
@@ -12,6 +13,24 @@ import           Data.Aeson                                ((.=))
 import           Data.Time.Clock                           (UTCTime)
 import           GHC.AssertNF
 import           Options.Applicative
+-- import           System.Environment                        (getEnvironment, lookupEnv)
+-- import           System.Exit                               (exitFailure)
+
+-- import qualified Control.Concurrent.Async.Lifted.Safe      as LA
+-- import qualified Control.Concurrent.Extended               as C
+-- import qualified Data.Aeson                                as A
+-- import qualified Data.ByteString.Char8                     as BC
+-- import qualified Data.ByteString.Lazy.Char8                as BLC
+-- import qualified Data.Set                                  as Set
+-- import qualified Data.Text                                 as T
+-- import qualified Data.Time.Clock                           as Clock
+-- import qualified Data.Yaml                                 as Y
+-- import qualified Database.PG.Query                         as Q
+-- import qualified Network.HTTP.Client                       as HTTP
+-- import qualified Network.HTTP.Client.TLS                   as HTTP
+-- import qualified Network.Wai.Handler.Warp                  as Warp
+-- import qualified System.Posix.Signals                      as Signals
+-- import qualified Text.Mustache.Compile                     as M
 import           System.Environment                        (getEnvironment, lookupEnv)
 import           System.Exit                               (exitFailure)
 
@@ -29,12 +48,14 @@ import qualified Database.PG.Query                         as Q
 import qualified Network.HTTP.Client                       as HTTP
 import qualified Network.HTTP.Client.TLS                   as HTTP
 import qualified Network.Wai.Handler.Warp                  as Warp
+import qualified System.Log.FastLogger                     as FL
 import qualified Text.Mustache.Compile                     as M
 
 import           Hasura.Db
 import           Hasura.EncJSON
 import           Hasura.Events.Lib
-import           Hasura.GraphQL.Execute                    (GQLApiAuthorization (..))
+import           Hasura.GraphQL.Execute                    (GQLApiAuthorization (..),
+                                                            checkQueryInAllowlist)
 import           Hasura.GraphQL.Logging                    (QueryLog (..))
 import           Hasura.GraphQL.Transport.HTTP.Protocol    (toParsed)
 import           Hasura.GraphQL.Transport.WebSocket.Server (WSServerLogger (..))
@@ -133,7 +154,7 @@ data Loggers
   }
 
 newtype AppM a = AppM { unAppM :: IO a }
-  deriving (Functor, Applicative, Monad, MonadIO, MonadBase IO, MonadBaseControl IO)
+  deriving (Functor, Applicative, Monad, MonadIO, MonadBase IO, MonadBaseControl IO, MonadCatch, MonadThrow)
 
 -- | this function initializes the catalog and returns an @InitCtx@, based on the command given
 -- - for serve command it creates a proper PG connection pool
@@ -161,8 +182,6 @@ initialiseCtx hgeCmd rci = do
       unLogger logger $ connInfoToLog connInfo
       pool <- liftIO $ Q.initPGPool connInfo soConnParams pgLogger
       let isPgCtx = mkIsPgCtx pool soTxIso
-      -- safe init catalog
-      -- initialiseCatalog isPgCtx (SQLGenCtx soStringifyNum) httpManager logger
 
       return (l, pool, isPgCtx)
 
@@ -171,11 +190,6 @@ initialiseCtx hgeCmd rci = do
       l@(Loggers _ _ pgLogger) <- mkLoggers defaultEnabledLogTypes LevelInfo
       pool <- getMinimalPool pgLogger connInfo
       return (l, pool, mkIsPgCtx pool Q.Serializable)
-
-  -- -- get the unique db id, get it in this init step because Pro needs it before the server is run
-  -- -- but you can't get the DbUid unless the catalog is initialized (in case of an empty database)
-  -- eDbId <- liftIO $ runExceptT $ Q.runTx pool (Q.Serializable, Nothing) getDbId
-  -- dbId <- either printErrJExit return eDbId
 
   return (InitCtx httpManager instanceId loggers connInfo isPGCtx, initTime)
   where
@@ -211,6 +225,7 @@ class Monad m => Telemetry m where
 runHGEServer
   :: ( HasVersion
      , MonadIO m
+     , MonadCatch m
      , MonadStateless IO m
      , UserAuthentication (Tracing.TraceT m)
      , MetadataApiAuthorization m
@@ -249,7 +264,11 @@ runHGEServer env serveOpts@ServeOptions{..} initCtx@InitCtx{..} initTime shutdow
 
   authMode <- either (printErrExit . T.unpack) return authModeRes
 
-  HasuraApp app cacheRef cacheInitTime shutdownApp <-
+  -- If an exception is encountered in 'mkWaiApp', flush the log buffer and rethrow
+  -- If we do not flush the log buffer on exception, then log lines written in 'mkWaiApp' may be missed
+  -- See: https://github.com/hasura/graphql-engine/issues/4772
+  let flushLogger = liftIO $ FL.flushLogStr $ _lcLoggerSet loggerCtx
+  HasuraApp app cacheRef cacheInitTime shutdownApp <- flip onException flushLogger $
     mkWaiApp env
              logger
              sqlGenCtx
@@ -445,7 +464,11 @@ instance MetadataApiAuthorization AppM where
       errMsg = "restricted access : admin only"
 
 instance GQLApiAuthorization AppM where
-  authorizeGQLApi _ _ query = runExceptT $ toParsed query
+  authorizeGQLApi userInfo _ enableAL sc query = do
+    runExceptT $ do
+      req <- toParsed query
+      checkQueryInAllowlist enableAL userInfo req sc
+      return req
 
 instance ConfigApiHandler AppM where
   runConfigApiHandler = configApiGetHandler

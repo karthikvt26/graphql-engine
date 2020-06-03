@@ -97,7 +97,7 @@ data SchemaCacheRef
 
 data ServerCtx
   = ServerCtx
-  { scPGExecCtx       :: !IsPGExecCtx
+  { scPGExecCtx                    :: !IsPGExecCtx
   , scConnInfo                     :: !Q.ConnInfo
   , scLogger                       :: !(L.Logger L.Hasura)
   , scCacheRef                     :: !SchemaCacheRef
@@ -362,7 +362,7 @@ v1QueryHandler env query = do
       runQuery env pgExecCtx instanceId userInfo schemaCache httpMgr sqlGenCtx (SystemDefined False) query
 
 v1Alpha1GQHandler
-  :: (HasVersion, E.GQLApiAuthorization m, MonadIO m, QueryLogger m, Tracing.MonadTrace m, GH.MonadExecuteQuery m)
+  :: (HasVersion, MonadIO m, E.GQLApiAuthorization m, QueryLogger m, Tracing.MonadTrace m, GH.MonadExecuteQuery m)
   => Env.Environment -> GH.GQLBatchedReqs GH.GQLQueryText -> Handler m (HttpResponse EncJSON)
 v1Alpha1GQHandler env query = do
   userInfo <- asks hcUser
@@ -370,17 +370,6 @@ v1Alpha1GQHandler env query = do
   ipAddress <- asks hcSourceIpAddress
   manager <- scManager . hcServerCtx <$> ask
   scRef <- scCacheRef . hcServerCtx <$> ask
-
-  -- apply the 'E.GQLApiAuthorization' effect and get back parsed GQL queries
-  -- TODO: is this optimal? is there any better way of doing it?
-  res <-
-    case query of
-      GH.GQLSingleRequest req -> do
-        r <- lift $ lift $ E.authorizeGQLApi userInfo (reqHeaders, ipAddress) req
-        return $ GH.GQLSingleRequest <$> r
-      GH.GQLBatchedReqs reqs -> do
-        r <- lift $ lift $ traverse (E.authorizeGQLApi userInfo (reqHeaders, ipAddress)) reqs
-        return $ fmap GH.GQLBatchedReqs $ sequence r
 
   reqParsed <- either throwError return res
   (sc, scVer) <- liftIO $ readIORef $ _scrCache scRef
@@ -394,8 +383,7 @@ v1Alpha1GQHandler env query = do
   let execCtx = E.ExecutionCtx logger sqlGenCtx pgExecCtx planCache
                 (lastBuiltSchemaCache sc) scVer manager enableAL
   flip runReaderT execCtx $
-    GH.runGQBatched @_ env requestId responseErrorsConfig userInfo reqHeaders (query, reqParsed)
-
+    GH.runGQBatched env requestId responseErrorsConfig userInfo ipAddress reqHeaders query
 
 v1GQHandler
   :: (HasVersion, E.GQLApiAuthorization m, MonadIO m, QueryLogger m, Tracing.MonadTrace m, GH.MonadExecuteQuery m)
@@ -419,13 +407,12 @@ gqlExplainHandler env query = do
   sc <- getSCFromRef scRef
   pgExecCtx <- scPGExecCtx . hcServerCtx <$> ask
   sqlGenCtx <- scSQLGenCtx . hcServerCtx <$> ask
-  enableAL <- scEnableAllowlist . hcServerCtx <$> ask
   let runTx :: Q.TxAccess 
             -> ReaderT HandlerCtx (Tracing.TraceT (Tracing.NoReporter (LazyTx QErr))) a 
             -> ExceptT QErr (ReaderT HandlerCtx (Tracing.TraceT m)) a
       runTx txAccess rttx = ExceptT . ReaderT $ \ctx -> do
         runExceptT (Tracing.interpTraceT (runLazyTx txAccess pgExecCtx . Tracing.runNoReporter) (runReaderT rttx ctx))
-  res <- GE.explainGQLQuery env pgExecCtx runTx sc sqlGenCtx enableAL (restrictActionExecuter "query actions cannot be explained") query
+  res <- GE.explainGQLQuery env pgExecCtx runTx sc sqlGenCtx (restrictActionExecuter "query actions cannot be explained") query
   return $ HttpResponse res []
 
 v1Alpha1PGDumpHandler :: (MonadIO m) => PGD.PGDumpReqBody -> Handler m APIResp
@@ -595,14 +582,12 @@ mkWaiApp env logger sqlGenCtx enableAL isPgCtx ci httpManager mode corsCfg enabl
     let getSchemaCache = first lastBuiltSchemaCache <$> readIORef (_scrCache schemaCacheRef)
 
     let corsPolicy = mkDefaultCorsPolicy corsCfg
-        -- pgExecCtx = PGExecCtx pool isoLevel
     lqState <- liftIO $ EL.initLiveQueriesState lqOpts isPgCtx
     wsServerEnv <- WS.createWSServerEnv logger isPgCtx lqState getSchemaCache httpManager
                                         corsPolicy sqlGenCtx enableAL planCache
 
     ekgStore <- liftIO EKG.newStore
 
-    -- let schemaCacheRef = SchemaCacheRef cacheLock cacheRef (E.clearPlanCache planCache)
     let serverCtx = ServerCtx
                     { scPGExecCtx       =  isPgCtx
                     , scConnInfo        =  ci

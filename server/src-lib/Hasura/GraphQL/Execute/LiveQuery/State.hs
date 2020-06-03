@@ -112,12 +112,20 @@ addLiveQuery logger wsOpId lqState plan onResultAction = do
   pure $ LiveQueryId handlerId cohortKey sinkId
   where
     LiveQueriesState lqOpts pgExecCtx lqMap = lqState
+-- <<<<<<< HEAD
+--     LiveQueriesOptions _ refetchInterval = lqOpts
+--     LiveQueryPlan (ParameterizedLiveQueryPlan role alias query) cohortKey = plan
+
+--     handlerId = PollerKey role query
+
+--     !subscriber = Subscriber alias onResultAction wsOpId
+-- =======
     LiveQueriesOptions _ refetchInterval = lqOpts
-    LiveQueryPlan (ParameterizedLiveQueryPlan role alias query) cohortKey = plan
+    LiveQueryPlan (ParameterizedLiveQueryPlan role query) cohortKey = plan
 
     handlerId = PollerKey role query
 
-    !subscriber = Subscriber alias onResultAction wsOpId
+    !subscriber = Subscriber onResultAction wsOpId
     addToCohort sinkId handlerC =
       TMap.insert subscriber sinkId $ _cNewSubscribers handlerC
 

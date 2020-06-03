@@ -28,26 +28,6 @@ module Hasura.GraphQL.Transport.WebSocket.Server
   , shutdown
   ) where
 
--- <<<<<<< HEAD
--- import           Data.Word                                   (Word16)
--- import           GHC.AssertNF
--- import           GHC.Int                                     (Int64)
-
--- import           Hasura.Prelude
-
--- import qualified Control.Concurrent.Async                    as A
--- import qualified Control.Concurrent.Async.Lifted.Safe        as LA
--- import qualified Control.Concurrent.STM                      as STM
--- import           Control.Exception.Lifted
--- import qualified Control.Monad.Trans.Control                 as MC
--- import qualified Data.Aeson                                  as J
--- import qualified Data.Aeson.Casing                           as J
--- import qualified Data.Aeson.TH                               as J
--- import qualified Data.ByteString.Lazy                        as BL
--- import           Data.String
--- import qualified Data.TByteString                            as TBS
--- import qualified Data.UUID                                   as UUID
--- import qualified Data.UUID.V4                                as UUID
 import qualified Control.Concurrent.Async                    as A
 import qualified Control.Concurrent.Async.Lifted.Safe        as LA
 import qualified Control.Concurrent.STM                      as STM
@@ -68,6 +48,7 @@ import           Hasura.Prelude
 import qualified ListT
 import qualified Network.WebSockets                          as WS
 import qualified StmContainers.Map                           as STMMap
+import qualified System.IO.Error                             as E
 
 import           Hasura.GraphQL.Transport.WebSocket.Protocol (OperationId, ServerMsgType)
 import qualified Hasura.Logging                              as L
@@ -327,7 +308,14 @@ createServerApp (WSServer logger@(L.Logger writeLog) serverStatus) wsHandlers !i
         AcceptingConns _ -> do
           let rcv = forever $ do
                 -- Process all messages serially (important!), in a separate thread:
-                msg <- liftIO $ WS.receiveData conn
+                msg <- liftIO $
+                  -- Re-throw "receiveloop: resource vanished (Connection reset by peer)" :
+                  --   https://github.com/yesodweb/wai/blob/master/warp/Network/Wai/Handler/Warp/Recv.hs#L112
+                  -- as WS exception signaling cleanup below. It's not clear why exactly this gets
+                  -- raised occasionally; I suspect an equivalent handler is missing from WS itself.
+                  -- Regardless this should be safe:
+                  handleJust (guard . E.isResourceVanishedError) (\()-> throw WS.ConnectionClosed) $
+                    WS.receiveData conn
                 logWSServer logger $ WSLog wsId (EMessageReceived $ TBS.fromLBS msg) Nothing
                 _hOnMessage wsHandlers wsConn msg
 
@@ -348,6 +336,9 @@ createServerApp (WSServer logger@(L.Logger writeLog) serverStatus) wsHandlers !i
           -- withAnyCancel re-raises exceptions from forkedThreads, and is guarenteed to cancel in
           -- case of async exceptions raised while blocking here:
           try (LA.waitAnyCancel waitOnRefs) >>= \case
+            -- NOTE: 'websockets' is a bit of a rat's nest at the moment wrt
+            -- exceptions; for now handle all ConnectionException by closing
+            -- and cleaning up, see: https://github.com/jaspervdj/websockets/issues/48
             Left ( _ :: WS.ConnectionException) -> do
               logWSServer logger $ WSLog (_wcConnId wsConn) ECloseReceived Nothing
             -- this will happen when jwt is expired

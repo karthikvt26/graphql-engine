@@ -11,10 +11,8 @@ module Hasura.GraphQL.Transport.HTTP
   , GQLQueryText(..)
   ) where
 
-import qualified Network.HTTP.Types                     as HTTP
-import qualified Data.Environment                       as Env
-
 import           Control.Monad.Morph (hoist)
+
 import           Hasura.EncJSON
 import           Hasura.GraphQL.Transport.HTTP.Protocol
 import           Hasura.HTTP
@@ -22,17 +20,19 @@ import           Hasura.Prelude
 import           Hasura.RQL.Types
 import           Hasura.Server.Init.Config
 import           Hasura.Server.Logging                  (QueryLogger (..))
-import           Hasura.Server.Utils                    (RequestId)
+import           Hasura.Server.Utils                    (IpAddress, RequestId)
 import           Hasura.Server.Version                  (HasVersion)
 import           Hasura.Session
 import           Hasura.Tracing                         (MonadTrace, TraceT, trace)
 
+import qualified Data.Environment                       as Env
 import qualified Database.PG.Query                      as Q
 import qualified Hasura.GraphQL.Execute                 as E
 import qualified Hasura.GraphQL.Execute.Query           as EQ
 import qualified Hasura.GraphQL.Resolve                 as R
 import qualified Hasura.Server.Telemetry.Counters       as Telem
 import qualified Language.GraphQL.Draft.Syntax          as G
+import qualified Network.HTTP.Types                     as HTTP
 
 class Monad m => MonadExecuteQuery m where
   executeQuery 
@@ -72,9 +72,9 @@ runGQ env reqId userInfo reqHdrs req@(reqUnparsed, _) = do
   -- The response and misc telemetry data:
   let telemTransport = Telem.HTTP
   (telemTimeTot_DT, (telemCacheHit, telemLocality, (telemTimeIO_DT, telemQueryType, !resp))) <- withElapsedTime $ do
-    E.ExecutionCtx _ sqlGenCtx pgExecCtx planCache sc scVer httpManager enableAL <- ask
+    E.ExecutionCtx _ sqlGenCtx pgExecCtx planCache sc scVer httpManager _ <- ask
     (telemCacheHit, execPlan) <- E.getResolvedExecPlan env pgExecCtx planCache
-                                 userInfo sqlGenCtx enableAL sc scVer httpManager reqHdrs req
+                                 userInfo sqlGenCtx sc scVer httpManager reqHdrs req
     case execPlan of
       E.GExPHasura (resolvedOp, txAccess) -> do
         (telemTimeIO, telemQueryType, respHdrs, resp) <- runHasuraGQ reqId req userInfo txAccess resolvedOp
@@ -97,19 +97,27 @@ runGQBatched
      , MonadExecuteQuery m
      , QueryLogger m
      , MonadTrace m
+     , E.GQLApiAuthorization m
      )
   => Env.Environment
   -> RequestId
   -> ResponseInternalErrorsConfig
   -> UserInfo
+  -> IpAddress
   -> [HTTP.Header]
-  -> (GQLBatchedReqs GQLQueryText, GQLBatchedReqs GQLExecDoc)
+  -> GQLBatchedReqs GQLQueryText
   -> m (HttpResponse EncJSON)
-runGQBatched env reqId responseErrorsConfig userInfo reqHdrs reqs =
-  case reqs of
-    (GQLSingleRequest req, GQLSingleRequest reqParsed) ->
+runGQBatched env reqId responseErrorsConfig userInfo ipAddress reqHdrs query = do
+  schemaCache <- asks E._ecxSchemaCache
+  enableAL <- asks E._ecxEnableAllowList
+  case query of
+    GQLSingleRequest req -> do
+      -- run system authorization on the GraphQL API
+      reqParsed <- E.authorizeGQLApi userInfo (reqHdrs, ipAddress) enableAL schemaCache req
+                   >>= flip onLeft throwError
+      -- then run the query
       runGQ env reqId userInfo reqHdrs (req, reqParsed)
-    (GQLBatchedReqs batch, GQLBatchedReqs batchParsed) -> do
+    GQLBatchedReqs reqs -> do
       -- It's unclear what we should do if we receive multiple
       -- responses with distinct headers, so just do the simplest thing
       -- in this case, and don't forward any.
@@ -118,10 +126,14 @@ runGQBatched env reqId responseErrorsConfig userInfo reqHdrs reqs =
             flip HttpResponse []
             . encJFromList
             . map (either (encJFromJValue . encodeGQErr includeInternal) _hrBody)
-          try = flip catchError (pure . Left) . fmap Right
-      fmap removeHeaders $ traverse (try . runGQ env reqId userInfo reqHdrs) $ zip batch batchParsed
-    -- TODO: is this correct?
-    _ -> throw500 "runGQBatched received different kinds of GQLBatchedReqs"
+      -- run system authorization on the GraphQL API
+      reqsParsed <- traverse (E.authorizeGQLApi userInfo (reqHdrs, ipAddress) enableAL schemaCache) reqs
+                    >>= mapM (flip onLeft throwError)
+      -- then run the query
+      fmap removeHeaders $
+        traverse (try . runGQ env reqId userInfo reqHdrs) $ zip reqs reqsParsed
+  where
+    try = flip catchError (pure . Left) . fmap Right
 
 runHasuraGQ
   :: ( MonadIO m
@@ -163,26 +175,5 @@ runHasuraGQ reqId (query, queryParsed) userInfo txAccess resolvedOp = do
       -- log the generated SQL and the graphql query
       E.ExOpQuery _ genSql _ -> logQuery logger query genSql reqId
       -- log the graphql query
-      E.ExOpMutation _ _     -> logQuery logger query Nothing reqId
-      E.ExOpSubs _           -> return ()
-
-
--- =======
--- runHasuraGQ reqId query userInfo resolvedOp = do
---   E.ExecutionCtx logger _ pgExecCtx _ _ _ _ _ <- ask
---   (telemTimeIO, respE) <- withElapsedTime $ liftIO $ runExceptT $ case resolvedOp of
---     E.ExOpQuery tx genSql  -> do
---       -- log the generated SQL and the graphql query
---       L.unLogger logger $ QueryLog query genSql reqId
---       ([],) <$> runLazyTx' pgExecCtx tx
---     E.ExOpMutation respHeaders tx -> do
---       -- log the graphql query
---       L.unLogger logger $ QueryLog query Nothing reqId
---       L.unLogger logger $ L.debugT "=============> MUTATION IS RUNNING ==============>> "
---       (respHeaders,) <$> runLazyTx pgExecCtx Q.ReadWrite (withUserInfo userInfo tx)
---     E.ExOpSubs _ ->
---       throw400 UnexpectedPayload
---       "subscriptions are not supported over HTTP, use websockets instead"
---   (respHdrs, resp) <- liftEither respE
---   let !json = encodeGQResp $ GQSuccess $ encJToLBS resp
--- >>>>>>> Stashed changes
+      E.ExOpMutation _ _   -> logQuery logger query Nothing reqId
+      E.ExOpSubs _         -> return ()
