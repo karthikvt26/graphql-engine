@@ -21,6 +21,7 @@ import qualified Database.PG.Query                      as Q
 import qualified Hasura.Cache                           as Cache
 import qualified Hasura.GraphQL.Execute.LiveQuery       as LQ
 import qualified Hasura.GraphQL.Execute.Query           as EQ
+import qualified Hasura.GraphQL.Resolve                 as R
 import qualified Hasura.GraphQL.Transport.HTTP.Protocol as GH
 import           Hasura.RQL.Types
 
@@ -47,12 +48,12 @@ newtype PlanCache
   = PlanCache {_unPlanCache :: Cache.Cache PlanId ReusablePlan}
 
 data ReusablePlan
-  = RPQuery !EQ.ReusableQueryPlan !Q.TxAccess
+  = RPQuery !EQ.ReusableQueryPlan !Q.TxAccess [R.QueryRootFldUnresolved]
   | RPSubs !LQ.ReusableLiveQueryPlan !Q.TxAccess
 
 instance J.ToJSON ReusablePlan where
   toJSON = \case
-    RPQuery queryPlan _ -> J.toJSON queryPlan
+    RPQuery queryPlan _ _ -> J.toJSON queryPlan
     RPSubs subsPlan _ -> J.toJSON subsPlan
 
 newtype PlanCacheOptions

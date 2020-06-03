@@ -362,7 +362,7 @@ v1QueryHandler env query = do
       runQuery env pgExecCtx instanceId userInfo schemaCache httpMgr sqlGenCtx (SystemDefined False) query
 
 v1Alpha1GQHandler
-  :: (HasVersion, E.GQLApiAuthorization m, MonadIO m, QueryLogger m, Tracing.MonadTrace m)
+  :: (HasVersion, E.GQLApiAuthorization m, MonadIO m, QueryLogger m, Tracing.MonadTrace m, GH.MonadExecuteQuery m)
   => Env.Environment -> GH.GQLBatchedReqs GH.GQLQueryText -> Handler m (HttpResponse EncJSON)
 v1Alpha1GQHandler env query = do
   userInfo <- asks hcUser
@@ -394,11 +394,11 @@ v1Alpha1GQHandler env query = do
   let execCtx = E.ExecutionCtx logger sqlGenCtx pgExecCtx planCache
                 (lastBuiltSchemaCache sc) scVer manager enableAL
   flip runReaderT execCtx $
-    GH.runGQBatched env requestId responseErrorsConfig userInfo reqHeaders (query, reqParsed)
+    GH.runGQBatched @_ env requestId responseErrorsConfig userInfo reqHeaders (query, reqParsed)
 
 
 v1GQHandler
-  :: (HasVersion, E.GQLApiAuthorization m, MonadIO m, QueryLogger m, Tracing.MonadTrace m)
+  :: (HasVersion, E.GQLApiAuthorization m, MonadIO m, QueryLogger m, Tracing.MonadTrace m, GH.MonadExecuteQuery m)
   => Env.Environment
   -> GH.GQLBatchedReqs GH.GQLQueryText
   -> Handler m (HttpResponse EncJSON)
@@ -554,6 +554,7 @@ mkWaiApp
      , ConfigApiHandler m
      , Tracing.HasReporter m
      , LA.Forall (LA.Pure m)
+     , GH.MonadExecuteQuery m
      )
   -- ^ postgres transaction isolation to be used in the entire app
   => Env.Environment
@@ -676,6 +677,7 @@ httpApp
      , E.GQLApiAuthorization m
      , ConfigApiHandler m
      , Tracing.HasReporter m
+     , GH.MonadExecuteQuery m
      )
   => Env.Environment
   -> CorsConfig

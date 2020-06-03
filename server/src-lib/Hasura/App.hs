@@ -40,6 +40,7 @@ import           Hasura.GraphQL.Transport.HTTP.Protocol    (toParsed)
 import           Hasura.GraphQL.Transport.WebSocket.Server (WSServerLogger (..))
 
 import           Hasura.GraphQL.Resolve.Action             (asyncActionsProcessor)
+import           Hasura.GraphQL.Transport.HTTP             (MonadExecuteQuery(..))
 import           Hasura.Logging
 import           Hasura.Prelude
 import           Hasura.RQL.Types                          (CacheRWM, Code (..), HasHttpManager,
@@ -221,6 +222,7 @@ runHGEServer
      , ConfigApiHandler m
      , Tracing.HasReporter m
      , LA.Forall (LA.Pure m)
+     , MonadExecuteQuery m
      , Telemetry m
      )
   => Env.Environment
@@ -423,6 +425,12 @@ instance HttpLog AppM where
   logHttpSuccess logger userInfoM reqId httpReq _ _ compressedResponse qTime cType headers =
     unLogger logger $ mkHttpLog $
       mkHttpAccessLogContext userInfoM reqId httpReq compressedResponse qTime cType headers
+
+instance MonadExecuteQuery AppM where
+  executeQuery _ _ _ isPgCtx txAccess tx = do
+    ([],) <$> case txAccess of
+      Q.ReadOnly  -> runLazyROTx' isPgCtx tx
+      Q.ReadWrite -> runLazyRWTx' isPgCtx tx
 
 instance UserAuthentication (Tracing.TraceT AppM) where
   resolveUserInfo logger manager headers authMode =

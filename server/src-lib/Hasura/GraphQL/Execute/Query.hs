@@ -197,25 +197,26 @@ convertQuerySelSet
   -> QueryReusability
   -> V.SelSet
   -> QueryActionExecuter
-  -> m (LazyRespTx, Maybe ReusableQueryPlan, GeneratedSqlMap)
+  -> m (LazyRespTx, Maybe ReusableQueryPlan, GeneratedSqlMap, [R.QueryRootFldUnresolved])
 convertQuerySelSet env initialReusability fields actionRunner = do
   usrVars <- asks (_uiSession . getter)
-  (fldPlans, finalReusability) <- runReusabilityTWith initialReusability $
+  (fldPlansAndAst, finalReusability) <- runReusabilityTWith initialReusability $
     forM (toList fields) $ \fld -> do
-      fldPlan <- case V._fName fld of
-        "__type"     -> fldPlanFromJ <$> R.typeR fld
-        "__schema"   -> fldPlanFromJ <$> R.schemaR fld
-        "__typename" -> pure $ fldPlanFromJ queryRootNamedType
+      (fldPlan, ast) <- case V._fName fld of
+        "__type"     -> ((, Nothing) . fldPlanFromJ) <$> R.typeR fld
+        "__schema"   -> ((, Nothing) . fldPlanFromJ) <$> R.schemaR fld
+        "__typename" -> pure (fldPlanFromJ queryRootNamedType, Nothing)
         _            -> do
           unresolvedAst <- R.queryFldToPGAST env fld actionRunner
           (q, PlanningSt _ vars prepped) <- flip runStateT initPlanningSt $
             R.traverseQueryRootFldAST prepareWithPlan unresolvedAst
-          pure . RFPPostgres $ PGPlan (R.toPGQuery q) vars prepped
-      pure (V._fAlias fld, fldPlan)
+          pure (RFPPostgres (PGPlan (R.toPGQuery q) vars prepped), Just unresolvedAst)
+      pure ((V._fAlias fld, fldPlan), ast)
   let varTypes = finalReusability ^? _Reusable
+      fldPlans = map fst fldPlansAndAst
       reusablePlan = ReusableQueryPlan <$> varTypes <*> pure fldPlans
   (tx, sql) <- mkCurPlanTx usrVars fldPlans
-  pure (tx, reusablePlan, sql)
+  pure (tx, reusablePlan, sql, mapMaybe snd fldPlansAndAst)
 
 -- use the existing plan and new variables to create a pg query
 queryOpFromPlan

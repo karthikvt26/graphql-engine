@@ -200,7 +200,7 @@ getExecPlanPartial userInfo sc enableAL req = do
 -- queries and mutations it is just a transaction
 -- to be executed
 data ExecOp
-  = ExOpQuery !LazyRespTx !(Maybe EQ.GeneratedSqlMap)
+  = ExOpQuery !LazyRespTx !(Maybe EQ.GeneratedSqlMap) ![GR.QueryRootFldUnresolved]
   | ExOpMutation !HTTP.ResponseHeaders !LazyRespTx
   | ExOpSubs !EL.LiveQueryPlan
 
@@ -235,9 +235,9 @@ getResolvedExecPlan env isPgCtx planCache userInfo sqlGenCtx
   case planM of
     -- plans are only for queries and subscriptions
     Just plan -> (Telem.Hit,) . GExPHasura <$> case plan of
-      EP.RPQuery queryPlan txAccess -> do
+      EP.RPQuery queryPlan txAccess asts -> do
         (tx, genSql) <- EQ.queryOpFromPlan usrVars queryVars queryPlan
-        return (ExOpQuery tx $ Just genSql, txAccess)
+        return (ExOpQuery tx (Just genSql) asts, txAccess)
       EP.RPSubs subsPlan txAccess ->
         (, txAccess) . ExOpSubs <$> EL.reuseLiveQueryPlan isPgCtx usrVars queryVars subsPlan
     Nothing -> (Telem.Miss,) <$> noExistingPlan
@@ -255,10 +255,10 @@ getResolvedExecPlan env isPgCtx planCache userInfo sqlGenCtx
             (tx, respHeaders) <- getMutOp env gCtx sqlGenCtx userInfo httpManager reqHeaders selSet
             pure $ (ExOpMutation respHeaders tx, Q.ReadWrite)
           VQ.RQuery selSet -> do
-            (queryTx, plan, genSql) <-
+            (queryTx, plan, genSql, asts) <-
               getQueryOp env gCtx sqlGenCtx userInfo queryReusability (allowQueryActionExecuter httpManager reqHeaders) selSet
-            traverse_ (addPlanToCache . flip EP.RPQuery txAccess) plan
-            return $ (ExOpQuery queryTx (Just genSql), txAccess)
+            traverse_ (addPlanToCache . \p -> EP.RPQuery p txAccess asts) plan
+            return $ (ExOpQuery queryTx (Just genSql) asts, txAccess)
           VQ.RSubscription fld -> do
             (lqOp, plan) <-
               getSubsOp env isPgCtx gCtx sqlGenCtx userInfo queryReusability
@@ -311,7 +311,7 @@ getQueryOp
   -> QueryReusability
   -> QueryActionExecuter
   -> VQ.SelSet
-  -> m (LazyRespTx, Maybe EQ.ReusableQueryPlan, EQ.GeneratedSqlMap)
+  -> m (LazyRespTx, Maybe EQ.ReusableQueryPlan, EQ.GeneratedSqlMap, [GR.QueryRootFldUnresolved])
 getQueryOp env gCtx sqlGenCtx userInfo queryReusability actionExecuter selSet =
   runE gCtx sqlGenCtx userInfo $ EQ.convertQuerySelSet env queryReusability selSet actionExecuter
 
