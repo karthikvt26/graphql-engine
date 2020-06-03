@@ -221,10 +221,8 @@ library
                      , Data.URL.Template
                      , Hasura.App
                      , Hasura.Cache
-                     , Hasura.Db
-                     -- Exposed for benchmark:
-                     , Hasura.Cache.Types
                      , Hasura.Cache.Bounded
+                     , Hasura.Cache.Types
                      , Hasura.Cache.Unbounded
                      , Hasura.Db
                      , Hasura.EncJSON

@@ -409,8 +409,8 @@ getSubsOp
   -> QueryActionExecuter
   -> VQ.SelSet
   -> m (EL.LiveQueryPlan, Maybe EL.ReusableLiveQueryPlan)
-getSubsOp _env isPgCtx gCtx sqlGenCtx userInfo queryReusability actionExecuter fields =
-  runE gCtx sqlGenCtx userInfo $ EL.buildLiveQueryPlan isPgCtx queryReusability actionExecuter fields
+getSubsOp env isPgCtx gCtx sqlGenCtx userInfo queryReusability actionExecuter fields =
+  runE gCtx sqlGenCtx userInfo $ EL.buildLiveQueryPlan env isPgCtx queryReusability actionExecuter fields
 
 execRemoteGQ
   :: ( HasVersion

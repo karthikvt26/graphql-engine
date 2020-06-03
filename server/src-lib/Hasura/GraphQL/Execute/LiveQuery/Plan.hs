@@ -30,6 +30,7 @@ import           Hasura.Session
 import qualified Data.Aeson.Casing                      as J
 import qualified Data.Aeson.Extended                    as J
 import qualified Data.Aeson.TH                          as J
+import qualified Data.Environment                       as E
 import qualified Data.HashMap.Strict                    as Map
 import qualified Data.Text                              as T
 import qualified Data.UUID.V4                           as UUID
@@ -51,6 +52,7 @@ import qualified Hasura.GraphQL.Transport.HTTP.Protocol as GH
 import qualified Hasura.GraphQL.Validate                as GV
 import qualified Hasura.GraphQL.Validate.Types          as GV
 import qualified Hasura.SQL.DML                         as S
+import qualified Hasura.Tracing                         as Tracing
 
 import           Hasura.Db
 import           Hasura.EncJSON
@@ -276,28 +278,21 @@ buildLiveQueryPlan
      , Has SQLGenCtx r
      , HasVersion
      , MonadIO m
+     , Tracing.MonadTrace m
      )
--- <<<<<<< HEAD
---   => IsPGExecCtx
---   -> G.Alias
---   -> GR.QueryRootFldUnresolved
---   -> Maybe GV.ReusableVariableTypes
---   -> m (LiveQueryPlan, Maybe ReusableLiveQueryPlan)
--- buildLiveQueryPlan isPgCtx fieldAlias astUnresolved varTypes = do
---   userInfo <- asks getter
--- =======
-  => IsPGExecCtx
+  => E.Environment
+  -> IsPGExecCtx
   -> GV.QueryReusability
   -> RA.QueryActionExecuter
   -> GV.SelSet
   -> m (LiveQueryPlan, Maybe ReusableLiveQueryPlan)
-buildLiveQueryPlan isPgCtx initialReusability actionExecutioner fields = do
+buildLiveQueryPlan env isPgCtx initialReusability actionExecutioner fields = do
   ((resolvedASTs, (queryVariableValues, syntheticVariableValues)), finalReusability) <-
     GV.runReusabilityTWith initialReusability . flip runStateT mempty $
       fmap Map.fromList . for (toList fields) $ \field -> case GV._fName field of
         "__typename" -> throwVE "you cannot create a subscription on '__typename' field"
         _ -> do
-          unresolvedAST <- GR.queryFldToPGAST field actionExecutioner
+          unresolvedAST <- GR.queryFldToPGAST env field actionExecutioner
           resolvedAST <- GR.traverseQueryRootFldAST resolveMultiplexedValue unresolvedAST
           pure (GV._fAlias field, resolvedAST)
 

@@ -99,7 +99,7 @@ referred scalars.
 -}
 
 resolveAction
-  :: (QErrM m, MonadIO m)
+  :: QErrM m
   => Env.Environment
   -> (NonObjectTypeMap, AnnotatedObjects)
   -> HashSet PGScalarType 
