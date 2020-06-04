@@ -41,6 +41,7 @@ import           Data.String
 import           GHC.AssertNF
 
 import           Hasura.EncJSON
+import           Hasura.GraphQL.Transport.HTTP               (MonadExecuteQuery(..))
 import           Hasura.GraphQL.Transport.HTTP.Protocol
 import           Hasura.GraphQL.Transport.WebSocket.Protocol
 import           Hasura.HTTP
@@ -58,6 +59,7 @@ import           Hasura.Session
 import qualified Hasura.GraphQL.Execute                      as E
 import qualified Hasura.GraphQL.Execute.LiveQuery            as LQ
 import qualified Hasura.GraphQL.Execute.LiveQuery.Poll       as LQ
+import qualified Hasura.GraphQL.Execute.Query                as EQ
 import qualified Hasura.GraphQL.Transport.WebSocket.Server   as WS
 import qualified Hasura.Logging                              as L
 import qualified Hasura.Server.Telemetry.Counters            as Telem
@@ -303,7 +305,7 @@ onConn (L.Logger logger) corsPolicy wsId requestHead ipAddress = do
             <> "HASURA_GRAPHQL_WS_READ_COOKIE to force read cookie when CORS is disabled."
 
 
-onStart :: forall m. (HasVersion, MonadIO m, E.GQLApiAuthorization m, QueryLogger m, Tracing.MonadTrace m)
+onStart :: forall m. (HasVersion, MonadIO m, E.GQLApiAuthorization m, QueryLogger m, Tracing.MonadTrace m, MonadExecuteQuery m)
         => Env.Environment -> WSServerEnv -> WSConn -> StartMsg -> m ()
 onStart env serverEnv wsConn (StartMsg opId q) = catchAndIgnore $ do
   timerTot <- startTimer
@@ -336,17 +338,24 @@ onStart env serverEnv wsConn (StartMsg opId q) = catchAndIgnore $ do
 
   case execPlan of
     E.GExPHasura (resolvedOp, txAccess) ->
-      runHasuraGQ timerTot telemCacheHit requestId q userInfo txAccess resolvedOp
+      runHasuraGQ timerTot telemCacheHit requestId q reqParsed userInfo txAccess resolvedOp
     E.GExPRemote rsi opDef  ->
       runRemoteGQ timerTot telemCacheHit execCtx requestId userInfo reqHdrs opDef rsi
   where
     telemTransport = Telem.HTTP
     runHasuraGQ :: ExceptT () m DiffTime
-                -> Telem.CacheHit -> RequestId -> GQLReqUnparsed -> UserInfo -> Q.TxAccess
-                -> E.ExecOp -> ExceptT () m ()
-    runHasuraGQ timerTot telemCacheHit reqId query userInfo txAccess = \case
-      E.ExOpQuery opTx genSql _asts -> Tracing.trace "pg" do
-        execQueryOrMut Telem.Query genSql $ runLazyTx' pgExecCtx opTx
+                -> Telem.CacheHit 
+                -> RequestId 
+                -> GQLReqUnparsed 
+                -> GQLReqParsed 
+                -> UserInfo 
+                -> Q.TxAccess
+                -> E.ExecOp 
+                -> ExceptT () m ()
+    runHasuraGQ timerTot telemCacheHit reqId query queryParsed userInfo txAccess = \case
+      E.ExOpQuery opTx genSql asts -> Tracing.trace "pg" do
+        execQueryOrMut Telem.Query genSql . fmap snd $
+          executeQuery queryParsed asts genSql pgExecCtx txAccess opTx
       -- Response headers discarded over websockets
       E.ExOpMutation _ opTx -> Tracing.trace "pg" do
         execQueryOrMut Telem.Mutation Nothing $
@@ -368,13 +377,17 @@ onStart env serverEnv wsConn (StartMsg opId q) = catchAndIgnore $ do
         logOpEv ODStarted (Just reqId)
 
       where
-        runLazyTx' = bool runLazyROTx' runLazyRWTx' $ txAccess == Q.ReadWrite
         telemLocality = Telem.Local
+        execQueryOrMut 
+          :: Telem.QueryType 
+          -> Maybe EQ.GeneratedSqlMap
+          -> ExceptT QErr (ExceptT () m) EncJSON
+          -> ExceptT () m ()
         execQueryOrMut telemQueryType genSql action = do
           logOpEv ODStarted (Just reqId)
           -- log the generated SQL and the graphql query
           logQuery logger query genSql reqId
-          (withElapsedTime $ liftIO $ runExceptT action) >>= \case
+          (withElapsedTime $ runExceptT action) >>= \case
             (_,      Left err) -> postExecErr reqId err
             (telemTimeIO_DT, Right encJson) -> do
               -- Telemetry. NOTE: don't time network IO:
@@ -485,7 +498,7 @@ onStart env serverEnv wsConn (StartMsg opId q) = catchAndIgnore $ do
     catchAndIgnore m = void $ runExceptT m
 
 onMessage
-  :: (HasVersion, MonadIO m, UserAuthentication (Tracing.TraceT m), E.GQLApiAuthorization m, QueryLogger m, Tracing.HasReporter m)
+  :: (HasVersion, MonadIO m, UserAuthentication (Tracing.TraceT m), E.GQLApiAuthorization m, QueryLogger m, Tracing.HasReporter m, MonadExecuteQuery m)
   => Env.Environment
   -> AuthMode
   -> WSServerEnv
@@ -661,6 +674,7 @@ createWSServerApp
      , QueryLogger m
      , WS.WSServerLogger m
      , Tracing.HasReporter m
+     , MonadExecuteQuery m
      )
   => Env.Environment
   -> AuthMode
