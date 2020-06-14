@@ -13,8 +13,6 @@ import           Data.Aeson                                ((.=))
 import           Data.Time.Clock                           (UTCTime)
 import           GHC.AssertNF
 import           Options.Applicative
--- import           System.Environment                        (getEnvironment, lookupEnv)
--- import           System.Exit                               (exitFailure)
 
 -- import qualified Control.Concurrent.Async.Lifted.Safe      as LA
 -- import qualified Control.Concurrent.Extended               as C
@@ -32,7 +30,7 @@ import           Options.Applicative
 -- import qualified System.Posix.Signals                      as Signals
 -- import qualified Text.Mustache.Compile                     as M
 import           System.Environment                        (getEnvironment, lookupEnv)
-import           System.Exit                               (exitFailure)
+import           System.Exit                               (exitWith, ExitCode(ExitFailure))
 
 import qualified Control.Concurrent.Async.Lifted.Safe      as LA
 import qualified Control.Concurrent.Extended               as C
@@ -83,11 +81,11 @@ import           Hasura.Server.Version
 import           Hasura.Session
 import qualified Hasura.Tracing                            as Tracing
 
-printErrExit :: (MonadIO m) => forall a . String -> m a
-printErrExit = liftIO . (>> exitFailure) . putStrLn
+printErrExit :: (MonadIO m) => forall a . Int -> String -> m a
+printErrExit code = liftIO . (>> exitWith (ExitFailure code)) . putStrLn
 
-printErrJExit :: (A.ToJSON a, MonadIO m) => forall b . a -> m b
-printErrJExit = liftIO . (>> exitFailure) . printJSON
+printErrJExit :: (A.ToJSON a, MonadIO m) => forall b . Int -> a -> m b
+printErrJExit code = liftIO . (>> exitWith (ExitFailure code)) . printJSON
 
 parseHGECommand :: EnabledLogTypes impl => Parser (RawHGECommand impl)
 parseHGECommand =
@@ -113,7 +111,7 @@ parseArgs = do
   rawHGEOpts <- execParser opts
   env <- getEnvironment
   let eitherOpts = runWithEnv env $ mkHGEOptions rawHGEOpts
-  either printErrExit return eitherOpts
+  either (printErrExit 3) return eitherOpts
   where
     opts = info (helper <*> hgeOpts)
            ( fullDesc <>
@@ -195,7 +193,7 @@ initialiseCtx hgeCmd rci = do
   where
     mkIsPgCtx pool txIso = IsPGExecCtx (const $ pure $ PGExecCtx pool txIso) [pool]
     procConnInfo =
-      either (printErrExit . ("Fatal Error : " <>)) return $ mkConnInfo rci
+      either (printErrExit 4 . ("Fatal Error : " <>)) return $ mkConnInfo rci
 
     getMinimalPool pgLogger ci = do
       let connParams = Q.defaultConnParams { Q.cpConns = 1 }
@@ -211,7 +209,7 @@ initialiseCtx hgeCmd rci = do
 runTxIO :: IsPGExecCtx -> Q.TxAccess -> Q.TxE QErr a -> IO a
 runTxIO pool isoLevel tx = do
   eVal <- liftIO $ runExceptT $ runLazyTx isoLevel pool $ liftTx tx
-  either printErrJExit return eVal
+  either (printErrJExit 5) return eVal
 
 
 class Monad m => Telemetry m where
@@ -262,7 +260,7 @@ runHGEServer env serveOpts@ServeOptions{..} initCtx@InitCtx{..} initTime shutdow
   authModeRes <- runExceptT $ mkAuthMode soAdminSecret soAuthHook soJwtSecret soUnAuthRole
                               _icHttpManager logger
 
-  authMode <- either (printErrExit . T.unpack) return authModeRes
+  authMode <- either (printErrExit 6 . T.unpack) return authModeRes
 
   -- If an exception is encountered in 'mkWaiApp', flush the log buffer and rethrow
   -- If we do not flush the log buffer on exception, then log lines written in 'mkWaiApp' may be missed
@@ -347,7 +345,7 @@ runHGEServer env serveOpts@ServeOptions{..} initCtx@InitCtx{..} initTime shutdow
     prepareEvents isPgCtx (Logger logger) = do
       liftIO $ logger $ mkGenericStrLog LevelInfo "event_triggers" "preparing data"
       res <- runExceptT $ runLazyTx Q.ReadWrite isPgCtx $ liftTx unlockAllEvents
-      either printErrJExit return res
+      either (printErrJExit 7) return res
 
     -- | shutdownEvents will be triggered when a graceful shutdown has been inititiated, it will
     -- get the locked events from the event engine context and then it will unlock all those events.
@@ -376,7 +374,7 @@ runHGEServer env serveOpts@ServeOptions{..} initCtx@InitCtx{..} initTime shutdow
             Nothing  -> Just defaults
             Just val -> readMaybe val
           eRes = maybe (Left $ "Wrong expected type for environment variable: " <> k) Right mRes
-      either printErrExit return eRes
+      either (printErrExit 8) return eRes
 
     runTx :: IsPGExecCtx -> Q.TxAccess -> Q.TxE QErr a -> IO (Either QErr a)
     runTx pool txLevel tx =

@@ -18,7 +18,7 @@ import           Data.String                               (fromString)
 import           Data.Time.Clock                           (UTCTime, getCurrentTime)
 import           Data.Time.Clock.POSIX                     (getPOSIXTime)
 import           Network.Mime                              (defaultMimeLookup)
-import           System.Exit                               (exitFailure)
+import           System.Exit                               (exitWith, ExitCode(ExitFailure))
 import           System.FilePath                           (joinPath, takeFileName)
 import           Web.Spock.Core                            ((<//>))
 
@@ -507,13 +507,14 @@ configApiGetHandler serverCtx =
                   (EL._lqsOptions $ scLQState serverCtx)
       return $ JSONResp $ HttpResponse res []
 
-
-initErrExit :: QErr -> IO a
-initErrExit e = do
+{- Seemingly never used...
+initErrExit :: Int -> QErr -> IO a
+initErrExit code e = do
   putStrLn $
     "failed to build schema-cache because of inconsistent metadata: "
     <> (show e)
-  exitFailure
+  exitWith (ExitFailure code)
+-}
 
 data HasuraApp
   = HasuraApp
@@ -638,7 +639,7 @@ mkWaiApp env logger sqlGenCtx enableAL isPgCtx ci httpManager mode corsCfg enabl
             , slKind = "db_migrate"
             , slInfo = toJSON err
             }
-          liftIO exitFailure
+          liftIO (exitWith (ExitFailure 14))
       L.unLogger logger migrationResult
 
       cacheLock <- liftIO $ newMVar ()

@@ -46,12 +46,12 @@ runApp env (HGEOptionsG rci hgeCmd) =
     HCExport -> do
       (initCtx, _) <- initialiseCtx hgeCmd rci
       res <- runTx' initCtx fetchMetadata
-      either printErrJExit printJSON res
+      either (printErrJExit 9) printJSON res
 
     HCClean -> do
       (initCtx, _) <- initialiseCtx hgeCmd rci
       res <- runTx' initCtx dropCatalog
-      either printErrJExit (const cleanSuccess) res
+      either (printErrJExit 10) (const cleanSuccess) res
 
     HCExecute -> do
       (InitCtx{..}, _) <- initialiseCtx hgeCmd rci
@@ -63,14 +63,14 @@ runApp env (HGEOptionsG rci hgeCmd) =
           & runHasSystemDefinedT (SystemDefined False)
           & runCacheRWT schemaCache
           & fmap (\(res, _, _) -> res)
-      either printErrJExit (liftIO . BLC.putStrLn) res
+      either (printErrJExit 11) (liftIO . BLC.putStrLn) res
 
     HCDowngrade opts -> do
       (InitCtx{..}, initTime) <- initialiseCtx hgeCmd rci
       let sqlGenCtx = SQLGenCtx False
       res <- downgradeCatalog opts initTime
              & runAsAdmin _icPgExecCtx sqlGenCtx _icHttpManager
-      either printErrJExit (liftIO . print) res
+      either (printErrJExit 12) (liftIO . print) res
 
     HCVersion -> liftIO $ putStrLn $ "Hasura GraphQL Engine: " ++ convertText currentVersion
   where
