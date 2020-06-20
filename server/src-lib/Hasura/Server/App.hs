@@ -18,7 +18,7 @@ import           Data.String                               (fromString)
 import           Data.Time.Clock                           (UTCTime, getCurrentTime)
 import           Data.Time.Clock.POSIX                     (getPOSIXTime)
 import           Network.Mime                              (defaultMimeLookup)
-import           System.Exit                               (exitWith, ExitCode(ExitFailure))
+import           System.Exit                               (ExitCode (ExitFailure), exitWith)
 import           System.FilePath                           (joinPath, takeFileName)
 import           Web.Spock.Core                            ((<//>))
 
@@ -26,52 +26,52 @@ import qualified Control.Concurrent.Async.Lifted.Safe      as LA
 import qualified Data.ByteString.Char8                     as B8
 import qualified Data.ByteString.Lazy                      as BL
 import qualified Data.CaseInsensitive                      as CI
+import qualified Data.Environment                          as Env
 import qualified Data.HashMap.Strict                       as M
 import qualified Data.HashSet                              as S
 import qualified Data.Text                                 as T
-import qualified Data.Environment                          as Env
 import qualified Database.PG.Query                         as Q
 import qualified Network.HTTP.Client                       as HTTP
 import qualified Network.HTTP.Types                        as HTTP
 import qualified Network.Wai                               as Wai
 import qualified Network.Wai.Handler.WebSockets.Custom     as WSC
-import qualified Network.WebSockets                     as WS
-import qualified System.Metrics                         as EKG
-import qualified System.Metrics.Json                    as EKG
-import qualified Text.Mustache                          as M
-import qualified Web.Spock.Core                         as Spock
+import qualified Network.WebSockets                        as WS
+import qualified System.Metrics                            as EKG
+import qualified System.Metrics.Json                       as EKG
+import qualified Text.Mustache                             as M
+import qualified Web.Spock.Core                            as Spock
 
 import           Hasura.EncJSON
 import           Hasura.GraphQL.Resolve.Action
 import           Hasura.HTTP
-import           Hasura.Prelude                         hiding (get, put)
+import           Hasura.Prelude                            hiding (get, put)
 import           Hasura.RQL.DDL.Schema
 import           Hasura.RQL.Types
 import           Hasura.RQL.Types.Run
-import           Hasura.Server.API.Config               (runGetConfig)
+import           Hasura.Server.API.Config                  (runGetConfig)
 import           Hasura.Server.API.Query
-import           Hasura.Server.Auth                     (AuthMode (..), UserAuthentication (..))
+import           Hasura.Server.Auth                        (AuthMode (..), UserAuthentication (..))
 import           Hasura.Server.Compression
 import           Hasura.Server.Cors
 import           Hasura.Server.Init
 import           Hasura.Server.Logging
-import           Hasura.Server.Middleware               (corsMiddleware)
-import           Hasura.Server.Migrate                  (migrateCatalog)
+import           Hasura.Server.Middleware                  (corsMiddleware)
+import           Hasura.Server.Migrate                     (migrateCatalog)
 import           Hasura.Server.Utils
 import           Hasura.Server.Version
 import           Hasura.Session
 import           Hasura.SQL.Types
 
+import qualified Hasura.GraphQL.Execute                    as E
+import qualified Hasura.GraphQL.Execute.LiveQuery          as EL
+import qualified Hasura.GraphQL.Explain                    as GE
+import qualified Hasura.GraphQL.Transport.HTTP             as GH
+import qualified Hasura.GraphQL.Transport.HTTP.Protocol    as GH
+import qualified Hasura.GraphQL.Transport.WebSocket        as WS
 import qualified Hasura.GraphQL.Transport.WebSocket.Server as WS
-import qualified Hasura.GraphQL.Execute                 as E
-import qualified Hasura.GraphQL.Execute.LiveQuery       as EL
-import qualified Hasura.GraphQL.Explain                 as GE
-import qualified Hasura.GraphQL.Transport.HTTP          as GH
-import qualified Hasura.GraphQL.Transport.HTTP.Protocol as GH
-import qualified Hasura.GraphQL.Transport.WebSocket     as WS
-import qualified Hasura.Logging                         as L
-import qualified Hasura.Server.API.PGDump               as PGD
-import qualified Hasura.Tracing                         as Tracing
+import qualified Hasura.Logging                            as L
+import qualified Hasura.Server.API.PGDump                  as PGD
+import qualified Hasura.Tracing                            as Tracing
 
 data SchemaCacheRef
   = SchemaCacheRef
@@ -151,7 +151,7 @@ withSCUpdate
   :: (MonadIO m, MonadBaseControl IO m)
   => SchemaCacheRef -> L.Logger L.Hasura -> m (a, RebuildableSchemaCache Run) -> m a
 withSCUpdate scr logger action = do
-  withMVarMasked lk $ \()-> do
+  withMVarMasked lk $ \() -> do
     (!res, !newSC) <- action
     liftIO $ do
       -- update schemacache in IO reference
@@ -220,21 +220,21 @@ class Monad m => MetadataApiAuthorization m where
 
 instance MetadataApiAuthorization m => MetadataApiAuthorization (Tracing.TraceT m) where
   authorizeMetadataApi q ui = hoist (hoist lift) $ authorizeMetadataApi q ui
-  
+
 -- | The config API (/v1alpha1/config) handler
 class Monad m => ConfigApiHandler m where
   runConfigApiHandler :: HasVersion => ServerCtx -> Spock.SpockCtxT () m ()
--- 
+--
 -- instance (MonadIO m, UserAuthentication m, HttpLog m, Tracing.HasReporter m) => ConfigApiHandler (Tracing.TraceT m) where
 --   runConfigApiHandler = configApiGetHandler
-  
-mapActionT 
+
+mapActionT
   :: (Monad m, Monad n)
   => (m (MTC.StT (Spock.ActionCtxT ()) a) -> n (MTC.StT (Spock.ActionCtxT ()) a))
   -> Spock.ActionT m a
   -> Spock.ActionT n a
-mapActionT f tma = MTC.restoreT . pure =<< MTC.liftWith \run -> f (run tma)
-  
+mapActionT f tma = MTC.restoreT . pure =<< (MTC.liftWith $ \run -> f (run tma))
+
 mkSpockAction
   :: (HasVersion, MonadIO m, FromJSON a, ToJSON a, UserAuthentication (Tracing.TraceT m), HttpLog m, Tracing.HasReporter m)
   => ServerCtx
@@ -253,23 +253,23 @@ mkSpockAction serverCtx qErrEncoder qErrModifier apiHandler = do
         manager = scManager serverCtx
         ipAddress = getSourceFromFallback req
         pathInfo = Wai.rawPathInfo req
-        
+
     tracingCtx <- liftIO $ Tracing.extractHttpContext headers
-    
-    let runTraceT 
+
+    let runTraceT
           :: forall m a
            . (MonadIO m, Tracing.HasReporter m)
           => Tracing.TraceT m a
           -> m a
-        runTraceT = maybe 
+        runTraceT = maybe
           Tracing.runTraceT
           Tracing.runTraceTWith
           tracingCtx
           (fromString (B8.unpack pathInfo))
 
     requestId <- getRequestId headers
-    
-    mapActionT runTraceT do
+
+    mapActionT runTraceT $ do
       userInfoE <- fmap fst <$> lift (resolveUserInfo logger manager headers authMode)
       userInfo  <- either (logErrorAndResp Nothing requestId req (Left reqBody) False headers . qErrModifier)
                    return userInfoE
@@ -391,14 +391,14 @@ v1GQHandler
   -> Handler m (HttpResponse EncJSON)
 v1GQHandler env = v1Alpha1GQHandler env
 
-gqlExplainHandler 
+gqlExplainHandler
   :: forall m
    . ( HasVersion
      , MonadIO m
      , Tracing.HasReporter m
      )
-  => Env.Environment 
-  -> GE.GQLExplain 
+  => Env.Environment
+  -> GE.GQLExplain
   -> Handler (Tracing.TraceT m) (HttpResponse EncJSON)
 gqlExplainHandler env query = do
   onlyAdmin
@@ -406,8 +406,8 @@ gqlExplainHandler env query = do
   sc <- getSCFromRef scRef
   pgExecCtx <- scPGExecCtx . hcServerCtx <$> ask
   sqlGenCtx <- scSQLGenCtx . hcServerCtx <$> ask
-  let runTx :: Q.TxAccess 
-            -> ReaderT HandlerCtx (Tracing.TraceT (Tracing.NoReporter (LazyTx QErr))) a 
+  let runTx :: Q.TxAccess
+            -> ReaderT HandlerCtx (Tracing.TraceT (Tracing.NoReporter (LazyTx QErr))) a
             -> ExceptT QErr (ReaderT HandlerCtx (Tracing.TraceT m)) a
       runTx txAccess rttx = ExceptT . ReaderT $ \ctx -> do
         runExceptT (Tracing.interpTraceT (runLazyTx txAccess pgExecCtx . Tracing.runNoReporter) (runReaderT rttx ctx))
@@ -518,10 +518,10 @@ initErrExit code e = do
 
 data HasuraApp
   = HasuraApp
-  { _hapApplication    :: !Wai.Application
-  , _hapSchemaRef      :: !SchemaCacheRef
-  , _hapCacheBuildTime :: !(Maybe UTCTime)
-  , _hapShutdown       :: !(IO ())
+  { _hapApplication      :: !Wai.Application
+  , _hapSchemaRef        :: !SchemaCacheRef
+  , _hapCacheBuildTime   :: !(Maybe UTCTime)
+  , _hapShutdownWsServer :: !(IO ())
   }
 
 -- TODO: Put Env into ServerCtx?
@@ -610,7 +610,7 @@ mkWaiApp env logger sqlGenCtx enableAL isPgCtx ci httpManager mode corsCfg enabl
       liftIO $ EKG.registerCounter "ekg.server_timestamp_ms" getTimeMs ekgStore
 
     spockApp <- liftWithStateless $ \lowerIO ->
-      Spock.spockAsApp $ 
+      Spock.spockAsApp $
         Spock.spockT lowerIO $
           httpApp env corsCfg serverCtx enableConsole consoleAssetsDir enableTelemetry
 
@@ -629,7 +629,7 @@ mkWaiApp env logger sqlGenCtx enableAL isPgCtx ci httpManager mode corsCfg enabl
       let isPgSerCtx = withTxIsolation Q.Serializable isPgCtx
           adminRunCtx = RunCtx adminUserInfo httpManager sqlGenCtx
       currentTime <- liftIO getCurrentTime
-      initialiseResult <- runExceptT $ peelRun adminRunCtx isPgSerCtx (runLazyTx Q.ReadWrite) do
+      initialiseResult <- runExceptT $ peelRun adminRunCtx isPgSerCtx (runLazyTx Q.ReadWrite) $ do
         (,) <$> migrateCatalog env currentTime <*> liftTx fetchLastUpdate
 
       ((migrationResult, schemaCache), lastUpdateEvent) <-
@@ -753,7 +753,7 @@ httpApp env corsCfg serverCtx enableConsole consoleAssetsDir enableTelemetry = d
 
     spockAction
       :: (FromJSON a, ToJSON a, MonadIO m, UserAuthentication (Tracing.TraceT m), HttpLog m, Tracing.HasReporter m)
-      => (Bool -> QErr -> Value) 
+      => (Bool -> QErr -> Value)
       -> (QErr -> QErr) -> APIHandler (Tracing.TraceT m) a -> Spock.ActionT m ()
     spockAction = mkSpockAction serverCtx
 

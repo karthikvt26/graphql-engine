@@ -48,6 +48,7 @@ import qualified Network.HTTP.Client.TLS                   as HTTP
 import qualified Network.Wai.Handler.Warp                  as Warp
 import qualified System.Log.FastLogger                     as FL
 import qualified Text.Mustache.Compile                     as M
+import qualified Control.Immortal as Immortal
 
 import           Hasura.Db
 import           Hasura.EncJSON
@@ -243,10 +244,10 @@ runHGEServer
   -> InitCtx
   -> UTCTime
   -- ^ start time
-  -> C.MVar ()
-  -- ^ shutdown latch
+  -> (C.MVar (), IO ())
+  -- ^ shutdown latch and a shutdown function
   -> m ()
-runHGEServer env serveOpts@ServeOptions{..} initCtx@InitCtx{..} initTime shutdownLatch = do
+runHGEServer env serveOpts@ServeOptions{..} initCtx@InitCtx{..} initTime (shutdownLatch, shutdownApp) = do
   -- Comment this to enable expensive assertions from "GHC.AssertNF". These will log lines to
   -- STDOUT containing "not in normal form". In the future we could try to integrate this into
   -- our tests. For now this is a development tool.
@@ -266,7 +267,7 @@ runHGEServer env serveOpts@ServeOptions{..} initCtx@InitCtx{..} initTime shutdow
   -- If we do not flush the log buffer on exception, then log lines written in 'mkWaiApp' may be missed
   -- See: https://github.com/hasura/graphql-engine/issues/4772
   let flushLogger = liftIO $ FL.flushLogStr $ _lcLoggerSet loggerCtx
-  HasuraApp app cacheRef cacheInitTime shutdownApp <- flip onException flushLogger $
+  HasuraApp app cacheRef cacheInitTime stopWsServer <- flip onException flushLogger $
     mkWaiApp env
              logger
              sqlGenCtx
@@ -290,7 +291,7 @@ runHGEServer env serveOpts@ServeOptions{..} initCtx@InitCtx{..} initTime shutdow
   liftIO $ logInconsObjs logger inconsObjs
 
   -- start background threads for schema sync
-  (_schemaSyncListenerThread, _schemaSyncProcessorThread) <-
+  (schemaSyncListenerThread, schemaSyncProcessorThread) <-
     startSchemaSyncThreads sqlGenCtx _icPgExecCtx logger _icHttpManager
                            cacheRef _icInstanceId cacheInitTime
 
@@ -310,14 +311,17 @@ runHGEServer env serveOpts@ServeOptions{..} initCtx@InitCtx{..} initTime shutdow
     _icHttpManager _icPgExecCtx (getSCFromRef cacheRef) eventEngineCtx
 
   -- start a backgroud thread to handle async actions
-  _asyncActionsThread <- C.forkImmortal "asyncActionsProcessor" logger $
+  asyncActionsThread <- C.forkImmortal "asyncActionsProcessor" logger $
     asyncActionsProcessor env (_scrCache cacheRef) _icPgExecCtx _icHttpManager
 
   -- start a background thread to check for updates
-  _updateThread <- C.forkImmortal "checkForUpdates" logger $ liftIO $
+  updateThread <- C.forkImmortal "checkForUpdates" logger $ liftIO $
     checkForUpdates loggerCtx _icHttpManager
 
   startTelemetry logger serveOpts cacheRef initCtx
+
+  -- events has its own shutdown mechanism, used in 'shutdownHandler'
+  let immortalThreads = [schemaSyncListenerThread, schemaSyncProcessorThread, updateThread, asyncActionsThread]
 
   finishTime <- liftIO Clock.getCurrentTime
   let apiInitTime = realToFrac $ Clock.diffUTCTime finishTime initTime
@@ -326,7 +330,7 @@ runHGEServer env serveOpts@ServeOptions{..} initCtx@InitCtx{..} initTime shutdow
   let warpSettings = Warp.setPort soPort
                      . Warp.setHost soHost
                      . Warp.setGracefulShutdownTimeout (Just 30) -- 30s graceful shutdown
-                     . Warp.setInstallShutdownHandler (shutdownHandler logger shutdownApp eventEngineCtx _icPgExecCtx)
+                     . Warp.setInstallShutdownHandler (shutdownHandler logger immortalThreads stopWsServer eventEngineCtx _icPgExecCtx)
                      $ Warp.defaultSettings
   liftIO $ Warp.runSettings warpSettings app
 
@@ -383,15 +387,31 @@ runHGEServer env serveOpts@ServeOptions{..} initCtx@InitCtx{..} initTime shutdow
     -- | Waits for the shutdown latch 'MVar' to be filled, and then
     -- shuts down the server and associated resources.
     -- Structuring things this way lets us decide elsewhere exactly how
-    -- we want to control shutdown. 
-    shutdownHandler :: Logger Hasura -> IO () -> EventEngineCtx -> IsPGExecCtx -> IO () -> IO ()
-    shutdownHandler (Logger logger) shutdownApp eeCtx pool closeSocket =
+    -- we want to control shutdown.
+    shutdownHandler
+      :: Logger Hasura
+      -> [Immortal.Thread]
+      -> IO ()
+      -- ^ the stop websocket server function
+      -> EventEngineCtx
+      -> IsPGExecCtx
+      -> IO ()
+      -- ^ the closeSocket callback
+      -> IO ()
+    shutdownHandler (Logger logger) immortalThreads stopWsServer eeCtx pool closeSocket =
       LA.link =<< LA.async do
         _ <- C.takeMVar shutdownLatch
         logger $ mkGenericStrLog LevelInfo "server" "gracefully shutting down server"
         shutdownEvents pool (Logger logger) eeCtx
         closeSocket
+        stopWsServer
+        -- kill all the background immortal threads
+        logger $ mkGenericStrLog LevelInfo "server" "killing all background immortal threads"
+        forM_ immortalThreads $ \thread -> do
+          logger $ mkGenericStrLog LevelInfo "server" $ "killing thread: " <> show (Immortal.threadId thread)
+          Immortal.stop thread
         shutdownApp
+
 
 runAsAdmin
   :: (MonadIO m)
