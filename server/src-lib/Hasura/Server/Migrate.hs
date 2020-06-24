@@ -161,12 +161,12 @@ migrateCatalog env migrationTime = do
           pure (MRMigrated previousVersion, schemaCache)
       where
         neededMigrations = dropWhile ((/= previousVersion) . fst) (migrations False)
-        
+
     buildCacheAndRecreateSystemMetadata :: m (RebuildableSchemaCache m)
     buildCacheAndRecreateSystemMetadata = do
       schemaCache <- buildRebuildableSchemaCache env
       view _2 <$> runCacheRWT schemaCache recreateSystemMetadata
-      
+
     updateCatalogVersion = setCatalogVersion latestCatalogVersionString migrationTime
 
     doesSchemaExist schemaName =

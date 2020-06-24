@@ -5,7 +5,8 @@ module Hasura.App where
 
 import           Control.Concurrent.STM.TVar               (readTVarIO)
 import           Control.Monad.Base
-import           Control.Monad.Catch                       (MonadCatch, MonadThrow, onException)
+import           Control.Monad.Catch                       (MonadCatch, MonadThrow, onException, Exception)
+import           Control.Exception (throwIO)
 import           Control.Monad.Stateless
 import           Control.Monad.STM                         (atomically)
 import           Control.Monad.Trans.Control               (MonadBaseControl (..))
@@ -13,8 +14,6 @@ import           Data.Aeson                                ((.=))
 import           Data.Time.Clock                           (UTCTime)
 import           GHC.AssertNF
 import           Options.Applicative
--- import           System.Environment                        (getEnvironment, lookupEnv)
--- import           System.Exit                               (exitFailure)
 
 -- import qualified Control.Concurrent.Async.Lifted.Safe      as LA
 -- import qualified Control.Concurrent.Extended               as C
@@ -32,7 +31,6 @@ import           Options.Applicative
 -- import qualified System.Posix.Signals                      as Signals
 -- import qualified Text.Mustache.Compile                     as M
 import           System.Environment                        (getEnvironment, lookupEnv)
-import           System.Exit                               (exitFailure)
 
 import qualified Control.Concurrent.Async.Lifted.Safe      as LA
 import qualified Control.Concurrent.Extended               as C
@@ -50,6 +48,7 @@ import qualified Network.HTTP.Client.TLS                   as HTTP
 import qualified Network.Wai.Handler.Warp                  as Warp
 import qualified System.Log.FastLogger                     as FL
 import qualified Text.Mustache.Compile                     as M
+import qualified Control.Immortal as Immortal
 
 import           Hasura.Db
 import           Hasura.EncJSON
@@ -83,11 +82,20 @@ import           Hasura.Server.Version
 import           Hasura.Session
 import qualified Hasura.Tracing                            as Tracing
 
-printErrExit :: (MonadIO m) => forall a . String -> m a
-printErrExit = liftIO . (>> exitFailure) . putStrLn
 
-printErrJExit :: (A.ToJSON a, MonadIO m) => forall b . a -> m b
-printErrJExit = liftIO . (>> exitFailure) . printJSON
+data ExitException
+  = ExitException
+  { eeCode :: !Int
+  , eeMessage :: !BC.ByteString
+  } deriving (Show)
+
+instance Exception ExitException
+
+printErrExit :: (MonadIO m) => forall a . Int -> String -> m a
+printErrExit code = liftIO . throwIO . ExitException code . BC.pack
+
+printErrJExit :: (A.ToJSON a, MonadIO m) => forall b . Int -> a -> m b
+printErrJExit code = liftIO . throwIO . ExitException code . BLC.toStrict . A.encode
 
 parseHGECommand :: EnabledLogTypes impl => Parser (RawHGECommand impl)
 parseHGECommand =
@@ -113,7 +121,7 @@ parseArgs = do
   rawHGEOpts <- execParser opts
   env <- getEnvironment
   let eitherOpts = runWithEnv env $ mkHGEOptions rawHGEOpts
-  either printErrExit return eitherOpts
+  either (printErrExit 3) return eitherOpts
   where
     opts = info (helper <*> hgeOpts)
            ( fullDesc <>
@@ -195,7 +203,7 @@ initialiseCtx hgeCmd rci = do
   where
     mkIsPgCtx pool txIso = IsPGExecCtx (const $ pure $ PGExecCtx pool txIso) [pool]
     procConnInfo =
-      either (printErrExit . ("Fatal Error : " <>)) return $ mkConnInfo rci
+      either (printErrExit 4 . ("Fatal Error : " <>)) return $ mkConnInfo rci
 
     getMinimalPool pgLogger ci = do
       let connParams = Q.defaultConnParams { Q.cpConns = 1 }
@@ -211,7 +219,7 @@ initialiseCtx hgeCmd rci = do
 runTxIO :: IsPGExecCtx -> Q.TxAccess -> Q.TxE QErr a -> IO a
 runTxIO pool isoLevel tx = do
   eVal <- liftIO $ runExceptT $ runLazyTx isoLevel pool $ liftTx tx
-  either printErrJExit return eVal
+  either (printErrJExit 5) return eVal
 
 
 class Monad m => Telemetry m where
@@ -245,10 +253,10 @@ runHGEServer
   -> InitCtx
   -> UTCTime
   -- ^ start time
-  -> C.MVar ()
-  -- ^ shutdown latch
+  -> (C.MVar (), IO ())
+  -- ^ shutdown latch and a shutdown function
   -> m ()
-runHGEServer env serveOpts@ServeOptions{..} initCtx@InitCtx{..} initTime shutdownLatch = do
+runHGEServer env serveOpts@ServeOptions{..} initCtx@InitCtx{..} initTime (shutdownLatch, shutdownApp) = do
   -- Comment this to enable expensive assertions from "GHC.AssertNF". These will log lines to
   -- STDOUT containing "not in normal form". In the future we could try to integrate this into
   -- our tests. For now this is a development tool.
@@ -262,13 +270,13 @@ runHGEServer env serveOpts@ServeOptions{..} initCtx@InitCtx{..} initTime shutdow
   authModeRes <- runExceptT $ mkAuthMode soAdminSecret soAuthHook soJwtSecret soUnAuthRole
                               _icHttpManager logger
 
-  authMode <- either (printErrExit . T.unpack) return authModeRes
+  authMode <- either (printErrExit 6 . T.unpack) return authModeRes
 
   -- If an exception is encountered in 'mkWaiApp', flush the log buffer and rethrow
   -- If we do not flush the log buffer on exception, then log lines written in 'mkWaiApp' may be missed
   -- See: https://github.com/hasura/graphql-engine/issues/4772
   let flushLogger = liftIO $ FL.flushLogStr $ _lcLoggerSet loggerCtx
-  HasuraApp app cacheRef cacheInitTime shutdownApp <- flip onException flushLogger $
+  HasuraApp app cacheRef cacheInitTime stopWsServer <- flip onException flushLogger $
     mkWaiApp env
              logger
              sqlGenCtx
@@ -292,7 +300,7 @@ runHGEServer env serveOpts@ServeOptions{..} initCtx@InitCtx{..} initTime shutdow
   liftIO $ logInconsObjs logger inconsObjs
 
   -- start background threads for schema sync
-  (_schemaSyncListenerThread, _schemaSyncProcessorThread) <-
+  (schemaSyncListenerThread, schemaSyncProcessorThread) <-
     startSchemaSyncThreads sqlGenCtx _icPgExecCtx logger _icHttpManager
                            cacheRef _icInstanceId cacheInitTime
 
@@ -312,14 +320,17 @@ runHGEServer env serveOpts@ServeOptions{..} initCtx@InitCtx{..} initTime shutdow
     _icHttpManager _icPgExecCtx (getSCFromRef cacheRef) eventEngineCtx
 
   -- start a backgroud thread to handle async actions
-  _asyncActionsThread <- C.forkImmortal "asyncActionsProcessor" logger $
+  asyncActionsThread <- C.forkImmortal "asyncActionsProcessor" logger $
     asyncActionsProcessor env (_scrCache cacheRef) _icPgExecCtx _icHttpManager
 
   -- start a background thread to check for updates
-  _updateThread <- C.forkImmortal "checkForUpdates" logger $ liftIO $
+  updateThread <- C.forkImmortal "checkForUpdates" logger $ liftIO $
     checkForUpdates loggerCtx _icHttpManager
 
   startTelemetry logger serveOpts cacheRef initCtx
+
+  -- events has its own shutdown mechanism, used in 'shutdownHandler'
+  let immortalThreads = [schemaSyncListenerThread, schemaSyncProcessorThread, updateThread, asyncActionsThread]
 
   finishTime <- liftIO Clock.getCurrentTime
   let apiInitTime = realToFrac $ Clock.diffUTCTime finishTime initTime
@@ -328,7 +339,7 @@ runHGEServer env serveOpts@ServeOptions{..} initCtx@InitCtx{..} initTime shutdow
   let warpSettings = Warp.setPort soPort
                      . Warp.setHost soHost
                      . Warp.setGracefulShutdownTimeout (Just 30) -- 30s graceful shutdown
-                     . Warp.setInstallShutdownHandler (shutdownHandler logger shutdownApp eventEngineCtx _icPgExecCtx)
+                     . Warp.setInstallShutdownHandler (shutdownHandler logger immortalThreads stopWsServer eventEngineCtx _icPgExecCtx)
                      $ Warp.defaultSettings
   liftIO $ Warp.runSettings warpSettings app
 
@@ -347,7 +358,7 @@ runHGEServer env serveOpts@ServeOptions{..} initCtx@InitCtx{..} initTime shutdow
     prepareEvents isPgCtx (Logger logger) = do
       liftIO $ logger $ mkGenericStrLog LevelInfo "event_triggers" "preparing data"
       res <- runExceptT $ runLazyTx Q.ReadWrite isPgCtx $ liftTx unlockAllEvents
-      either printErrJExit return res
+      either (printErrJExit 7) return res
 
     -- | shutdownEvents will be triggered when a graceful shutdown has been inititiated, it will
     -- get the locked events from the event engine context and then it will unlock all those events.
@@ -376,7 +387,7 @@ runHGEServer env serveOpts@ServeOptions{..} initCtx@InitCtx{..} initTime shutdow
             Nothing  -> Just defaults
             Just val -> readMaybe val
           eRes = maybe (Left $ "Wrong expected type for environment variable: " <> k) Right mRes
-      either printErrExit return eRes
+      either (printErrExit 8) return eRes
 
     runTx :: IsPGExecCtx -> Q.TxAccess -> Q.TxE QErr a -> IO (Either QErr a)
     runTx pool txLevel tx =
@@ -385,15 +396,31 @@ runHGEServer env serveOpts@ServeOptions{..} initCtx@InitCtx{..} initTime shutdow
     -- | Waits for the shutdown latch 'MVar' to be filled, and then
     -- shuts down the server and associated resources.
     -- Structuring things this way lets us decide elsewhere exactly how
-    -- we want to control shutdown. 
-    shutdownHandler :: Logger Hasura -> IO () -> EventEngineCtx -> IsPGExecCtx -> IO () -> IO ()
-    shutdownHandler (Logger logger) shutdownApp eeCtx pool closeSocket =
+    -- we want to control shutdown.
+    shutdownHandler
+      :: Logger Hasura
+      -> [Immortal.Thread]
+      -> IO ()
+      -- ^ the stop websocket server function
+      -> EventEngineCtx
+      -> IsPGExecCtx
+      -> IO ()
+      -- ^ the closeSocket callback
+      -> IO ()
+    shutdownHandler (Logger logger) immortalThreads stopWsServer eeCtx pool closeSocket =
       LA.link =<< LA.async do
         _ <- C.takeMVar shutdownLatch
         logger $ mkGenericStrLog LevelInfo "server" "gracefully shutting down server"
         shutdownEvents pool (Logger logger) eeCtx
         closeSocket
+        stopWsServer
+        -- kill all the background immortal threads
+        logger $ mkGenericStrLog LevelInfo "server" "killing all background immortal threads"
+        forM_ immortalThreads $ \thread -> do
+          logger $ mkGenericStrLog LevelInfo "server" $ "killing thread: " <> show (Immortal.threadId thread)
+          Immortal.stop thread
         shutdownApp
+
 
 runAsAdmin
   :: (MonadIO m)
