@@ -14,7 +14,6 @@ module Hasura.Server.Auth.JWT
 
 import           Control.Exception.Lifted        (try)
 import           Control.Lens
-import           Control.Monad                   (when)
 import           Control.Monad.Trans.Control     (MonadBaseControl)
 import           Control.Monad.Trans.Maybe
 import           Data.IORef                      (IORef, readIORef, writeIORef)

@@ -12,6 +12,7 @@ import           Test.Hspec
 
 import qualified Data.Aeson                   as A
 import qualified Data.ByteString.Lazy.Char8   as BL
+import qualified Data.Environment             as Env
 import qualified Database.PG.Query            as Q
 import qualified Network.HTTP.Client          as HTTP
 import qualified Network.HTTP.Client.TLS      as HTTP
@@ -85,7 +86,7 @@ buildPostgresSpecs pgConnOptions = do
               >>> runExceptT
               >=> flip onLeft printErrJExit
 
-        schemaCache <- snd <$> runAsAdmin (migrateCatalog =<< liftIO getCurrentTime)
+        schemaCache <- snd <$> runAsAdmin (migrateCatalog (Env.mkEnvironment env) =<< liftIO getCurrentTime)
         cacheRef <- newMVar schemaCache
         pure $ NT (runAsAdmin . flip MigrateSpec.runCacheRefT cacheRef)
 
