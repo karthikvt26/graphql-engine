@@ -2,6 +2,7 @@
 
 module Main where
 
+import           Control.Exception
 import           Data.Text.Conversions      (convertText)
 
 import           Hasura.App
@@ -15,17 +16,24 @@ import           Hasura.Server.Migrate      (downgradeCatalog, dropCatalog)
 import           Hasura.Server.Version
 
 import qualified Control.Concurrent.MVar    as Conc
+import qualified Data.ByteString.Char8      as BC
 import qualified Data.ByteString.Lazy       as BL
 import qualified Data.ByteString.Lazy.Char8 as BLC
 import qualified Data.Environment           as Env
 import qualified Database.PG.Query          as Q
+import qualified System.Exit                as Sys
 import qualified System.Posix.Signals       as Signals
 
 main :: IO ()
 main = do
-  args <- parseArgs
-  env  <- Env.getEnvironment
-  unAppM (runApp env args)
+  tryExit $ do
+    args <- parseArgs
+    env  <- Env.getEnvironment
+    unAppM (runApp env args)
+  where
+    tryExit io = try io >>= \case
+      Left (ExitException code msg) -> BC.putStrLn msg >> Sys.exitWith (Sys.ExitFailure code)
+      Right r -> return r
 
 runApp :: Env.Environment -> HGEOptions Hasura -> AppM ()
 runApp env (HGEOptionsG rci hgeCmd) =

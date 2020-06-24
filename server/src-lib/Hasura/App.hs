@@ -5,7 +5,8 @@ module Hasura.App where
 
 import           Control.Concurrent.STM.TVar               (readTVarIO)
 import           Control.Monad.Base
-import           Control.Monad.Catch                       (MonadCatch, MonadThrow, onException)
+import           Control.Monad.Catch                       (MonadCatch, MonadThrow, onException, Exception)
+import           Control.Exception (throwIO)
 import           Control.Monad.Stateless
 import           Control.Monad.STM                         (atomically)
 import           Control.Monad.Trans.Control               (MonadBaseControl (..))
@@ -30,7 +31,6 @@ import           Options.Applicative
 -- import qualified System.Posix.Signals                      as Signals
 -- import qualified Text.Mustache.Compile                     as M
 import           System.Environment                        (getEnvironment, lookupEnv)
-import           System.Exit                               (exitWith, ExitCode(ExitFailure))
 
 import qualified Control.Concurrent.Async.Lifted.Safe      as LA
 import qualified Control.Concurrent.Extended               as C
@@ -82,11 +82,20 @@ import           Hasura.Server.Version
 import           Hasura.Session
 import qualified Hasura.Tracing                            as Tracing
 
+
+data ExitException
+  = ExitException
+  { eeCode :: !Int
+  , eeMessage :: !BC.ByteString
+  } deriving (Show)
+
+instance Exception ExitException
+
 printErrExit :: (MonadIO m) => forall a . Int -> String -> m a
-printErrExit code = liftIO . (>> exitWith (ExitFailure code)) . putStrLn
+printErrExit code = liftIO . throwIO . ExitException code . BC.pack
 
 printErrJExit :: (A.ToJSON a, MonadIO m) => forall b . Int -> a -> m b
-printErrJExit code = liftIO . (>> exitWith (ExitFailure code)) . printJSON
+printErrJExit code = liftIO . throwIO . ExitException code . BLC.toStrict . A.encode
 
 parseHGECommand :: EnabledLogTypes impl => Parser (RawHGECommand impl)
 parseHGECommand =
