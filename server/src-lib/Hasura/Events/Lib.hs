@@ -11,7 +11,6 @@ module Hasura.Events.Lib
   , EventEngineCtx(..)
   ) where
 
--- import           Control.Concurrent.Async.Lifted.Safe (async, link, wait, withAsync)
 import           Control.Concurrent.Async.Lifted.Safe as LA
 import           Control.Concurrent.Extended (sleep)
 import           Control.Concurrent.STM.TVar
