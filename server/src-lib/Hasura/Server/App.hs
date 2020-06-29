@@ -260,7 +260,6 @@ mkSpockAction serverCtx qErrEncoder qErrModifier apiHandler = do
     let headers = Wai.requestHeaders req
         authMode = scAuthMode serverCtx
         manager = scManager serverCtx
--- FIXME(Phil): verify if the resolution is correct
 -- <<<<<<< HEAD
 --         ipAddress = getSourceFromFallback req
 --         pathInfo = Wai.rawPathInfo req
@@ -495,18 +494,14 @@ gqlExplainHandler env query = do
   pgExecCtx <- scPGExecCtx . hcServerCtx <$> ask
   sqlGenCtx <- scSQLGenCtx . hcServerCtx <$> ask
 
---FIXME(Phil): i don't understand how to fix this
-<<<<<<< HEAD
   let runTx :: Q.TxAccess
             -> ReaderT HandlerCtx (Tracing.TraceT (Tracing.NoReporter (LazyTx QErr))) a
             -> ExceptT QErr (ReaderT HandlerCtx (Tracing.TraceT m)) a
       runTx txAccess rttx = ExceptT . ReaderT $ \ctx -> do
         runExceptT (Tracing.interpTraceT (runLazyTx txAccess pgExecCtx . Tracing.runNoReporter) (runReaderT rttx ctx))
-  res <- GE.explainGQLQuery env pgExecCtx runTx sc sqlGenCtx (restrictActionExecuter "query actions cannot be explained") query
-=======
-  res <- GE.explainGQLQuery pgExecCtx sc sqlGenCtx
+        
+  res <- GE.explainGQLQuery env pgExecCtx runTx sc sqlGenCtx 
          (restrictActionExecuter "query actions cannot be explained") query
->>>>>>> master
   return $ HttpResponse res []
 
 v1Alpha1PGDumpHandler :: (MonadIO m) => PGD.PGDumpReqBody -> Handler m APIResp
