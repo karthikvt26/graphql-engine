@@ -20,7 +20,11 @@ import           Data.Aeson
 import           Data.Aeson.Casing
 import           Data.Aeson.TH
 import           Data.Int                               (Int64)
-import           Data.Time.Clock
+
+import qualified Data.ByteString.Lazy                   as BL
+import qualified Data.Text                              as T
+import qualified Network.HTTP.Types                     as HTTP
+import qualified Network.Wai.Extended                   as Wai
 
 import qualified Data.ByteString.Lazy                   as BL
 import qualified Data.Text                              as T
@@ -36,7 +40,7 @@ import           Hasura.RQL.Types
 import           Hasura.Server.Compression
 import           Hasura.Server.Utils
 import           Hasura.Session
-import           Hasura.Tracing                              (TraceT)
+import           Hasura.Tracing                         (TraceT)
 
 data StartupLog
   = StartupLog
@@ -116,24 +120,6 @@ instance ToJSON WebHookLog where
            , "message" .= whlMessage whl
            ]
 
-class (Monad m) => QueryLogger m where
-  logQuery
-    :: Logger Hasura
-    -- ^ logger
-    -> GQLReqUnparsed
-    -- ^ GraphQL request
-    -> (Maybe GeneratedSqlMap)
-    -- ^ Generated SQL if any
-    -> RequestId
-    -- ^ Id of the request
-    -> m ()
-
-instance QueryLogger m => QueryLogger (ExceptT e m) where
-  logQuery l req sqlMap reqId = lift $ logQuery l req sqlMap reqId
-
-instance QueryLogger m => QueryLogger (ReaderT r m) where
-  logQuery l req sqlMap reqId = lift $ logQuery l req sqlMap reqId
-  
 instance QueryLogger m => QueryLogger (TraceT m) where
   logQuery l req sqlMap reqId = lift $ logQuery l req sqlMap reqId
 
@@ -188,7 +174,7 @@ data HttpInfoLog
   = HttpInfoLog
   { hlStatus      :: !HTTP.Status
   , hlMethod      :: !T.Text
-  , hlSource      :: !IpAddress
+  , hlSource      :: !Wai.IpAddress
   , hlPath        :: !T.Text
   , hlHttpVersion :: !HTTP.HttpVersion
   , hlCompression :: !(Maybe CompressionType)
@@ -200,7 +186,7 @@ instance ToJSON HttpInfoLog where
   toJSON (HttpInfoLog st met src path hv compressTypeM _) =
     object [ "status" .= HTTP.statusCode st
            , "method" .= met
-           , "ip" .= bsToTxt (unIpAddress src)
+           , "ip" .= Wai.showIPAddress src
            , "url" .= path
            , "http_version" .= show hv
            , "content_encoding" .= (compressionTypeToTxt <$> compressTypeM)
@@ -246,7 +232,7 @@ mkHttpAccessLogContext userInfoM reqId req res mTiming compressTypeM headers =
   let http = HttpInfoLog
              { hlStatus      = status
              , hlMethod      = bsToTxt $ Wai.requestMethod req
-             , hlSource      = getSourceFromFallback req
+             , hlSource      = Wai.getSourceFromFallback req
              , hlPath        = bsToTxt $ Wai.rawPathInfo req
              , hlHttpVersion = Wai.httpVersion req
              , hlCompression  = compressTypeM
@@ -282,7 +268,7 @@ mkHttpErrorLogContext userInfoM reqId req err query mTiming compressTypeM header
   let http = HttpInfoLog
              { hlStatus      = qeStatus err
              , hlMethod      = bsToTxt $ Wai.requestMethod req
-             , hlSource      = getSourceFromFallback req
+             , hlSource      = Wai.getSourceFromFallback req
              , hlPath        = bsToTxt $ Wai.rawPathInfo req
              , hlHttpVersion = Wai.httpVersion req
              , hlCompression  = compressTypeM

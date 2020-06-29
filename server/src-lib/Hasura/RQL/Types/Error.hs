@@ -98,7 +98,7 @@ data Code
   | InvalidCustomTypes
   -- Actions Webhook code
   | ActionWebhookCode !Text
-  -- | Custom error code for other applications using graphql-engine as a library
+  -- Custom code for extending this sum-type easily
   | CustomCode !Text
   deriving (Eq)
 

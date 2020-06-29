@@ -52,6 +52,18 @@ runApp env (HGEOptionsG rci hgeCmd) =
         Nothing
       runHGEServer env serveOptions initCtx initTime (shutdownLatch, shutdownApp)
 
+-- =======
+--       -- Catches the SIGTERM signal and initiates a graceful shutdown.
+--       -- Graceful shutdown for regular HTTP requests is already implemented in
+--       -- Warp, and is triggered by invoking the 'closeSocket' callback.
+--       -- We only catch the SIGTERM signal once, that is, if the user hits CTRL-C
+--       -- once again, we terminate the process immediately.
+--       _ <- liftIO $ Signals.installHandler
+--         Signals.sigTERM
+--         (Signals.CatchOnce (shutdownGracefully initCtx))
+--         Nothing
+--       runHGEServer serveOptions initCtx Nothing initTime
+-- >>>>>>> master
     HCExport -> do
       (initCtx, _) <- initialiseCtx hgeCmd rci
       res <- runTx' initCtx fetchMetadata

@@ -39,11 +39,9 @@ import qualified Data.Aeson.Casing             as J
 import qualified Data.Aeson.TH                 as J
 import qualified Data.HashMap.Strict           as Map
 import qualified Data.HashSet                  as Set
-import qualified Data.Text                     as T
 import qualified Database.PG.Query             as Q
 import qualified Language.GraphQL.Draft.Syntax as G
 
-import           Data.URL.Template             (renderURLTemplate)
 import           Language.Haskell.TH.Syntax    (Lift)
 
 getActionInfo
@@ -108,9 +106,15 @@ resolveAction
   -> m ( ResolvedActionDefinition
        , AnnotatedObjectType
        , HashSet PGScalarType
+--FIXME(lyndon):envvars
+<<<<<<< HEAD
        -- ^ see Note [Postgres scalars in action input arguments].
        )
 resolveAction env customTypes allPGScalars actionDefinition = do
+=======
+       ) -- ^ see Note [Postgres scalars in action input arguments].
+resolveAction customTypes allPGScalars actionDefinition = do
+>>>>>>> master
   let responseType = unGraphQLType $ _adOutputType actionDefinition
       responseBaseType = G.getBaseType responseType
 
@@ -145,10 +149,13 @@ resolveAction env customTypes allPGScalars actionDefinition = do
           inputTypeInfos = nonObjectTypeMap <> mapFromL VT.getNamedTy defaultTypes
       in Map.lookup typeName inputTypeInfos
 
-    resolveWebhook (InputWebhook urlTemplate) = do
-      let eitherRenderedTemplate = renderURLTemplate env urlTemplate
-      either (throw400 Unexpected . T.pack) (pure . ResolvedWebhook) eitherRenderedTemplate
+-- <<<<<<< HEAD
+--     resolveWebhook (InputWebhook urlTemplate) = do
+--       let eitherRenderedTemplate = renderURLTemplate env urlTemplate
+--       either (throw400 Unexpected . T.pack) (pure . ResolvedWebhook) eitherRenderedTemplate
 
+-- =======
+-- >>>>>>> master
     getObjectTypeInfo typeName =
       onNothing (Map.lookup (ObjectTypeName typeName) (snd customTypes)) $
         throw400 NotExists $ "the type: "

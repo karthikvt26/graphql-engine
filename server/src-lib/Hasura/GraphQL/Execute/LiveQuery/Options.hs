@@ -26,16 +26,16 @@ instance J.ToJSON LiveQueriesOptions where
     J.object [ "batch_size" J..= batchSize
              , "refetch_delay" J..= refetchInterval
              ]
-             
+
 instance J.FromJSON LiveQueriesOptions where
   parseJSON = J.withObject "live query options" \o ->
     LiveQueriesOptions <$> o J..: "batch_size"
                        <*> o J..: "refetch_delay"
-            
+
 newtype BatchSize = BatchSize { unBatchSize :: Int }
   deriving (Show, Eq, J.ToJSON, J.FromJSON)
 
--- TODO this is treated as milliseconds in fromEnv and as seconds in ToJSON. 
+-- TODO this is treated as milliseconds in fromEnv and as seconds in ToJSON.
 --      ideally this would have e.g. ... unRefetchInterval :: Milliseconds
 newtype RefetchInterval = RefetchInterval { unRefetchInterval :: DiffTime }
   deriving (Show, Eq, J.ToJSON, J.FromJSON)

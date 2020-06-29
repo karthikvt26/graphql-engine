@@ -18,7 +18,12 @@ import monitoring from './images/monitoring.svg';
 import rate from './images/rate.svg';
 import regression from './images/regression.svg';
 import management from './images/management.svg';
+<<<<<<< HEAD
 import allow from './images/allow.svg';
+=======
+import allow from './images/allow-listing.svg';
+import read from './images/read-replica.svg';
+>>>>>>> master
 import arrowForwardRed from './images/arrow_forward-red.svg';
 
 import styles from './Main.scss';
@@ -601,6 +606,18 @@ class Main extends React.Component {
                   </div>
                 </div>
               </div>
+              <div className={styles.proFeaturesList}>
+                <div className={styles.featuresImg}>
+                  <img src={read} alt={'read'} />
+                </div>
+                <div className={styles.featuresList}>
+                  <div className={styles.featuresTitle}>Read Replicas</div>
+                  <div className={styles.featuresDescription}>
+                    Native Read Replica support for enhanced performance and
+                    scalability
+                  </div>
+                </div>
+              </div>
             </div>
             <div className={styles.popUpFooter}>
               <a
@@ -726,11 +743,19 @@ class Main extends React.Component {
                   tooltips.remoteSchema,
                   '/remote-schemas/manage/schemas'
                 )}
-                {getSidebarItem(
+                {/*                {getSidebarItem(
                   'Events',
                   'fa-cloud',
                   tooltips.events,
                   '/events/manage/triggers'
+                )}
+                {' '}
+*/}{' '}
+                {getSidebarItem(
+                  'Events',
+                  'fa-cloud',
+                  tooltips.events,
+                  '/events/data/manage'
                 )}
               </ul>
             </div>

@@ -22,10 +22,16 @@ module Hasura.GraphQL.Transport.WebSocket.Server
   , HasuraServerApp
   , WSEventInfo(..)
   , WSQueueResponse(..)
+  , ServerMsgType(..)
   , createWSServer
   , closeAll
   , createServerApp
   , shutdown
+
+  , MonadWSLog (..)
+  , HasuraServerApp
+  , WSEvent(..)
+  , WSLog(..)
   ) where
 
 import qualified Control.Concurrent.Async                    as A
@@ -46,13 +52,13 @@ import           GHC.AssertNF
 import           GHC.Int                                     (Int64)
 import           Hasura.Prelude
 import qualified ListT
+import           Network.Wai.Extended                        (IpAddress)
 import qualified Network.WebSockets                          as WS
 import qualified StmContainers.Map                           as STMMap
 import qualified System.IO.Error                             as E
 
-import           Hasura.GraphQL.Transport.WebSocket.Protocol (OperationId, ServerMsgType)
+import           Hasura.GraphQL.Transport.WebSocket.Protocol (OperationId, ServerMsgType (..))
 import qualified Hasura.Logging                              as L
-import           Hasura.Server.Utils                         (IpAddress (..))
 
 newtype WSId
   = WSId { unWSId :: UUID.UUID }
@@ -93,7 +99,6 @@ $(J.deriveToJSON
                    }
   ''WSEventInfo)
 
-
 data WSLog
   = WSLog
   { _wslWebsocketId :: !WSId
@@ -110,19 +115,16 @@ instance L.ToEngineLog WSLog L.Hasura where
   toEngineLog wsLog =
     (L.LevelDebug, L.ELTInternal L.ILTWsServer, J.toJSON wsLog)
 
-class (Monad m) => WSServerLogger m where
-  logWSServer
-    :: L.Logger L.Hasura
-    -- ^ logger
-    -> WSLog
-    -- ^ ws server log data
-    -> m ()
+class Monad m => MonadWSLog m where
+  -- | Takes WS server log data and logs it
+  -- logWSServer
+  logWSLog :: L.Logger L.Hasura -> WSLog -> m ()
 
-instance WSServerLogger m => WSServerLogger (ExceptT e m) where
-  logWSServer l ws = lift $ logWSServer l ws
+instance MonadWSLog m => MonadWSLog (ExceptT e m) where
+  logWSLog l ws = lift $ logWSLog l ws
 
-instance WSServerLogger m => WSServerLogger (ReaderT r m) where
-  logWSServer l ws = lift $ logWSServer l ws
+instance MonadWSLog m => MonadWSLog (ReaderT r m) where
+  logWSLog l ws = lift $ logWSLog l ws
 
 data WSQueueResponse
   = WSQueueResponse
@@ -236,16 +238,20 @@ data WSHandlers m a
   , _hOnClose   :: OnCloseH m a
   }
 
+-- | aka generalized 'WS.ServerApp' over @m@, which takes an IPAddress
+type HasuraServerApp m = IpAddress -> WS.PendingConnection -> m ()
+
 createServerApp
-  :: (MonadIO m, MC.MonadBaseControl IO m, LA.Forall (LA.Pure m), WSServerLogger m)
+  :: (MonadIO m, MC.MonadBaseControl IO m, LA.Forall (LA.Pure m), MonadWSLog m)
   => WSServer a
   -> WSHandlers m a
   -- ^ user provided handlers
   -> HasuraServerApp m
+  -- ^ aka WS.ServerApp
 {-# INLINE createServerApp #-}
 createServerApp (WSServer logger@(L.Logger writeLog) serverStatus) wsHandlers !ipAddress !pendingConn = do
   wsId <- WSId <$> liftIO UUID.nextRandom
-  logWSServer logger $ WSLog wsId EConnectionRequest Nothing
+  logWSLog logger $ WSLog wsId EConnectionRequest Nothing
   status <- liftIO $ STM.readTVarIO serverStatus
   case status of
     AcceptingConns _ -> logUnexpectedExceptions $ do
@@ -272,11 +278,11 @@ createServerApp (WSServer logger@(L.Logger writeLog) serverStatus) wsHandlers !i
 
     onReject wsId rejectRequest = do
       liftIO $ WS.rejectRequestWith pendingConn rejectRequest
-      logWSServer logger $ WSLog wsId ERejected Nothing
+      logWSLog logger $ WSLog wsId ERejected Nothing
 
     onAccept wsId (AcceptWith a acceptWithParams keepAlive onJwtExpiry) = do
       conn  <- liftIO $ WS.acceptRequestWith pendingConn acceptWithParams
-      logWSServer logger $ WSLog wsId EAccepted Nothing
+      logWSLog logger $ WSLog wsId EAccepted Nothing
       sendQ <- liftIO STM.newTQueueIO
       let !wsConn = WSConn wsId logger conn sendQ a
       -- TODO there are many thunks here. Difficult to trace how much is retained, and
@@ -316,13 +322,13 @@ createServerApp (WSServer logger@(L.Logger writeLog) serverStatus) wsHandlers !i
                   -- Regardless this should be safe:
                   handleJust (guard . E.isResourceVanishedError) (\()-> throw WS.ConnectionClosed) $
                     WS.receiveData conn
-                logWSServer logger $ WSLog wsId (EMessageReceived $ TBS.fromLBS msg) Nothing
+                logWSLog logger $ WSLog wsId (EMessageReceived $ TBS.fromLBS msg) Nothing
                 _hOnMessage wsHandlers wsConn msg
 
           let send = forever $ do
                 WSQueueResponse msg wsInfo <- liftIO $ STM.atomically $ STM.readTQueue sendQ
                 liftIO $ WS.sendTextData conn msg
-                logWSServer logger $ WSLog wsId (EMessageSent $ TBS.fromLBS msg) wsInfo
+                logWSLog logger $ WSLog wsId (EMessageSent $ TBS.fromLBS msg) wsInfo
 
           -- withAsync lets us be very sure that if e.g. an async exception is raised while we're
           -- forking that the threads we launched will be cleaned up. See also below.
@@ -340,17 +346,17 @@ createServerApp (WSServer logger@(L.Logger writeLog) serverStatus) wsHandlers !i
             -- exceptions; for now handle all ConnectionException by closing
             -- and cleaning up, see: https://github.com/jaspervdj/websockets/issues/48
             Left ( _ :: WS.ConnectionException) -> do
-              logWSServer logger $ WSLog (_wcConnId wsConn) ECloseReceived Nothing
+              logWSLog logger $ WSLog (_wcConnId wsConn) ECloseReceived Nothing
             -- this will happen when jwt is expired
             Right _ -> do
-              logWSServer logger $ WSLog (_wcConnId wsConn) EJwtExpired Nothing
+              logWSLog logger $ WSLog (_wcConnId wsConn) EJwtExpired Nothing
 
     onConnClose wsConn = \case
       ShuttingDown -> pure ()
       AcceptingConns connMap -> do
         liftIO $ STM.atomically $ STMMap.delete (_wcConnId wsConn) connMap
         _hOnClose wsHandlers wsConn
-        logWSServer logger $ WSLog (_wcConnId wsConn) EClosed Nothing
+        logWSLog logger $ WSLog (_wcConnId wsConn) EClosed Nothing
 
 
 shutdown :: WSServer a -> IO ()

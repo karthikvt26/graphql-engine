@@ -2,9 +2,9 @@ module Hasura.Server.SchemaUpdate
   (startSchemaSyncThreads)
 where
 
+import           Hasura.Db
 import           Hasura.Prelude
 import           Hasura.Session
-
 import           Hasura.Logging
 import           Hasura.RQL.DDL.Schema       (runCacheRWT)
 import           Hasura.RQL.Types
@@ -230,6 +230,7 @@ refreshSchemaCache sqlGenCtx isPgCtx logger httpManager cacheRef invalidations t
     Right () -> logInfo logger threadType $ object ["message" .= msg]
  where
   runCtx = RunCtx adminUserInfo httpManager sqlGenCtx
+  pgCtx = mkPGExecCtx PG.Serializable pool
 
 logInfo :: Logger Hasura -> ThreadType -> Value -> IO ()
 logInfo logger threadType val = unLogger logger $

@@ -368,6 +368,7 @@ elif [ "$MODE" = "test" ]; then
 
   export EVENT_WEBHOOK_HEADER="MyEnvValue"
   export WEBHOOK_FROM_ENV="http://127.0.0.1:5592"
+  export SCHEDULED_TRIGGERS_WEBHOOK_DOMAIN="http://127.0.0.1:5594"
 
   # It's better UX to build first (possibly failing) before trying to launch
   # PG, but make sure that new-run uses the exact same build plan, else we risk
@@ -401,8 +402,18 @@ elif [ "$MODE" = "test" ]; then
     done
     echo " Ok"
 
-    ### Check for and install dependencies in venv
     cd "$PROJECT_ROOT/server/tests-py"
+
+    ## Install misc test dependencies:
+    if [ ! -d "node_modules" ]; then
+      npm_config_loglevel=error npm install remote_schemas/nodejs/
+    else
+      echo_pretty "It looks like node dependencies have been installed already. Skipping."
+      echo_pretty "If things fail please run this and try again"
+      echo_pretty "  $ rm -r \"$PROJECT_ROOT/server/tests-py/node_modules\""
+    fi
+
+    ### Check for and install dependencies in venv
     PY_VENV=.hasura-dev-python-venv
     DEVSH_VERSION_FILE=.devsh_version
     # Do we need to force reinstall?

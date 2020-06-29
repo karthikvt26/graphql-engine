@@ -26,7 +26,6 @@ import qualified Data.Attoparsec.Text as AT
 import qualified Data.HashSet         as Set
 import qualified Data.Text            as T
 
-
 data DomainParts =
   DomainParts
   { wdScheme :: !Text
@@ -63,6 +62,16 @@ instance J.ToJSON CorsConfig where
                  , "allowed_origins" J..= origs
                  ]   
                  
+instance J.FromJSON CorsConfig where
+  parseJSON = J.withObject "cors config" \o -> do
+    let parseAllowAll "*" = pure CCAllowAll
+        parseAllowAll _ = fail "unexpected string"
+    o .: "disabled" >>= \case
+      True -> CCDisabled <$> o .: "ws_read_cookie"
+      False -> o .: "allowed_origins" >>= \v ->
+        J.withText "origins" parseAllowAll v
+        <|> CCAllowedOrigins <$> J.parseJSON v
+
 instance J.FromJSON CorsConfig where
   parseJSON = J.withObject "cors config" \o -> do
     let parseAllowAll "*" = pure CCAllowAll

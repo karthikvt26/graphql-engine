@@ -1,7 +1,6 @@
 module Hasura.RQL.Types.RemoteSchema where
 
 import           Hasura.Prelude
-import           Hasura.RQL.Types.Common    (NonEmptyText)
 import           Language.Haskell.TH.Syntax (Lift)
 
 import qualified Data.Aeson                 as J
@@ -14,8 +13,9 @@ import qualified Data.Environment           as Env
 
 import           Hasura.Incremental         (Cacheable)
 import           Hasura.RQL.DDL.Headers     (HeaderConf (..))
+import           Hasura.RQL.Types.Common    (NonEmptyText (..))
 import           Hasura.RQL.Types.Error
-import           Hasura.SQL.Types           (DQuote)
+import           Hasura.SQL.Types
 
 type UrlFromEnv = Text
 
@@ -27,14 +27,19 @@ newtype RemoteSchemaName
            , Generic, Cacheable, Arbitrary
            )
 
+remoteSchemaNameToTxt :: RemoteSchemaName -> Text
+remoteSchemaNameToTxt = unNonEmptyText . unRemoteSchemaName
+
 data RemoteSchemaInfo
   = RemoteSchemaInfo
-  { rsUrl              :: !N.URI
+  { rsName             :: !RemoteSchemaName
+  , rsUrl              :: !N.URI
   , rsHeaders          :: ![HeaderConf]
   , rsFwdClientHeaders :: !Bool
   , rsTimeoutSeconds   :: !Int
   } deriving (Show, Eq, Lift, Generic)
-
+instance NFData RemoteSchemaInfo
+instance Cacheable RemoteSchemaInfo
 instance Hashable RemoteSchemaInfo
 
 $(J.deriveJSON (J.aesonDrop 2 J.snakeCase) ''RemoteSchemaInfo)
@@ -86,18 +91,31 @@ getUrlFromEnv env urlFromEnv = do
     invalidUri x = "not a valid URI: " <> T.pack x
     envNotFoundMsg e = "environment variable '" <> e <> "' not set"
 
+-- FIXME(Lyndon): env vars
 validateRemoteSchemaDef
   :: (MonadError QErr m, MonadIO m)
+<<<<<<< HEAD
   => Env.Environment
   -> RemoteSchemaDef
   -> m RemoteSchemaInfo
 validateRemoteSchemaDef env (RemoteSchemaDef mUrl mUrlEnv hdrC fwdHdrs mTimeout) =
+=======
+  => RemoteSchemaName
+  -> RemoteSchemaDef
+  -> m RemoteSchemaInfo
+validateRemoteSchemaDef rsName (RemoteSchemaDef mUrl mUrlEnv hdrC fwdHdrs mTimeout) =
+>>>>>>> master
   case (mUrl, mUrlEnv) of
     (Just url, Nothing)    ->
-      return $ RemoteSchemaInfo url hdrs fwdHdrs timeout
+      return $ RemoteSchemaInfo rsName url hdrs fwdHdrs timeout
     (Nothing, Just urlEnv) -> do
+<<<<<<< HEAD
       url <- getUrlFromEnv env urlEnv
       return $ RemoteSchemaInfo url hdrs fwdHdrs timeout
+=======
+      url <- getUrlFromEnv urlEnv
+      return $ RemoteSchemaInfo rsName url hdrs fwdHdrs timeout
+>>>>>>> master
     (Nothing, Nothing)     ->
         throw400 InvalidParams "both `url` and `url_from_env` can't be empty"
     (Just _, Just _)       ->
