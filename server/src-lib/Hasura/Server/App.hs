@@ -100,12 +100,9 @@ import qualified Hasura.GraphQL.Transport.WebSocket        as WS
 import qualified Hasura.GraphQL.Transport.WebSocket.Server as WS
 import qualified Hasura.Logging                            as L
 import qualified Hasura.Server.API.PGDump                  as PGD
-<<<<<<< HEAD
 import qualified Hasura.Tracing                            as Tracing
-=======
 import qualified Network.Wai.Handler.WebSockets.Custom     as WSC
 
->>>>>>> master
 
 data SchemaCacheRef
   = SchemaCacheRef
@@ -152,13 +149,8 @@ data HandlerCtx
   { hcServerCtx       :: !ServerCtx
   , hcUser            :: !UserInfo
   , hcReqHeaders      :: ![HTTP.Header]
-<<<<<<< HEAD
-  , hcSourceIpAddress :: !IpAddress
-  , hcRequestId       :: !RequestId
-=======
   , hcRequestId       :: !RequestId
   , hcSourceIpAddress :: !Wai.IpAddress
->>>>>>> master
   }
 
 type Handler m = ExceptT QErr (ReaderT HandlerCtx m)

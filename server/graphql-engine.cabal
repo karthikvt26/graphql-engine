@@ -239,8 +239,6 @@ library
                      , Hasura.Cache.Bounded
                      , Hasura.Cache.Unbounded
                      , Hasura.EncJSON
-                     , Hasura.Events.HTTP
-                     , Hasura.Events.Lib
                      , Hasura.GraphQL.Context
                      , Hasura.GraphQL.Execute
                      , Hasura.GraphQL.Execute.LiveQuery
@@ -298,7 +296,6 @@ library
                      , Hasura.GraphQL.Transport.WebSocket.Protocol
                      , Hasura.GraphQL.Transport.WebSocket.Server
                      , Hasura.GraphQL.Validate
-                     , Hasura.GraphQL.Validate.Field
                      , Hasura.HTTP
                      , Hasura.Incremental
                      , Hasura.Incremental.Internal.Cache
@@ -340,12 +337,7 @@ library
                      , Hasura.Session
                      , Network.Wai.Extended
 
-  other-modules:       Hasura.Incremental.Select
-                     , Hasura.Incremental.Internal.Cache
-                     , Hasura.Incremental.Internal.Dependency
-                     , Hasura.Incremental.Internal.Rule
-
-                     , Hasura.Server.Auth.WebHook
+  other-modules:       Hasura.Server.Auth.WebHook
                      , Hasura.Server.Middleware
                      , Hasura.Server.CheckUpdates
                      , Hasura.Server.SchemaUpdate
@@ -372,16 +364,12 @@ library
                      , Hasura.RQL.Types.Action
                      , Hasura.RQL.Types.RemoteSchema
                      , Hasura.RQL.Types.ScheduledTrigger
-                     , Hasura.RQL.DDL.ComputedField
                      , Hasura.RQL.DDL.Relationship
                      , Hasura.RQL.Types.CustomTypes
                      , Hasura.RQL.Types.RemoteRelationship
                      , Hasura.RQL.DDL.Deps
                      , Hasura.RQL.DDL.EventTrigger
                      , Hasura.RQL.DDL.Headers
-                     , Hasura.RQL.DDL.Metadata
-                     , Hasura.RQL.DDL.Metadata.Generator
-                     , Hasura.RQL.DDL.Metadata.Types
                      , Hasura.RQL.DDL.Permission
                      , Hasura.RQL.DDL.Permission.Internal
                      , Hasura.RQL.DDL.QueryCollection
@@ -398,11 +386,7 @@ library
                      , Hasura.RQL.DDL.Schema.Rename
                      , Hasura.RQL.DDL.Schema.Table
                      , Hasura.RQL.DDL.Utils
-                     , Hasura.RQL.DML.Count
                      , Hasura.RQL.DDL.ScheduledTrigger
-                     , Hasura.RQL.DDL.RemoteSchema
-                     , Hasura.RQL.DDL.Action
-                     , Hasura.RQL.DDL.CustomTypes
                      , Hasura.RQL.DDL.RemoteRelationship
                      , Hasura.RQL.DDL.RemoteRelationship.Validate
                      , Hasura.RQL.DML.Delete
@@ -414,26 +398,6 @@ library
                      , Hasura.RQL.DML.Select.Internal
                      , Hasura.RQL.DML.Select.Types
                      , Hasura.RQL.DML.Update
-                     , Hasura.RQL.GBoolExp
-                     , Hasura.RQL.Types
-                     , Hasura.RQL.Types.Run
-                     , Hasura.Server.API.Config
-                     , Hasura.Server.API.PGDump
-                     , Hasura.Server.API.Query
-                     , Hasura.Server.App
-                     , Hasura.Server.Auth
-                     , Hasura.Server.Auth.JWT
-                     , Hasura.Server.Compression
-                     , Hasura.Server.Cors
-                     , Hasura.Server.Init
-                     , Hasura.Server.Init.Config
-                     , Hasura.Server.Logging
-                     , Hasura.Server.Migrate
-                     , Hasura.Server.Telemetry
-                     , Hasura.Server.Telemetry.Counters
-                     , Hasura.Server.Utils
-                     , Hasura.Server.Version
-                     , Hasura.Session
                      , Hasura.SQL.DML
                      , Hasura.SQL.Error
                      , Hasura.SQL.GeoJSON
@@ -444,7 +408,6 @@ library
                      , Hasura.Tracing
                      , Network.URI.Extended
                      , Network.Wai.Handler.WebSockets.Custom
-
 executable graphql-engine
   import: common-all, common-exe
   hs-source-dirs:    src-exec
