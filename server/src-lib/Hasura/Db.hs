@@ -9,13 +9,6 @@ module Hasura.Db
   , RunLazyTx
 
   , PGExecCtx(..)
--- <<<<<<< HEAD
---   , IsPGExecCtx(..)
---   , withTxIsolation
---   , runLazyTx
---   , runLazyROTx'
---   , runLazyRWTx'
--- =======
   , mkPGExecCtx
   , runLazyTx
   , runQueryTx
