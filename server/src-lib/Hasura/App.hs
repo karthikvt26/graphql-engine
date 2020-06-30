@@ -504,7 +504,6 @@ runHGEServer env ServeOptions{..} InitCtx{..} pgExecCtx initTime (shutdownLatch,
     -- shuts down the server and associated resources.
     -- Structuring things this way lets us decide elsewhere exactly how
     -- we want to control shutdown.
-<<<<<<< HEAD
     shutdownHandler
       :: Logger Hasura
       -> [Immortal.Thread]
