@@ -39,12 +39,12 @@ import           Hasura.GraphQL.Execute.LiveQuery.Poll
 data LiveQueriesState
   = LiveQueriesState
   { _lqsOptions      :: !LiveQueriesOptions
-  , _lqsPGExecTx     :: !IsPGExecCtx
+  , _lqsPGExecTx     :: !PGExecCtx
   , _lqsLiveQueryMap :: !PollerMap
   }
 
-initLiveQueriesState :: LiveQueriesOptions -> IsPGExecCtx -> IO LiveQueriesState
-initLiveQueriesState options isPgCtx = LiveQueriesState options isPgCtx <$> STMMap.newIO
+initLiveQueriesState :: LiveQueriesOptions -> PGExecCtx -> IO LiveQueriesState
+initLiveQueriesState options pgCtx = LiveQueriesState options pgCtx <$> STMMap.newIO
 
 dumpLiveQueriesState :: Bool -> LiveQueriesState -> IO J.Value
 dumpLiveQueriesState extended (LiveQueriesState opts _ lqMap) = do

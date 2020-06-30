@@ -29,7 +29,6 @@ module Hasura.Server.Auth
 import qualified Control.Concurrent.Async.Lifted.Safe as LA
 import           Control.Concurrent.Extended          (forkImmortal)
 import           Control.Monad.Trans.Control          (MonadBaseControl)
-import           Data.Aeson                           (FromJSON, ToJSON)
 import           Data.IORef                           (newIORef)
 import           Data.Time.Clock                      (UTCTime)
 import           Hasura.Server.Version                (HasVersion)
@@ -103,9 +102,11 @@ data AuthMode
 -- This must only be run once, on launch.
 setupAuthMode
   :: ( HasVersion
+     , MonadError Text m
      , MonadIO m
      , MonadBaseControl IO m
      , LA.Forall (LA.Pure m)
+     , Tracing.MonadTrace m
      , Tracing.HasReporter m
      )
   => Maybe AdminSecretHash
@@ -146,7 +147,7 @@ setupAuthMode mAdminSecretHash mWebHook mJwtSecret mUnAuthRole httpManager logge
 
     -- | Given the 'JWTConfig' (the user input of JWT configuration), create
     -- the 'JWTCtx' (the runtime JWT config used)
-    mkJwtCtx :: (HasVersion, MonadIO m, MonadError T.Text m) => JWTConfig -> m JWTCtx
+    -- mkJwtCtx :: HasVersion => JWTConfig -> m JWTCtx
     mkJwtCtx JWTConfig{..} = do
       jwkRef <- case jcKeyOrUrl of
         Left jwk  -> liftIO $ newIORef (JWKSet [jwk])
@@ -162,7 +163,7 @@ setupAuthMode mAdminSecretHash mWebHook mJwtSecret mUnAuthRole httpManager logge
           case maybeExpiry of
             Nothing   -> return ref
             Just time -> do
-              void $ liftIO $ forkImmortal "jwkRefreshCtrl" logger $
+              void $ forkImmortal "jwkRefreshCtrl" logger $
                 jwkRefreshCtrl logger httpManager url ref (convertDuration time)
               return ref
 

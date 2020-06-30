@@ -8,7 +8,6 @@ module Hasura.Server.Logging
   , mkHttpErrorLogContext
   , mkHttpLog
   , HttpInfoLog(..)
-  , QueryLogger(..)
   , OperationLog(..)
   , HttpLogContext(..)
   , WebHookLog(..)
@@ -19,20 +18,20 @@ module Hasura.Server.Logging
 import           Data.Aeson
 import           Data.Aeson.Casing
 import           Data.Aeson.TH
-import           Data.Int                               (Int64)
+import           Data.Int                  (Int64)
 
-import qualified Data.ByteString.Lazy                   as BL
-import qualified Data.Text                              as T
-import qualified Network.HTTP.Types                     as HTTP
-import qualified Network.Wai.Extended                   as Wai
+import qualified Data.ByteString.Lazy      as BL
+import qualified Data.Text                 as T
+import qualified Network.HTTP.Types        as HTTP
+import qualified Network.Wai.Extended      as Wai
 
-import qualified Data.ByteString.Lazy                   as BL
-import qualified Data.Text                              as T
-import qualified Network.HTTP.Types                     as HTTP
-import qualified Network.Wai                            as Wai
+-- import qualified Data.ByteString.Lazy                   as BL
+-- import qualified Data.Text                              as T
+-- import qualified Network.HTTP.Types                     as HTTP
+-- import qualified Network.Wai                            as Wai
 
-import           Hasura.GraphQL.Execute.Query           (GeneratedSqlMap)
-import           Hasura.GraphQL.Transport.HTTP.Protocol (GQLReqUnparsed)
+-- import           Hasura.GraphQL.Execute.Query           (GeneratedSqlMap)
+-- import           Hasura.GraphQL.Transport.HTTP.Protocol (GQLReqUnparsed)
 import           Hasura.HTTP
 import           Hasura.Logging
 import           Hasura.Prelude
@@ -40,7 +39,7 @@ import           Hasura.RQL.Types
 import           Hasura.Server.Compression
 import           Hasura.Server.Utils
 import           Hasura.Session
-import           Hasura.Tracing                         (TraceT)
+import           Hasura.Tracing            (TraceT)
 
 data StartupLog
   = StartupLog
@@ -119,9 +118,6 @@ instance ToJSON WebHookLog where
            , "response" .= whlResponse whl
            , "message" .= whlMessage whl
            ]
-
-instance QueryLogger m => QueryLogger (TraceT m) where
-  logQuery l req sqlMap reqId = lift $ logQuery l req sqlMap reqId
 
 class (Monad m) => HttpLog m where
   logHttpError

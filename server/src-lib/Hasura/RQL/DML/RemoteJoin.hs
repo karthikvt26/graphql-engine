@@ -28,9 +28,9 @@ import           Hasura.SQL.Types                       ((<<>))
 
 import qualified Hasura.SQL.DML                         as S
 
-import qualified Data.Environment                       as Env
 import qualified Data.Aeson                             as A
 import qualified Data.Aeson.Ordered                     as AO
+import qualified Data.Environment                       as Env
 import qualified Data.HashMap.Strict                    as Map
 import qualified Data.HashMap.Strict.Extended           as Map
 import qualified Data.HashMap.Strict.InsOrd             as OMap
@@ -38,20 +38,19 @@ import qualified Data.HashSet                           as HS
 import qualified Data.List.NonEmpty                     as NE
 import qualified Data.Text                              as T
 import qualified Database.PG.Query                      as Q
+import qualified Hasura.Tracing                         as Tracing
 import qualified Language.GraphQL.Draft.Printer.Text    as G
 import qualified Language.GraphQL.Draft.Syntax          as G
 import qualified Network.HTTP.Client                    as HTTP
 import qualified Network.HTTP.Types                     as N
-import qualified Hasura.Tracing                         as Tracing
 
 -- | Executes given query and fetch response JSON from Postgres. Substitutes remote relationship fields.
 executeQueryWithRemoteJoins
-  ::
-  ( HasVersion
-  , MonadTx m
-  , MonadIO m
-  , Tracing.MonadTrace m
-  )
+  :: ( HasVersion
+     , MonadTx m
+     , MonadIO m
+     , Tracing.MonadTrace m
+     )
   => Env.Environment
   -> HTTP.Manager
   -> [N.Header]

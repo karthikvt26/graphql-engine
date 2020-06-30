@@ -12,18 +12,18 @@ import           Hasura.Session
 import qualified Data.Aeson                           as J
 import qualified Data.Aeson.Casing                    as J
 import qualified Data.Aeson.TH                        as J
+import qualified Data.Environment                     as Env
 import qualified Data.HashMap.Strict                  as Map
 import qualified Data.HashMap.Strict.InsOrd           as OMap
 import qualified Data.Sequence                        as Seq
 import qualified Data.Text                            as T
-import qualified Data.Environment                     as Env
+import qualified Database.PG.Query                    as Q
 import qualified Language.GraphQL.Draft.Syntax        as G
 
-import qualified Database.PG.Query                    as Q
 import qualified Hasura.RQL.DML.Insert                as RI
 import qualified Hasura.RQL.DML.Returning             as RR
-
 import qualified Hasura.SQL.DML                       as S
+import qualified Hasura.Tracing                       as Tracing
 
 import           Hasura.GraphQL.Resolve.BoolExp
 import           Hasura.GraphQL.Resolve.Context
@@ -297,7 +297,7 @@ validateInsert insCols objRels addCols = do
 -- | insert an object relationship and return affected rows
 -- | and parent dependent columns
 insertObjRel
-  :: (HasVersion, MonadTx m, MonadIO m)
+  :: (HasVersion, MonadTx m, MonadIO m, Tracing.MonadTrace m)
   => Env.Environment
   -> Bool
   -> MutationRemoteJoinCtx
@@ -334,7 +334,7 @@ decodeEncJSON =
 
 -- | insert an array relationship and return affected rows
 insertArrRel
-  :: (HasVersion, MonadTx m, MonadIO m)
+  :: (HasVersion, MonadTx m, MonadIO m, Tracing.MonadTrace m)
   => Env.Environment
   -> Bool
   -> MutationRemoteJoinCtx
@@ -361,7 +361,7 @@ insertArrRel env strfyNum rjCtx role resCols arrRelIns =
 
 -- | insert an object with object and array relationships
 insertObj
-  :: (HasVersion, MonadTx m, MonadIO m)
+  :: (HasVersion, MonadTx m, MonadIO m, Tracing.MonadTrace m)
   => Env.Environment
   -> Bool
   -> MutationRemoteJoinCtx
@@ -421,7 +421,11 @@ insertObj env strfyNum rjCtx role tn singleObjIns addCols = do
 
 -- | insert multiple Objects in postgres
 insertMultipleObjects
-  :: (HasVersion, MonadTx m, MonadIO m)
+  :: ( HasVersion
+     , MonadTx m
+     , MonadIO m
+     , Tracing.MonadTrace m
+     )
   => Env.Environment
   -> Bool
   -> MutationRemoteJoinCtx

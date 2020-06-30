@@ -17,7 +17,6 @@ module Hasura.Tracing
   ) where
 
 import           Hasura.Prelude
-
 import           Control.Monad.Trans.Control
 import           Data.String                 (fromString)
 
@@ -27,8 +26,7 @@ import qualified Network.HTTP.Client         as HTTP
 import qualified Network.HTTP.Types.Header   as HTTP
 import qualified System.Random               as Rand
 import qualified Web.HttpApiData             as HTTP
-
-import qualified Database.PG.Query.Transaction as Tx
+import qualified Database.PG.Query as Q
 
 -- | Any additional human-readable key-value pairs relevant
 -- to the execution of a block of code.
@@ -43,7 +41,7 @@ class Monad m => HasReporter m where
          -> Text
          -- ^ human-readable name for this block of code
          -> m (a, TracingMetadata)
-         -- ^ the action whose execution we want to report, returning 
+         -- ^ the action whose execution we want to report, returning
          -- any metadata emitted
          -> m a
 
@@ -52,10 +50,10 @@ class Monad m => HasReporter m where
 
 newtype NoReporter m a = NoReporter { runNoReporter :: m a }
   deriving (Functor, Applicative, Monad, MonadIO, MonadBase b, MonadBaseControl b, MonadError e, MonadReader r)
-  
+
 instance MonadTrans NoReporter where
   lift = NoReporter
-  
+
 instance Monad m => HasReporter (NoReporter m)
 
 instance HasReporter m => HasReporter (ReaderT r m) where
@@ -79,7 +77,7 @@ data TraceContext = TraceContext
 -- the current trace context.
 newtype TraceT m a = TraceT { unTraceT :: ReaderT TraceContext (WriterT TracingMetadata m) a }
   deriving (Functor, Applicative, Monad, MonadIO)
-  
+
 instance MonadTrans TraceT where
   lift = TraceT . lift . lift
 
@@ -89,7 +87,7 @@ deriving instance MonadBaseControl b m => MonadBaseControl b (TraceT m)
 instance MonadError e m => MonadError e (TraceT m) where
   throwError = lift . throwError
   catchError (TraceT m) f = TraceT (catchError m (unTraceT . f))
-  
+
 instance MonadReader r m => MonadReader r (TraceT m) where
   ask = TraceT $ lift ask
   local f m = TraceT $ mapReaderT (local f) (unTraceT m)
@@ -99,27 +97,27 @@ instance MonadReader r m => MonadReader r (TraceT m) where
 -- specify a name and metadata for that span.
 runTraceT :: (HasReporter m, MonadIO m) => Text -> TraceT m a -> m a
 runTraceT name tma = do
-  ctx <- TraceContext 
-           <$> liftIO Rand.randomIO 
+  ctx <- TraceContext
+           <$> liftIO Rand.randomIO
            <*> liftIO Rand.randomIO
            <*> pure Nothing
   runTraceTWith ctx name tma
-  
+
 -- | Run an action in the 'TraceT' monad transformer in an
 -- existing context.
 runTraceTWith :: HasReporter m => TraceContext -> Text -> TraceT m a -> m a
 runTraceTWith ctx name tma = do
   report ctx name $ runWriterT $ runReaderT (unTraceT tma) ctx
-  
+
 -- | Monads which support tracing. 'TraceT' is the standard example.
 class Monad m => MonadTrace m where
   -- | Trace the execution of a block of code, attaching a human-readable name.
   trace :: Text -> m a -> m a
-  
+
   -- | Ask for the current tracing context, so that we can provide it to any
   -- downstream services, e.g. in HTTP headers.
   currentContext :: m TraceContext
-  
+
   -- | Log some metadata to be attached to the current span
   attachMetadata :: TracingMetadata -> m ()
 
@@ -131,19 +129,19 @@ interpTraceT f (TraceT rwma) = do
   (b, meta) <- f (runWriterT (runReaderT rwma ctx))
   attachMetadata meta
   pure b
-   
--- | If the underlying monad can report trace data, then 'TraceT' will 
+
+-- | If the underlying monad can report trace data, then 'TraceT' will
 -- collect it and hand it off to that reporter.
 instance (HasReporter m, MonadIO m) => MonadTrace (TraceT m) where
   trace name ma = TraceT . ReaderT $ \ctx -> do
     spanId <- liftIO (Rand.randomIO :: IO Word64)
-    let subCtx = ctx { tcCurrentSpan = spanId 
+    let subCtx = ctx { tcCurrentSpan = spanId
                      , tcCurrentParent = Just (tcCurrentSpan ctx)
                      }
     lift . report ctx name . runWriterT $ runReaderT (unTraceT ma) subCtx
-    
+
   currentContext = TraceT ask
-  
+
   attachMetadata = TraceT . tell
 
 instance MonadTrace m => MonadTrace (ReaderT r m) where
@@ -161,8 +159,9 @@ instance MonadTrace m => MonadTrace (ExceptT e m) where
   currentContext = lift currentContext
   attachMetadata = lift . attachMetadata
 
-instance MonadTrace (Tx.TxE a) where
+instance MonadTrace (Q.TxE a) where
   -- FIXME: Phil - Could you add an implementation of trace here if required?
+
 
 -- | A HTTP request, which can be modified before execution.
 data SuspendedRequest m a = SuspendedRequest HTTP.Request (HTTP.Request -> m a)
@@ -174,19 +173,19 @@ data SuspendedRequest m a = SuspendedRequest HTTP.Request (HTTP.Request -> m a)
 extractHttpContext :: [HTTP.Header] -> IO (Maybe TraceContext)
 extractHttpContext hdrs = do
   freshSpanId <- liftIO Rand.randomIO
-  pure $ TraceContext 
+  pure $ TraceContext
     <$> (HTTP.parseHeaderMaybe =<< lookup "X-Hasura-TraceId" hdrs)
     <*> pure freshSpanId
     <*> pure (HTTP.parseHeaderMaybe =<< lookup "X-Hasura-SpanId" hdrs)
 
-traceHttpRequest 
-  :: MonadTrace m 
-  => Text 
-  -- ^ human-readable name for this block of code 
+traceHttpRequest
+  :: MonadTrace m
+  => Text
+  -- ^ human-readable name for this block of code
   -> m (SuspendedRequest m a)
   -- ^ an action which yields the request about to be executed and suspends
   -- before actually executing it
-  -> m a  
+  -> m a
 traceHttpRequest name f = trace name do
   SuspendedRequest req next <- f
   let reqBytes = case HTTP.requestBody req of
@@ -198,13 +197,11 @@ traceHttpRequest name f = trace name do
   for_ reqBytes \b ->
     attachMetadata [("request_body_bytes", fromString (show b))]
   TraceContext{..} <- currentContext
-  let tracingHeaders = 
+  let tracingHeaders =
         [ ("X-Hasura-TraceId", fromString (show tcCurrentTrace))
         , ("X-Hasura-SpanId", fromString (show tcCurrentSpan))
         ]
-      req' = req { HTTP.requestHeaders = 
+      req' = req { HTTP.requestHeaders =
                      tracingHeaders <> HTTP.requestHeaders req
                  }
   next req'
-  
-  

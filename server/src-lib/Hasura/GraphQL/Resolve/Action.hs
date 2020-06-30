@@ -141,7 +141,7 @@ resolveActionMutation env field executionContext userInfo =
     ActionMutationSyncWebhook executionContextSync ->
       resolveActionMutationSync env field executionContextSync userInfo
     ActionMutationAsync ->
-      (,[]) <$> resolveActionMutationAsync env field userInfo
+      (,[]) <$> resolveActionMutationAsync field userInfo
 
 -- | Synchronously execute webhook handler and resolve response to action "output"
 resolveActionMutationSync
@@ -176,12 +176,6 @@ resolveActionMutationSync env field executionContext userInfo = do
   selSet <- asObjectSelectionSet $ _fSelSet field
   selectAstUnresolved <-
     processOutputSelectionSet webhookResponseExpression outputType definitionList
--- <<<<<<< HEAD
---     (_fType field) $ _fSelSet field
---   astResolved <- RS.traverseAnnSimpleSel resolveValTxt selectAstUnresolved
---   let jsonAggType = mkJsonAggSelect outputType
---   return $ (,respHeaders) $ asSingleRowJsonResp (Q.fromBuilder $ toSQL $ RS.mkSQLSelect jsonAggType astResolved) []
--- =======
     (_fType field) selSet
   astResolved <- RS.traverseAnnSimpleSelect resolveValTxt selectAstUnresolved
   let (astResolvedWithoutRemoteJoins,maybeRemoteJoins) = RJ.getRemoteJoins astResolved
@@ -191,13 +185,48 @@ resolveActionMutationSync env field executionContext userInfo = do
       Just remoteJoins ->
         let query = Q.fromBuilder $ toSQL $
                     RS.mkSQLSelect jsonAggType astResolvedWithoutRemoteJoins
-        in RJ.executeQueryWithRemoteJoins manager reqHeaders userInfo query [] remoteJoins
+        in RJ.executeQueryWithRemoteJoins env manager reqHeaders userInfo query [] remoteJoins
       Nothing ->
         asSingleRowJsonResp (Q.fromBuilder $ toSQL $ RS.mkSQLSelect jsonAggType astResolved) []
 
   where
     ActionExecutionContext actionName outputType outputFields definitionList resolvedWebhook confHeaders
       forwardClientHeaders = executionContext
+--   let inputArgs = J.toJSON $ fmap annInpValueToJson $ _fArguments field
+--       actionContext = ActionContext actionName
+--       sessionVariables = _uiSession userInfo
+--       handlerPayload = ActionWebhookPayload actionContext sessionVariables inputArgs
+--   manager <- asks getter
+--   reqHeaders <- asks getter
+--   (webhookRes, respHeaders) <- callWebhook env manager outputType outputFields reqHeaders confHeaders
+--                                forwardClientHeaders resolvedWebhook handlerPayload
+--   let webhookResponseExpression = RS.AEInput $ UVSQL $
+--         toTxtValue $ WithScalarType PGJSONB $ PGValJSONB $ Q.JSONB $ J.toJSON webhookRes
+--   selSet <- asObjectSelectionSet $ _fSelSet field
+--   selectAstUnresolved <-
+--     processOutputSelectionSet webhookResponseExpression outputType definitionList
+-- -- <<<<<<< HEAD
+-- --     (_fType field) $ _fSelSet field
+-- --   astResolved <- RS.traverseAnnSimpleSel resolveValTxt selectAstUnresolved
+-- --   let jsonAggType = mkJsonAggSelect outputType
+-- --   return $ (,respHeaders) $ asSingleRowJsonResp (Q.fromBuilder $ toSQL $ RS.mkSQLSelect jsonAggType astResolved) []
+-- -- =======
+--     (_fType field) selSet
+--   astResolved <- RS.traverseAnnSimpleSelect resolveValTxt selectAstUnresolved
+--   let (astResolvedWithoutRemoteJoins,maybeRemoteJoins) = RJ.getRemoteJoins astResolved
+--       jsonAggType = mkJsonAggSelect outputType
+--   return $ (,respHeaders) $
+--     case maybeRemoteJoins of
+--       Just remoteJoins ->
+--         let query = Q.fromBuilder $ toSQL $
+--                     RS.mkSQLSelect jsonAggType astResolvedWithoutRemoteJoins
+--         in RJ.executeQueryWithRemoteJoins manager reqHeaders userInfo query [] remoteJoins
+--       Nothing ->
+--         asSingleRowJsonResp (Q.fromBuilder $ toSQL $ RS.mkSQLSelect jsonAggType astResolved) []
+
+--   where
+--     ActionExecutionContext actionName outputType outputFields definitionList resolvedWebhook confHeaders
+--       forwardClientHeaders = executionContext
 
 -- QueryActionExecuter is a type for a higher function, this is being used
 -- to allow or disallow where a query action can be executed. We would like
@@ -394,10 +423,10 @@ asyncActionsProcessor
      )
   => Env.Environment
   -> IORef (RebuildableSchemaCache Run, SchemaCacheVer)
-  -> IsPGExecCtx
+  -> Q.PGPool
   -> HTTP.Manager
   -> m void
-asyncActionsProcessor env cacheRef isPgExecCtx httpManager = forever $ do
+asyncActionsProcessor env cacheRef pgPool httpManager = forever $ do
   asyncInvocations <- liftIO getUndeliveredEvents
   actionCache <- scActions . lastBuiltSchemaCache . fst <$> liftIO (readIORef cacheRef)
   LA.mapConcurrently_ (callHandler actionCache) asyncInvocations
@@ -405,7 +434,7 @@ asyncActionsProcessor env cacheRef isPgExecCtx httpManager = forever $ do
   where
     runTx :: (Monoid a) => Q.TxE QErr a -> IO a
     runTx q = do
-      res <- runExceptT $ runLazyRWTx' isPgExecCtx $ liftTx q
+      res <- runExceptT $ Q.runTx' pgPool q
       either mempty return res
 
     callHandler :: ActionCache -> ActionLogItem -> m ()

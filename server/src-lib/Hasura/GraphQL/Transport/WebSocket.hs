@@ -52,8 +52,7 @@ import           Hasura.RQL.Types
 import           Hasura.Server.Auth                          (AuthMode, UserAuthentication,
                                                               resolveUserInfo)
 import           Hasura.Server.Cors
-import           Hasura.Server.Logging                       (QueryLogger (..))
-import           Hasura.Server.Utils                         (IpAddress (..), RequestId,
+import           Hasura.Server.Utils                         (RequestId,
                                                               getRequestId)
 import           Hasura.Server.Version                       (HasVersion)
 import           Hasura.Session
@@ -85,17 +84,17 @@ data ErrRespType
   | ERTGraphqlCompliant
   deriving (Show)
 
-data WsClientState
-  = WsClientState
-  { wscsUserInfo     :: !UserInfo
-  -- ^ the 'UserInfo' required to execute the query and various other things
-  , wscsTokenExpTime :: !(Maybe TC.UTCTime)
-  -- ^ the JWT expiry time, if any
-  , wscsReqHeaders   :: ![H.Header]
-  -- ^ headers from the client (in conn params) to forward to the remote schema
-  , wscsIpAddress    :: !IpAddress
-  -- ^ IP address required for 'GQLApiAuthorization'
-  }
+-- data WsClientState
+--   = WsClientState
+--   { wscsUserInfo     :: !UserInfo
+--   -- ^ the 'UserInfo' required to execute the query and various other things
+--   , wscsTokenExpTime :: !(Maybe TC.UTCTime)
+--   -- ^ the JWT expiry time, if any
+--   , wscsReqHeaders   :: ![H.Header]
+--   -- ^ headers from the client (in conn params) to forward to the remote schema
+--   , wscsIpAddress    :: !IpAddress
+--   -- ^ IP address required for 'GQLApiAuthorization'
+--   }
 
 data WSConnState
   = CSNotInitialised !WsHeaders !Wai.IpAddress
@@ -223,7 +222,7 @@ mkWsErrorLog uv ci ev =
 data WSServerEnv
   = WSServerEnv
   { _wseLogger          :: !(L.Logger L.Hasura)
-  , _wseRunTx           :: !IsPGExecCtx
+  , _wseRunTx           :: !PGExecCtx
   , _wseLiveQMap        :: !LQ.LiveQueriesState
   , _wseGCtxMap         :: !(IO (SchemaCache, SchemaCacheVer))
   -- ^ an action that always returns the latest version of the schema cache. See 'SchemaCacheRef'.
@@ -346,43 +345,37 @@ onStart env serverEnv wsConn (StartMsg opId q) = catchAndIgnore $ do
 
   reqParsedE <- lift $ E.checkGQLExecution userInfo (reqHdrs, ipAddress) enableAL sc q
   reqParsed <- either (withComplete . preExecErr requestId) return reqParsedE
-  execPlanE <- runExceptT $ E.getResolvedExecPlan pgExecCtx
+  execPlanE <- runExceptT $ E.getResolvedExecPlan env pgExecCtx
                planCache userInfo sqlGenCtx sc scVer queryType httpMgr reqHdrs (q, reqParsed)
 
   (telemCacheHit, execPlan) <- either (withComplete . preExecErr requestId) return execPlanE
   let execCtx = E.ExecutionCtx logger sqlGenCtx pgExecCtx planCache sc scVer httpMgr enableAL
 
   case execPlan of
-    E.GExPHasura (resolvedOp, txAccess) ->
-      runHasuraGQ timerTot telemCacheHit requestId q reqParsed userInfo txAccess resolvedOp
+    E.GExPHasura resolvedOp ->
+      runHasuraGQ timerTot telemCacheHit requestId q reqParsed userInfo resolvedOp
     E.GExPRemote rsi opDef  ->
       runRemoteGQ timerTot telemCacheHit execCtx requestId userInfo reqHdrs opDef rsi
   where
     telemTransport = Telem.HTTP
-    runHasuraGQ :: ExceptT () m DiffTime
--- <<<<<<< HEAD
---                 -> Telem.CacheHit 
---                 -> RequestId 
---                 -> GQLReqUnparsed 
---                 -> GQLReqParsed 
---                 -> UserInfo 
---                 -> Q.TxAccess
---                 -> E.ExecOp 
---                 -> ExceptT () m ()
---     runHasuraGQ timerTot telemCacheHit reqId query queryParsed userInfo txAccess = \case
---       E.ExOpQuery opTx genSql asts -> Tracing.trace "pg" do
---         execQueryOrMut Telem.Query genSql . fmap snd $
---           executeQuery queryParsed asts genSql pgExecCtx txAccess opTx
--- =======
-                -> Telem.CacheHit -> RequestId -> GQLReqUnparsed -> UserInfo -> E.ExecOp
-                -> ExceptT () m ()
-    runHasuraGQ timerTot telemCacheHit reqId query userInfo = \case
-      E.ExOpQuery opTx genSql -> Tracing.trace "pg" $
-        execQueryOrMut Telem.Query genSql $ runQueryTx pgExecCtx opTx
+    runHasuraGQ
+      :: ExceptT () m DiffTime
+      -> Telem.CacheHit
+      -> RequestId
+      -> GQLReqUnparsed
+      -> GQLReqParsed
+      -> UserInfo
+      -> E.ExecOp
+      -> ExceptT () m ()
+    runHasuraGQ timerTot telemCacheHit reqId query queryParsed userInfo = \case
+      E.ExOpQuery opTx genSql asts -> Tracing.trace "pg" $
+        execQueryOrMut Telem.Query genSql . fmap snd $
+          -- runQueryTx pgExecCtx opTx
+          executeQuery queryParsed asts genSql pgExecCtx Q.ReadOnly opTx
       -- Response headers discarded over websockets
       E.ExOpMutation _ opTx -> Tracing.trace "pg" do
         execQueryOrMut Telem.Mutation Nothing $
-          runLazyTx Q.ReadWrite pgExecCtx $ withUserInfo userInfo opTx
+          runLazyTx pgExecCtx Q.ReadWrite $ withUserInfo userInfo opTx
       E.ExOpSubs lqOp -> do
         -- log the graphql query
 -- <<<<<<< HEAD
@@ -412,8 +405,8 @@ onStart env serverEnv wsConn (StartMsg opId q) = catchAndIgnore $ do
 
       where
         telemLocality = Telem.Local
-        execQueryOrMut 
-          :: Telem.QueryType 
+        execQueryOrMut
+          :: Telem.QueryType
           -> Maybe EQ.GeneratedSqlMap
           -> ExceptT QErr (ExceptT () m) EncJSON
           -> ExceptT () m ()
@@ -699,7 +692,7 @@ onClose logger lqMap wsConn = do
 createWSServerEnv
   :: (MonadIO m)
   => L.Logger L.Hasura
-  -> IsPGExecCtx
+  -> PGExecCtx
   -> LQ.LiveQueriesState
   -> IO (SchemaCache, SchemaCacheVer)
   -> H.Manager

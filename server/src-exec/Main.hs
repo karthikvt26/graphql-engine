@@ -39,7 +39,7 @@ runApp :: Env.Environment -> HGEOptions Hasura -> AppM ()
 runApp env (HGEOptionsG rci hgeCmd) =
   withVersion $$(getVersionFromEnvironment) $ case hgeCmd of
     HCServe serveOptions -> do
-      (initCtx, initTime) <- initialiseCtx hgeCmd rci
+      (initCtx, initTime) <- initialiseCtx env hgeCmd rci
       shutdownLatch <- liftIO Conc.newEmptyMVar
       let shutdownApp = return ()
       -- Catches the SIGTERM signal and initiates a graceful shutdown. Graceful shutdown for regular HTTP
@@ -50,35 +50,24 @@ runApp env (HGEOptionsG rci hgeCmd) =
         Signals.sigTERM
         (Signals.CatchOnce (Conc.putMVar shutdownLatch ()))
         Nothing
-      runHGEServer env serveOptions initCtx initTime (shutdownLatch, shutdownApp)
 
--- =======
---       -- Catches the SIGTERM signal and initiates a graceful shutdown.
---       -- Graceful shutdown for regular HTTP requests is already implemented in
---       -- Warp, and is triggered by invoking the 'closeSocket' callback.
---       -- We only catch the SIGTERM signal once, that is, if the user hits CTRL-C
---       -- once again, we terminate the process immediately.
---       _ <- liftIO $ Signals.installHandler
---         Signals.sigTERM
---         (Signals.CatchOnce (shutdownGracefully initCtx))
---         Nothing
---       runHGEServer serveOptions initCtx Nothing initTime
--- >>>>>>> master
+      runHGEServer env serveOptions initCtx Nothing initTime (shutdownLatch, shutdownApp)
+
     HCExport -> do
-      (initCtx, _) <- initialiseCtx hgeCmd rci
-      res <- runTx' initCtx fetchMetadata
+      (initCtx, _) <- initialiseCtx env hgeCmd rci
+      res <- runTx' initCtx fetchMetadata Q.ReadCommitted
       either (printErrJExit 9) printJSON res
 
     HCClean -> do
-      (initCtx, _) <- initialiseCtx hgeCmd rci
-      res <- runTx' initCtx dropCatalog
+      (initCtx, _) <- initialiseCtx env hgeCmd rci
+      res <- runTx' initCtx dropCatalog Q.ReadCommitted
       either (printErrJExit 10) (const cleanSuccess) res
 
     HCExecute -> do
-      (InitCtx{..}, _) <- initialiseCtx hgeCmd rci
+      (InitCtx{..}, _) <- initialiseCtx env hgeCmd rci
       queryBs <- liftIO BL.getContents
       let sqlGenCtx = SQLGenCtx False
-      res <- runAsAdmin _icPgExecCtx sqlGenCtx _icHttpManager $ do
+      res <- runAsAdmin _icPgPool sqlGenCtx _icHttpManager $ do
         schemaCache <- buildRebuildableSchemaCache env
         execQuery env queryBs
           & runHasSystemDefinedT (SystemDefined False)
@@ -87,15 +76,15 @@ runApp env (HGEOptionsG rci hgeCmd) =
       either (printErrJExit 11) (liftIO . BLC.putStrLn) res
 
     HCDowngrade opts -> do
-      (InitCtx{..}, initTime) <- initialiseCtx hgeCmd rci
+      (InitCtx{..}, initTime) <- initialiseCtx env hgeCmd rci
       let sqlGenCtx = SQLGenCtx False
       res <- downgradeCatalog opts initTime
-             & runAsAdmin _icPgExecCtx sqlGenCtx _icHttpManager
+             & runAsAdmin _icPgPool sqlGenCtx _icHttpManager
       either (printErrJExit 12) (liftIO . print) res
 
     HCVersion -> liftIO $ putStrLn $ "Hasura GraphQL Engine: " ++ convertText currentVersion
   where
-    runTx' InitCtx{..} tx =
-      liftIO $ runExceptT $ runLazyTx Q.ReadWrite (withTxIsolation Q.Serializable _icPgExecCtx) $ liftTx tx
+    runTx' initCtx tx txIso =
+      liftIO $ runExceptT $ Q.runTx (_icPgPool initCtx) (txIso, Nothing) tx
 
     cleanSuccess = liftIO $ putStrLn "successfully cleaned graphql-engine related data"

@@ -224,10 +224,10 @@ type ValidatedSyntheticVariables = ValidatedVariables []
 -- Generates SQL of the format "select 'v1'::t1, 'v2'::t2 ..."
 validateVariables
   :: (Traversable f, MonadError QErr m, MonadIO m)
-  => IsPGExecCtx
+  => PGExecCtx
   -> f (WithScalarType PGScalarValue)
   -> m (ValidatedVariables f)
-validateVariables isPgCtx variableValues = do
+validateVariables pgExecCtx variableValues = do
   let valSel = mkValidationSel $ toList variableValues
   Q.Discard () <- runQueryTx_ $ liftTx $
     Q.rawQE dataExnErrHandler (Q.fromBuilder $ toSQL valSel) [] False
@@ -331,19 +331,20 @@ buildLiveQueryPlan
      , Tracing.MonadTrace m
      , HasVersion
      )
-  => PGExecCtx
+  => E.Environment
+  -> PGExecCtx
   -> QueryReusability
   -> QueryActionExecuter
   -> ObjectSelectionSet
   -> m (LiveQueryPlan, Maybe ReusableLiveQueryPlan)
-buildLiveQueryPlan pgExecCtx initialReusability actionExecuter selectionSet = do
+buildLiveQueryPlan env pgExecCtx initialReusability actionExecuter selectionSet = do
   ((resolvedASTMap, (queryVariableValues, syntheticVariableValues)), finalReusability) <-
     runReusabilityTWith initialReusability $
       flip runStateT mempty $ flip OMap.traverseWithKey (unAliasedFields $ unObjectSelectionSet selectionSet) $
       \_ field -> case GV._fName field of
         "__typename" -> throwVE "you cannot create a subscription on '__typename' field"
         _ -> do
-          unresolvedAST <- GR.queryFldToPGAST field actionExecuter
+          unresolvedAST <- GR.queryFldToPGAST env field actionExecuter
           resolvedAST <- GR.traverseQueryRootFldAST resolveMultiplexedValue unresolvedAST
 
           let (_, remoteJoins) = GR.toPGQuery resolvedAST
@@ -371,15 +372,15 @@ buildLiveQueryPlan pgExecCtx initialReusability actionExecuter selectionSet = do
 
 reuseLiveQueryPlan
   :: (MonadError QErr m, MonadIO m)
-  => IsPGExecCtx
+  => PGExecCtx
   -> SessionVariables
   -> Maybe GH.VariableValues
   -> ReusableLiveQueryPlan
   -> m LiveQueryPlan
-reuseLiveQueryPlan isPgCtx sessionVars queryVars reusablePlan = do
+reuseLiveQueryPlan pgExecCtx sessionVars queryVars reusablePlan = do
   let ReusableLiveQueryPlan parameterizedPlan syntheticVars queryVarTypes = reusablePlan
   annVarVals <- GV.validateVariablesForReuse queryVarTypes queryVars
-  validatedVars <- validateVariables isPgCtx annVarVals
+  validatedVars <- validateVariables pgExecCtx annVarVals
   pure $ LiveQueryPlan parameterizedPlan (CohortVariables sessionVars validatedVars syntheticVars)
 
 data LiveQueryPlanExplanation

@@ -152,10 +152,6 @@ data Subscriber
 -- newtype Subscriber = Subscriber { _sOnChangeCallback :: OnChange }
 -- >>>>>>> stable
 
-instance Show Subscriber where
-  show (Subscriber _ wsOpId) =
-    "Subscriber { _sOnChangeCallback = <fn> , _sWebsocketOperationId =" <> show wsOpId <> " }"
-
 -- | live query onChange metadata, used for adding more extra analytics data
 data LiveQueryMetadata
   = LiveQueryMetadata

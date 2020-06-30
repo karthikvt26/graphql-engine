@@ -156,7 +156,7 @@ queryFldToPGAST env fld actionExecuter = do
           f = case jsonAggType of
              DS.JASMultipleRows -> QRFActionExecuteList
              DS.JASSingleObject -> QRFActionExecuteObject
-      f <$> actionExecuter (RA.resolveActionQuery fld ctx (_uiSession userInfo))
+      f <$> actionExecuter (RA.resolveActionQuery env fld ctx (_uiSession userInfo))
     QCSelectConnection pk ctx -> do
       validateHdrs userInfo (_socHeaders ctx)
       QRFConnection <$> RS.convertConnectionSelect pk ctx fld
@@ -194,22 +194,22 @@ mutFldToTx env fld = do
   case opCtx of
     MCInsert ctx -> do
       validateHdrs userInfo (_iocHeaders ctx)
-      noRespHeaders $ RI.convertInsert rjCtx roleName (_iocTable ctx) fld
+      noRespHeaders $ RI.convertInsert env rjCtx roleName (_iocTable ctx) fld
     MCInsertOne ctx -> do
       validateHdrs userInfo (_iocHeaders ctx)
-      noRespHeaders $ RI.convertInsertOne rjCtx roleName (_iocTable ctx) fld
+      noRespHeaders $ RI.convertInsertOne env rjCtx roleName (_iocTable ctx) fld
     MCUpdate ctx -> do
       validateHdrs userInfo (_uocHeaders ctx)
-      noRespHeaders $ RM.convertUpdate ctx rjCtx fld
+      noRespHeaders $ RM.convertUpdate env ctx rjCtx fld
     MCUpdateByPk ctx -> do
       validateHdrs userInfo (_uocHeaders ctx)
-      noRespHeaders $ RM.convertUpdateByPk ctx rjCtx fld
+      noRespHeaders $ RM.convertUpdateByPk env ctx rjCtx fld
     MCDelete ctx -> do
       validateHdrs userInfo (_docHeaders ctx)
-      noRespHeaders $ RM.convertDelete ctx rjCtx fld
+      noRespHeaders $ RM.convertDelete env ctx rjCtx fld
     MCDeleteByPk ctx -> do
       validateHdrs userInfo (_docHeaders ctx)
-      noRespHeaders $ RM.convertDeleteByPk ctx rjCtx fld
+      noRespHeaders $ RM.convertDeleteByPk env ctx rjCtx fld
     MCAction ctx ->
 -- <<<<<<< HEAD
 --       RA.resolveActionMutation env fld ctx (_uiSession userInfo)

@@ -6,10 +6,10 @@ module Hasura.GraphQL.Explain
 import qualified Data.Aeson                             as J
 import qualified Data.Aeson.Casing                      as J
 import qualified Data.Aeson.TH                          as J
+import qualified Data.Environment                       as Env
 import qualified Data.HashMap.Strict                    as Map
 import qualified Database.PG.Query                      as Q
 import qualified Language.GraphQL.Draft.Syntax          as G
-import qualified Data.Environment                       as Env
 
 import           Hasura.EncJSON
 import           Hasura.GraphQL.Context
@@ -134,7 +134,7 @@ explainGQLQuery
      )
   => Env.Environment
   -> PGExecCtx
-  -> (Q.TxAccess -> tx EncJSON -> m EncJSON)
+  -> (tx EncJSON -> m EncJSON)
   -> SchemaCache
   -> SQLGenCtx
   -> QueryActionExecuter
@@ -155,11 +155,11 @@ explainGQLQuery env pgExecCtx runInTx sc sqlGenCtx actionExecuter (GQLExplain qu
   case rootSelSet of
     GV.RQuery selSet ->
       runInTx $ encJFromJValue . map snd <$>
-        GV.traverseObjectSelectionSet selSet (explainField userInfo gCtx sqlGenCtx actionExecuter)
+        GV.traverseObjectSelectionSet selSet (explainField env userInfo gCtx sqlGenCtx actionExecuter)
     GV.RMutation _ ->
       throw400 InvalidParams "only queries can be explained"
     GV.RSubscription fields -> do
-      (plan, _) <- E.getSubsOp pgExecCtx gCtx sqlGenCtx userInfo
+      (plan, _) <- E.getSubsOp env pgExecCtx gCtx sqlGenCtx userInfo
                      queryReusability actionExecuter fields
       runInTx $ encJFromJValue <$> E.explainLiveQueryPlan plan
   where

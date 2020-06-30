@@ -8,7 +8,7 @@ import           Control.Exception                         (IOException, try)
 import           Control.Lens                              (view, _2)
 import           Control.Monad.Morph                       (hoist)
 import           Control.Monad.Trans.Control               (MonadBaseControl)
-import qualified Control.Monad.Trans.Control               as MTC
+import           Data.String                               (fromString)
 
 import           Control.Monad.Stateless
 import           Control.Monad.Trans.Control               (MonadBaseControl)
@@ -25,9 +25,11 @@ import           System.FilePath                           (joinPath, takeFileNa
 import           Web.Spock.Core                            ((<//>))
 
 import qualified Control.Concurrent.Async.Lifted.Safe      as LA
-import qualified Data.Environment                          as Env
+import qualified Control.Monad.Trans.Control               as MTC
+import qualified Data.ByteString.Char8                     as B8
 import qualified Data.ByteString.Lazy                      as BL
 import qualified Data.CaseInsensitive                      as CI
+import qualified Data.Environment                          as Env
 import qualified Data.HashMap.Strict                       as M
 import qualified Data.HashSet                              as S
 import qualified Data.Text                                 as T
@@ -100,7 +102,7 @@ data SchemaCacheRef
 
 data ServerCtx
   = ServerCtx
-  { scPGExecCtx                    :: !IsPGExecCtx
+  { scPGExecCtx                    :: !PGExecCtx
   , scConnInfo                     :: !Q.ConnInfo
   , scLogger                       :: !(L.Logger L.Hasura)
   , scCacheRef                     :: !SchemaCacheRef
@@ -218,7 +220,7 @@ setHeader (headerName, headerValue) =
   Spock.setHeader (bsToTxt $ CI.original headerName) (bsToTxt headerValue)
 
 -- | Typeclass representing the metadata API authorization effect
-class MetadataApiAuthorization m where
+class Monad m => MetadataApiAuthorization m where
   authorizeMetadataApi :: HasVersion => RQLQuery -> UserInfo -> Handler m ()
 
 instance MetadataApiAuthorization m => MetadataApiAuthorization (Tracing.TraceT m) where
@@ -310,6 +312,7 @@ mkSpockAction serverCtx qErrEncoder qErrModifier apiHandler = do
 --         Right res -> logSuccessAndResp (Just userInfo) requestId req (fmap toJSON q) res (Just (ioWaitTime, serviceTime)) headers
 -- =======
         ipAddress = Wai.getSourceFromFallback req
+        pathInfo = Wai.rawPathInfo req
 
     tracingCtx <- liftIO $ Tracing.extractHttpContext headers
 
@@ -455,9 +458,14 @@ v1GQRelayHandler
 v1GQRelayHandler env = v1Alpha1GQHandler env E.QueryRelay
 
 gqlExplainHandler
-  :: (HasVersion, MonadIO m, Tracing.HasReporter m)
+  :: forall m
+   . ( HasVersion
+     , MonadIO m
+     , Tracing.HasReporter m
+     )
   => Env.Environment
-  -> GE.GQLExplain -> Handler m (HttpResponse EncJSON)
+  -> GE.GQLExplain
+  -> Handler (Tracing.TraceT m) (HttpResponse EncJSON)
 gqlExplainHandler env query = do
   onlyAdmin
   scRef <- scCacheRef . hcServerCtx <$> ask
@@ -465,13 +473,12 @@ gqlExplainHandler env query = do
   pgExecCtx <- scPGExecCtx . hcServerCtx <$> ask
   sqlGenCtx <- scSQLGenCtx . hcServerCtx <$> ask
 
-  let runTx :: Q.TxAccess
-            -> ReaderT HandlerCtx (Tracing.TraceT (Tracing.NoReporter (LazyTx QErr))) a
-            -> ExceptT QErr (ReaderT HandlerCtx (Tracing.TraceT m)) a
-      runTx txAccess rttx = ExceptT . ReaderT $ \ctx -> do
-        runExceptT (Tracing.interpTraceT (runLazyTx txAccess pgExecCtx . Tracing.runNoReporter) (runReaderT rttx ctx))
-        
-  res <- GE.explainGQLQuery env pgExecCtx runTx sc sqlGenCtx 
+  -- let runTx :: ReaderT HandlerCtx (Tracing.TraceT (Tracing.NoReporter (LazyTx QErr))) a
+  --           -> ExceptT QErr (ReaderT HandlerCtx (Tracing.TraceT m)) a
+  let runTx rttx = ExceptT . ReaderT $ \ctx -> do
+        runExceptT (Tracing.interpTraceT (runLazyTx pgExecCtx Q.ReadOnly . Tracing.runNoReporter) (runReaderT rttx ctx))
+
+  res <- GE.explainGQLQuery env pgExecCtx runTx sc sqlGenCtx
          (restrictActionExecuter "query actions cannot be explained") query
   return $ HttpResponse res []
 
@@ -610,9 +617,10 @@ mkWaiApp
      , Tracing.HasReporter m
      , GH.MonadExecuteQuery m
      )
-  -- ^ postgres transaction isolation to be used in the entire app
   => Env.Environment
   -- ^ Set of environment variables for reference in UIs
+  -> Q.TxIsolation
+  -- ^ postgres transaction isolation to be used in the entire app
   -> L.Logger L.Hasura
   -- ^ a 'L.Hasura' specific logger
   -> SQLGenCtx
@@ -647,7 +655,7 @@ mkWaiApp
 -- mkWaiApp env logger sqlGenCtx enableAL isPgCtx ci httpManager mode corsCfg enableConsole consoleAssetsDir
 --          enableTelemetry instanceId apis lqOpts planCacheOptions responseErrorsConfig = do
 -- =======
-mkWaiApp env logger sqlGenCtx enableAL pool pgExecCtxCustom ci httpManager mode corsCfg enableConsole consoleAssetsDir
+mkWaiApp env isoLevel logger sqlGenCtx enableAL pool pgExecCtxCustom ci httpManager mode corsCfg enableConsole consoleAssetsDir
          enableTelemetry instanceId apis lqOpts planCacheOptions responseErrorsConfig (schemaCache, cacheBuiltTime) = do
 
     (planCache, schemaCacheRef) <- initialiseCache
@@ -663,7 +671,7 @@ mkWaiApp env logger sqlGenCtx enableAL pool pgExecCtxCustom ci httpManager mode 
     ekgStore <- liftIO EKG.newStore
 
     let serverCtx = ServerCtx
-                    { scPGExecCtx       =  isPgCtx
+                    { scPGExecCtx       =  pgExecCtx
                     , scConnInfo        =  ci
                     , scLogger          =  logger
                     , scCacheRef        =  schemaCacheRef

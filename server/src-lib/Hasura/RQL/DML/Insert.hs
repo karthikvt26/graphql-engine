@@ -19,9 +19,9 @@ import           Hasura.Server.Version    (HasVersion)
 import           Hasura.Session
 import           Hasura.SQL.Types
 
+import qualified Data.Environment         as Env
 import qualified Database.PG.Query        as Q
 import qualified Hasura.SQL.DML           as S
-import qualified Data.Environment         as Env
 import qualified Hasura.Tracing           as Tracing
 
 data ConflictTarget
@@ -254,12 +254,11 @@ convInsQ =
   binRHSBuilder
 
 execInsertQuery
-  ::
-  ( HasVersion
-  , MonadTx m
-  , MonadIO m
-  , Tracing.MonadTrace m
-  )
+  :: ( HasVersion
+     , MonadTx m
+     , MonadIO m
+     , Tracing.MonadTrace m
+     )
   => Env.Environment
   -> Bool
   -> Maybe MutationRemoteJoinCtx
