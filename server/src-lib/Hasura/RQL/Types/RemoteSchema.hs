@@ -91,31 +91,19 @@ getUrlFromEnv env urlFromEnv = do
     invalidUri x = "not a valid URI: " <> T.pack x
     envNotFoundMsg e = "environment variable '" <> e <> "' not set"
 
--- FIXME(Lyndon): env vars
 validateRemoteSchemaDef
   :: (MonadError QErr m, MonadIO m)
-<<<<<<< HEAD
   => Env.Environment
+  -> RemoteSchemaName
   -> RemoteSchemaDef
   -> m RemoteSchemaInfo
-validateRemoteSchemaDef env (RemoteSchemaDef mUrl mUrlEnv hdrC fwdHdrs mTimeout) =
-=======
-  => RemoteSchemaName
-  -> RemoteSchemaDef
-  -> m RemoteSchemaInfo
-validateRemoteSchemaDef rsName (RemoteSchemaDef mUrl mUrlEnv hdrC fwdHdrs mTimeout) =
->>>>>>> master
+validateRemoteSchemaDef env rsName (RemoteSchemaDef mUrl mUrlEnv hdrC fwdHdrs mTimeout) =
   case (mUrl, mUrlEnv) of
     (Just url, Nothing)    ->
       return $ RemoteSchemaInfo rsName url hdrs fwdHdrs timeout
     (Nothing, Just urlEnv) -> do
-<<<<<<< HEAD
-      url <- getUrlFromEnv env urlEnv
-      return $ RemoteSchemaInfo url hdrs fwdHdrs timeout
-=======
-      url <- getUrlFromEnv urlEnv
+      url <- getUrlFromEnv env  urlEnv
       return $ RemoteSchemaInfo rsName url hdrs fwdHdrs timeout
->>>>>>> master
     (Nothing, Nothing)     ->
         throw400 InvalidParams "both `url` and `url_from_env` can't be empty"
     (Just _, Just _)       ->

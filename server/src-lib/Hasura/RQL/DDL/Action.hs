@@ -106,15 +106,9 @@ resolveAction
   -> m ( ResolvedActionDefinition
        , AnnotatedObjectType
        , HashSet PGScalarType
---FIXME(lyndon):envvars
-<<<<<<< HEAD
        -- ^ see Note [Postgres scalars in action input arguments].
        )
 resolveAction env customTypes allPGScalars actionDefinition = do
-=======
-       ) -- ^ see Note [Postgres scalars in action input arguments].
-resolveAction customTypes allPGScalars actionDefinition = do
->>>>>>> master
   let responseType = unGraphQLType $ _adOutputType actionDefinition
       responseBaseType = G.getBaseType responseType
 
@@ -141,7 +135,7 @@ resolveAction customTypes allPGScalars actionDefinition = do
 
   -- Check if the response type is an object
   outputObject <- getObjectTypeInfo responseBaseType
-  resolvedDef <- traverse resolveWebhook actionDefinition
+  resolvedDef <- traverse (resolveWebhook env) actionDefinition
   pure (resolvedDef, outputObject, reusedPGScalars)
   where
     getNonObjectTypeInfo typeName =

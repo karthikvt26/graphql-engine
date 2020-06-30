@@ -447,10 +447,6 @@ onStart env serverEnv wsConn (StartMsg opId q) = catchAndIgnore $ do
 
       -- if it's not a subscription, use HTTP to execute the query on the remote
       (runExceptT $ flip runReaderT execCtx $
-       -- FIXME(lyndon): env var
--- <<<<<<< HEAD
---         E.execRemoteGQ env reqId userInfo reqHdrs q rsi opDef) >>= \case
--- =======
         E.execRemoteGQ env reqId userInfo reqHdrs q rsi (G._todType opDef)) >>= \case
           Left  err           -> postExecErr reqId err
           Right (telemTimeIO_DT, !val) -> do

@@ -228,7 +228,7 @@ type OnConnH m a    = WSId -> WS.RequestHead -> IpAddress -> m (Either WS.Reject
 type OnCloseH m a   = WSConn a -> m ()
 type OnMessageH m a = WSConn a -> BL.ByteString -> m ()
 
--- | aka generalized 'WS.ServerApp' over m and which takes an IPAddress
+-- | aka generalized 'WS.ServerApp' over @m@, which takes an IPAddress
 type HasuraServerApp m = IpAddress -> WS.PendingConnection -> m ()
 
 data WSHandlers m a
@@ -237,9 +237,6 @@ data WSHandlers m a
   , _hOnMessage :: OnMessageH m a
   , _hOnClose   :: OnCloseH m a
   }
-
--- | aka generalized 'WS.ServerApp' over @m@, which takes an IPAddress
-type HasuraServerApp m = IpAddress -> WS.PendingConnection -> m ()
 
 createServerApp
   :: (MonadIO m, MC.MonadBaseControl IO m, LA.Forall (LA.Pure m), MonadWSLog m)

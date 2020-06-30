@@ -86,6 +86,7 @@ import           Hasura.SQL.Types
 import           System.Cron
 
 import qualified Data.Aeson                        as J
+import qualified Data.Environment                  as Env
 import qualified Data.Aeson.Casing                 as J
 import qualified Data.Aeson.TH                     as J
 import qualified Data.HashMap.Strict               as Map
@@ -352,12 +353,13 @@ processCronEvents logger logEnv httpMgr pgpool getSC = do
 
 processStandAloneEvents
   :: HasVersion
-  => L.Logger L.Hasura
+  => Env.Environment
+  -> L.Logger L.Hasura
   -> LogEnvHeaders
   -> HTTP.Manager
   -> Q.PGPool
   -> IO ()
-processStandAloneEvents logger logEnv httpMgr pgpool = do
+processStandAloneEvents env logger logEnv httpMgr pgpool = do
   standAloneScheduledEvents <-
     runExceptT $
       Q.runTx pgpool (Q.ReadCommitted, Just Q.ReadWrite) getOneOffScheduledEvents
@@ -373,8 +375,8 @@ processStandAloneEvents logger logEnv httpMgr pgpool = do
                                         headerConf
                                         comment  )
         -> do
-        webhookInfo <- runExceptT $ resolveWebhook webhookConf
-        headerInfo <- runExceptT $ getHeaderInfosFromConf headerConf
+        webhookInfo <- runExceptT $ resolveWebhook env webhookConf
+        headerInfo <- runExceptT $ getHeaderInfosFromConf env headerConf
 
         case webhookInfo of
           Right webhookInfo' -> do
@@ -406,16 +408,17 @@ processStandAloneEvents logger logEnv httpMgr pgpool = do
 
 processScheduledTriggers
   :: HasVersion
-  => L.Logger L.Hasura
+  => Env.Environment
+  -> L.Logger L.Hasura
   -> LogEnvHeaders
   -> HTTP.Manager
   -> Q.PGPool
   -> IO SchemaCache
   -> IO void
-processScheduledTriggers logger logEnv httpMgr pgpool getSC=
+processScheduledTriggers env logger logEnv httpMgr pgpool getSC=
   forever $ do
     processCronEvents logger logEnv httpMgr pgpool getSC
-    processStandAloneEvents logger logEnv httpMgr pgpool
+    processStandAloneEvents env logger logEnv httpMgr pgpool
     sleep (minutes 1)
 
 processScheduledEvent ::

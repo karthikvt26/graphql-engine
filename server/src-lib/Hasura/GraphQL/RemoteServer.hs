@@ -7,29 +7,16 @@ import           Data.Foldable                          (foldlM)
 import           Hasura.HTTP
 import           Hasura.Prelude
 
---FIXME(lyndon): env vars
-<<<<<<< HEAD
-import qualified Data.Aeson                    as J
-import qualified Data.ByteString.Lazy          as BL
-import qualified Data.HashMap.Strict           as Map
-import qualified Data.Text                     as T
-import qualified Data.Environment              as Env
-import qualified Language.GraphQL.Draft.Parser as G
-import qualified Language.GraphQL.Draft.Syntax as G
-import qualified Network.HTTP.Client           as HTTP
-import qualified Network.Wreq                  as Wreq
-=======
 import qualified Data.Aeson                             as J
 import qualified Data.ByteString.Lazy                   as BL
+import qualified Data.Environment                       as Env
 import qualified Data.HashMap.Strict                    as Map
 import qualified Data.Text                              as T
-import qualified Language.GraphQL.Draft.Parser          as G
 import qualified Language.GraphQL.Draft.Syntax          as G
 import qualified Language.Haskell.TH.Syntax             as TH
 import qualified Network.HTTP.Client                    as HTTP
 import qualified Network.HTTP.Types                     as N
 import qualified Network.Wreq                           as Wreq
->>>>>>> master
 
 import           Hasura.GraphQL.Schema.Merge
 import           Hasura.GraphQL.Transport.HTTP.Protocol
@@ -57,20 +44,13 @@ introspectionQuery =
 
 fetchRemoteSchema
   :: (HasVersion, MonadIO m, MonadError QErr m)
---FIXME(lyndon): env vars
-<<<<<<< HEAD
   => Env.Environment
   -> HTTP.Manager
   -> RemoteSchemaName
   -> RemoteSchemaInfo
   -> m GC.RemoteGCtx
-fetchRemoteSchema env manager name def@(RemoteSchemaInfo url headerConf _ timeout) = do
+fetchRemoteSchema env manager def@(RemoteSchemaInfo name url headerConf _ timeout) = do
   headers <- makeHeadersFromConf env headerConf
-=======
-  => HTTP.Manager -> RemoteSchemaInfo -> m GC.RemoteGCtx
-fetchRemoteSchema manager def@(RemoteSchemaInfo name url headerConf _ timeout) = do
-  headers <- makeHeadersFromConf headerConf
->>>>>>> master
   let hdrsWithDefaults = addDefaultHeaders headers
 
   initReqE <- liftIO $ try $ HTTP.parseRequest (show url)

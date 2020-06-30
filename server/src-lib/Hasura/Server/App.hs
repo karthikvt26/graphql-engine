@@ -418,15 +418,6 @@ v1QueryHandler env query = do
       runQuery env pgExecCtx instanceId userInfo schemaCache httpMgr sqlGenCtx (SystemDefined False) query
 
 v1Alpha1GQHandler
--- FIXME(lyndon): verify
--- <<<<<<< HEAD
---   :: (HasVersion, MonadIO m, E.GQLApiAuthorization m, QueryLogger m)
---   => GH.GQLBatchedReqs GH.GQLQueryText -> Handler m (HttpResponse EncJSON)
--- v1Alpha1GQHandler env query = do
---   userInfo <- asks hcUser
---   reqHeaders <- asks hcReqHeaders
---   ipAddress <- asks hcSourceIpAddress
--- =======
   :: (HasVersion, MonadIO m, E.MonadGQLExecutionCheck m, MonadQueryLog m, Tracing.MonadTrace m, GH.MonadExecuteQuery m)
   => Env.Environment -> E.GraphQLQueryType -> GH.GQLBatchedReqs GH.GQLQueryText -> Handler m (HttpResponse EncJSON)
 v1Alpha1GQHandler env queryType query = do
@@ -434,6 +425,7 @@ v1Alpha1GQHandler env queryType query = do
   reqHeaders <- asks hcReqHeaders
   ipAddress <- asks hcSourceIpAddress
   requestId <- asks hcRequestId
+  -- Might be cleaner to use the asks function...
   manager <- scManager . hcServerCtx <$> ask
   scRef <- scCacheRef . hcServerCtx <$> ask
 
@@ -448,27 +440,6 @@ v1Alpha1GQHandler env queryType query = do
                 (lastBuiltSchemaCache sc) scVer manager enableAL
   flip runReaderT execCtx $
     GH.runGQBatched env requestId responseErrorsConfig userInfo ipAddress reqHeaders queryType query
--- <<<<<<< HEAD
---     GH.runGQBatched env requestId responseErrorsConfig userInfo ipAddress reqHeaders query
-
--- v1GQHandler
---   :: (HasVersion, E.GQLApiAuthorization m, MonadIO m, QueryLogger m, Tracing.MonadTrace m, GH.MonadExecuteQuery m)
---   => Env.Environment
---   -> GH.GQLBatchedReqs GH.GQLQueryText
---   -> Handler m (HttpResponse EncJSON)
--- v1GQHandler env = v1Alpha1GQHandler env
-
--- gqlExplainHandler
---   :: forall m
---    . ( HasVersion
---      , MonadIO m
---      , Tracing.HasReporter m
---      )
---   => Env.Environment
---   -> GE.GQLExplain
---   -> Handler (Tracing.TraceT m) (HttpResponse EncJSON)
--- gqlExplainHandler env query = do
--- =======
 
 v1GQHandler
   :: (HasVersion, MonadIO m, E.MonadGQLExecutionCheck m, MonadQueryLog m, Tracing.MonadTrace m, GH.MonadExecuteQuery m)

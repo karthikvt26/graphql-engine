@@ -58,6 +58,7 @@ import           Data.Aeson.Casing
 import           Data.Aeson.TH
 import           Data.Int                             (Int64)
 import           Data.String
+import           Data.Has
 import           Data.Time.Clock
 import           Data.Word
 import           Hasura.Eventing.HTTP
@@ -256,7 +257,7 @@ processEventQueue logger logenv httpMgr pool getSchemaCache eeCtx@EventEngineCtx
       -- Prefetch next events payload while concurrently working through our current batch.
       -- NOTE: we probably don't need to prefetch so early, but probably not
       -- worth the effort for something more fine-tuned
-      eventsNext <- withAsync popEventsBatch $ \eventsNextA -> do
+      eventsNext <- LA.withAsync popEventsBatch $ \eventsNextA -> do
         -- process approximately in order, minding HASURA_GRAPHQL_EVENTS_HTTP_POOL_SIZE:
 -- <<<<<<< HEAD:server/src-lib/Hasura/Events/Lib.hs
 --         forM_ events $ \event ->
@@ -284,7 +285,7 @@ processEventQueue logger logenv httpMgr pool getSchemaCache eeCtx@EventEngineCtx
              -- removing an event from the _eeCtxLockedEvents after the event has
              -- been processed
              removeEventFromLockedEvents (eId event)
-        wait eventsNextA
+        LA.wait eventsNextA
 
       let lenEvents = length events
       if | lenEvents == fetchBatchSize -> do

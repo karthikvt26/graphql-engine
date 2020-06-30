@@ -69,14 +69,8 @@ addRemoteSchemaP2Setup
   -> m RemoteSchemaCtx
 addRemoteSchemaP2Setup env (AddRemoteSchemaQuery name def _) = do
   httpMgr <- askHttpManager
--- FIXME(Lyndon): env vars
-<<<<<<< HEAD
-  rsi <- validateRemoteSchemaDef env def
+  rsi <- validateRemoteSchemaDef env name def
   gCtx <- fetchRemoteSchema env httpMgr name rsi
-  pure $ RemoteSchemaCtx name gCtx rsi
-=======
-  rsi <- validateRemoteSchemaDef name def
-  gCtx <- fetchRemoteSchema httpMgr rsi
   pure $ RemoteSchemaCtx name (convRemoteGCtx gCtx) rsi
   where
     convRemoteGCtx rmGCtx =
@@ -85,7 +79,6 @@ addRemoteSchemaP2Setup env (AddRemoteSchemaQuery name def _) = do
                    , GS._gMutRoot   = GC._rgMutationRoot rmGCtx
                    , GS._gSubRoot   = GC._rgSubscriptionRoot rmGCtx
                    }
->>>>>>> master
 
 addRemoteSchemaP2
   :: (HasVersion, MonadTx m, MonadIO m, HasHttpManager m) => Env.Environment -> AddRemoteSchemaQuery -> m ()

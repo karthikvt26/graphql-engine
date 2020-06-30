@@ -72,16 +72,6 @@ instance J.FromJSON CorsConfig where
         J.withText "origins" parseAllowAll v
         <|> CCAllowedOrigins <$> J.parseJSON v
 
-instance J.FromJSON CorsConfig where
-  parseJSON = J.withObject "cors config" \o -> do
-    let parseAllowAll "*" = pure CCAllowAll
-        parseAllowAll _ = fail "unexpected string"
-    o .: "disabled" >>= \case
-      True -> CCDisabled <$> o .: "ws_read_cookie"
-      False -> o .: "allowed_origins" >>= \v ->
-        J.withText "origins" parseAllowAll v
-        <|> CCAllowedOrigins <$> J.parseJSON v
-
 isCorsDisabled :: CorsConfig -> Bool
 isCorsDisabled = \case
   CCDisabled _ -> True
