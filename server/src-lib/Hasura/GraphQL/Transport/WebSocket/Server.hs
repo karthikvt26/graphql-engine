@@ -28,9 +28,6 @@ module Hasura.GraphQL.Transport.WebSocket.Server
   , shutdown
 
   , MonadWSLog (..)
-  , HasuraServerApp
-  , WSEvent(..)
-  , WSLog(..)
   ) where
 
 import qualified Control.Concurrent.Async                    as A

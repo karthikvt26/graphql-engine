@@ -378,15 +378,6 @@ onStart env serverEnv wsConn (StartMsg opId q) = catchAndIgnore $ do
           runLazyTx pgExecCtx Q.ReadWrite $ withUserInfo userInfo opTx
       E.ExOpSubs lqOp -> do
         -- log the graphql query
--- <<<<<<< HEAD
---         logQuery logger query Nothing reqId
---         let wsId = WS.getWSId wsConn
---             uniqSubId = LQ.UniqueSubscriberId wsId opId
---         -- NOTE!: we mask async exceptions higher in the call stack, but it's
---         -- crucial we don't lose lqId after addLiveQuery returns successfully.
---         !lqId <- liftIO $ LQ.addLiveQuery logger uniqSubId lqMap lqOp liveQOnChange
--- =======
-        -- L.unLogger logger $ QueryLog query Nothing reqId
         logQueryLog logger query Nothing reqId
         let subscriberMetadata = LQ.mkSubscriberMetadata $ J.object
                                  [ "websocket_id" J..= WS.getWSId wsConn
@@ -515,13 +506,6 @@ onStart env serverEnv wsConn (StartMsg opId q) = catchAndIgnore $ do
 
     -- on change, send message on the websocket
     liveQOnChange :: LQ.OnChange
--- <<<<<<< HEAD
---     liveQOnChange (GQSuccess (LQ.LiveQueryResponse bs dTime)) =
---       sendMsgWithMetadata wsConn (SMData $ DataMsg opId $ GRHasura $ GQSuccess bs) $
---         LQ.LiveQueryMetadata dTime
---     liveQOnChange resp = sendMsg wsConn $ SMData $ DataMsg opId $ GRHasura $
---       LQ._lqrPayload <$> resp
--- =======
     liveQOnChange = \case
       GQSuccess (LQ.LiveQueryResponse bs dTime) ->
         sendMsgWithMetadata wsConn
@@ -534,7 +518,14 @@ onStart env serverEnv wsConn (StartMsg opId q) = catchAndIgnore $ do
     catchAndIgnore m = void $ runExceptT m
 
 onMessage
-  :: (HasVersion, MonadIO m, UserAuthentication (Tracing.TraceT m), E.MonadGQLExecutionCheck m, MonadQueryLog m, Tracing.HasReporter m, MonadExecuteQuery m)
+  :: ( HasVersion
+     , MonadIO m
+     , UserAuthentication (Tracing.TraceT m)
+     , E.MonadGQLExecutionCheck m
+     , MonadQueryLog m
+     , Tracing.HasReporter m
+     , MonadExecuteQuery m
+     )
   => Env.Environment
   -> AuthMode
   -> WSServerEnv

@@ -321,28 +321,6 @@ processAuthZHeader jwtCtx@JWTCtx{jcxClaimNs, jcxClaimsFormat} authzHeader = do
   -- return hasura claims value as an object. parse from string possibly
   (, expTimeM) <$> parseObjectFromString hasuraClaimsV
 
--- <<<<<<< HEAD
---   -- get hasura claims value as an object. parse from string possibly
---   hasuraClaims <- parseObjectFromString claimsFmt hasuraClaimsV
-
---   -- filter only x-hasura claims and convert to lower-case
---   let claimsMap = Map.filterWithKey (\k _ -> isSessionVariable k)
---                 $ Map.fromList $ map (first T.toLower)
---                 $ Map.toList hasuraClaims
-
---   HasuraClaims allowedRoles defaultRole <- parseHasuraClaims claimsMap
---   let roleName = getCurrentRole defaultRole
-
---   when (roleName `notElem` allowedRoles) currRoleNotAllowed
---   let finalClaims =
---         Map.delete defaultRoleClaim . Map.delete allowedRolesClaim $ claimsMap
-
---   -- transform the map of text:aeson-value -> text:text
---   metadata <- decodeJSON $ J.Object finalClaims
---   userInfo <- mkUserInfo (URBPreDetermined roleName) UAdminSecretNotSent $
---               mkSessionVariablesText $ Map.toList metadata
---   pure (userInfo, expTimeM)
--- =======
   where
     parseAuthzHeader = do
       let tokenParts = BLC.words authzHeader

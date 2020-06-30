@@ -7,8 +7,6 @@ import           Control.Exception (throwIO)
 import           Control.Monad.Base
 import           Control.Monad.Catch                       (MonadCatch, MonadThrow, onException, Exception)
 import           Control.Lens                              (view, _2)
-import           Control.Monad.Base
-import           Control.Monad.Catch                       (MonadCatch, MonadThrow, onException)
 import           Control.Monad.Stateless
 import           Control.Monad.STM                         (atomically)
 import           Control.Monad.Trans.Control               (MonadBaseControl (..))
@@ -17,9 +15,7 @@ import           Data.Time.Clock                           (UTCTime)
 import           GHC.AssertNF
 import           Options.Applicative
 import           System.Environment                        (getEnvironment, lookupEnv)
-import           System.Exit                               (exitFailure)
 
-import qualified Control.Concurrent.Async                  as Async
 import qualified Control.Concurrent.Async.Lifted.Safe      as LA
 import qualified Control.Concurrent.Extended               as C
 import qualified Data.Aeson                                as A
@@ -36,7 +32,7 @@ import qualified Network.HTTP.Client.TLS                   as HTTP
 import qualified Network.Wai.Handler.Warp                  as Warp
 import qualified System.Log.FastLogger                     as FL
 import qualified Text.Mustache.Compile                     as M
-import qualified Control.Immortal as Immortal
+import qualified Control.Immortal                          as Immortal
 
 import           Hasura.GraphQL.Transport.HTTP             (MonadExecuteQuery(..))
 import           Hasura.Db
@@ -136,14 +132,6 @@ mkPGLogger (Logger logger) (Q.PLERetryMsg msg) =
 -- | most of the required types for initializing graphql-engine
 data InitCtx
   = InitCtx
--- <<<<<<< HEAD
---   { _icHttpManager :: !HTTP.Manager
---   , _icInstanceId  :: !InstanceId
---   -- , _icDbUid       :: !Text
---   , _icLoggers     :: !Loggers
---   , _icConnInfo    :: !Q.ConnInfo
---   , _icPgExecCtx   :: !IsPGExecCtx
--- =======
   { _icHttpManager   :: !HTTP.Manager
   , _icInstanceId    :: !InstanceId
   , _icLoggers       :: !Loggers
@@ -182,10 +170,6 @@ initialiseCtx env hgeCmd rci = do
   httpManager <- liftIO $ HTTP.newManager HTTP.tlsManagerSettings
   instanceId <- liftIO generateInstanceId
   connInfo <- liftIO procConnInfo
--- <<<<<<< HEAD
---   (loggers, _, isPGCtx) <- case hgeCmd of
---     -- for server command generate a proper pool
--- =======
   latch <- liftIO newShutdownLatch
   (loggers, pool, sqlGenCtx) <- case hgeCmd of
     -- for the @serve@ command generate a regular PG pool
@@ -196,22 +180,12 @@ initialiseCtx env hgeCmd rci = do
       -- log postgres connection info
       unLogger logger $ connInfoToLog connInfo
       pool <- liftIO $ Q.initPGPool connInfo soConnParams pgLogger
--- <<<<<<< HEAD
---       let isPgCtx = mkIsPgCtx pool soTxIso
-
---       return (l, pool, isPgCtx)
--- =======
       pure (l, pool, SQLGenCtx soStringifyNum)
 
     -- for other commands generate a minimal PG pool
     _ -> do
       l@(Loggers _ _ pgLogger) <- mkLoggers defaultEnabledLogTypes LevelInfo
       pool <- getMinimalPool pgLogger connInfo
--- <<<<<<< HEAD
---       return (l, pool, mkIsPgCtx pool Q.Serializable)
-
---   return (InitCtx httpManager instanceId loggers connInfo isPGCtx, initTime)
--- =======
       pure (l, pool, SQLGenCtx False)
 
   res <- flip onException (flushLogger (_lsLoggerCtx loggers)) $
@@ -250,7 +224,7 @@ migrateCatalogSchema env logger pool httpManager sqlGenCtx = do
         , slKind = "db_migrate"
         , slInfo = A.toJSON err
         }
-      liftIO exitFailure
+      liftIO (printErrExit 14 "Migrate error")
   unLogger logger migrationResult
   return (schemaCache, view _2 <$> lastUpdateEvent)
 
@@ -426,9 +400,6 @@ runHGEServer env ServeOptions{..} InitCtx{..} pgExecCtx initTime (shutdownLatch,
   let warpSettings = Warp.setPort soPort
                      . Warp.setHost soHost
                      . Warp.setGracefulShutdownTimeout (Just 30) -- 30s graceful shutdown
--- <<<<<<< HEAD
---                      . Warp.setInstallShutdownHandler (shutdownHandler logger immortalThreads stopWsServer eventEngineCtx _icPgExecCtx)
--- =======
                      . Warp.setInstallShutdownHandler (shutdownHandler _icLoggers immortalThreads stopWsServer eventEngineCtx _icPgPool)
                      $ Warp.defaultSettings
   liftIO $ Warp.runSettings warpSettings app

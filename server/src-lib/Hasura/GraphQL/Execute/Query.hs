@@ -201,27 +201,12 @@ convertQuerySelSet
      , MonadIO m
      , Tracing.MonadTrace m
      )
--- <<<<<<< HEAD
---   -> QueryReusability
---   -> V.SelSet
---   -> QueryActionExecuter
---   -> m (LazyRespTx, Maybe ReusableQueryPlan, GeneratedSqlMap, [R.QueryRootFldUnresolved])
--- convertQuerySelSet env initialReusability fields actionRunner = do
---   usrVars <- asks (_uiSession . getter)
---   (fldPlansAndAst, finalReusability) <- runReusabilityTWith initialReusability $
---     forM (toList fields) $ \fld -> do
---       (fldPlan, ast) <- case V._fName fld of
---         "__type"     -> ((, Nothing) . fldPlanFromJ) <$> R.typeR fld
---         "__schema"   -> ((, Nothing) . fldPlanFromJ) <$> R.schemaR fld
---         "__typename" -> pure (fldPlanFromJ queryRootNamedType, Nothing)
--- =======
   => Env.Environment
   -> HTTP.Manager
   -> [N.Header]
   -> QueryReusability
   -> V.ObjectSelectionSet
   -> QueryActionExecuter
-  -- -> m (LazyRespTx, Maybe ReusableQueryPlan, GeneratedSqlMap)
   -> m (LazyRespTx, Maybe ReusableQueryPlan, GeneratedSqlMap, [R.QueryRootFldUnresolved])
 convertQuerySelSet env manager reqHdrs initialReusability selSet actionRunner = do
   userInfo <- asks getter

@@ -5,22 +5,17 @@ module Hasura.Server.App where
 
 import           Control.Concurrent.MVar.Lifted
 import           Control.Exception                         (IOException, try)
-import           Control.Lens                              (view, _2)
 import           Control.Monad.Morph                       (hoist)
 import           Control.Monad.Trans.Control               (MonadBaseControl)
 import           Data.String                               (fromString)
 
 import           Control.Monad.Stateless
-import           Control.Monad.Trans.Control               (MonadBaseControl)
 import           Data.Aeson                                hiding (json)
-import           Data.Either                               (isRight)
 import           Data.Int                                  (Int64)
 import           Data.IORef
-import           Data.Time.Clock                           (UTCTime, getCurrentTime)
+import           Data.Time.Clock                           (UTCTime)
 import           Data.Time.Clock.POSIX                     (getPOSIXTime)
 import           Network.Mime                              (defaultMimeLookup)
--- import           System.Exit                               (exitFailure)
-import           System.Exit                               (ExitCode (ExitFailure), exitWith)
 import           System.FilePath                           (joinPath, takeFileName)
 import           Web.Spock.Core                            ((<//>))
 
@@ -562,21 +557,6 @@ legacyQueryHandler env tn queryType req =
   where
     qt = QualifiedObject publicSchema tn
 
--- <<<<<<< HEAD
--- configApiGetHandler
---   :: (HasVersion, MonadIO m, UserAuthentication (Tracing.TraceT m), HttpLog m, Tracing.HasReporter m)
---   => ServerCtx -> Spock.SpockCtxT () m ()
--- configApiGetHandler serverCtx =
---   Spock.get "v1alpha1/config" $ mkSpockAction serverCtx encodeQErr id $
---     mkGetHandler $ do
---       onlyAdmin
---       let res = encJFromJValue $ runGetConfig
---                   (scAuthMode serverCtx)
---                   (scEnableAllowlist serverCtx)
---                   (EL._lqsOptions $ scLQState serverCtx)
---       return $ JSONResp $ HttpResponse res []
-
--- =======
 -- | Default implementation of the 'MonadConfigApiHandler'
 configApiGetHandler
   :: (HasVersion, MonadIO m, UserAuthentication (Tracing.TraceT m), HttpLog m, Tracing.HasReporter m)
@@ -651,10 +631,6 @@ mkWaiApp
   -> ResponseInternalErrorsConfig
   -> (RebuildableSchemaCache Run, Maybe UTCTime)
   -> m HasuraApp
--- <<<<<<< HEAD
--- mkWaiApp env logger sqlGenCtx enableAL isPgCtx ci httpManager mode corsCfg enableConsole consoleAssetsDir
---          enableTelemetry instanceId apis lqOpts planCacheOptions responseErrorsConfig = do
--- =======
 mkWaiApp env isoLevel logger sqlGenCtx enableAL pool pgExecCtxCustom ci httpManager mode corsCfg enableConsole consoleAssetsDir
          enableTelemetry instanceId apis lqOpts planCacheOptions responseErrorsConfig (schemaCache, cacheBuiltTime) = do
 
@@ -692,11 +668,6 @@ mkWaiApp env isoLevel logger sqlGenCtx enableAL pool pgExecCtxCustom ci httpMana
       liftIO $ EKG.registerCounter "ekg.server_timestamp_ms" getTimeMs ekgStore
 
     spockApp <- liftWithStateless $ \lowerIO ->
--- <<<<<<< HEAD
---       Spock.spockAsApp $
---         Spock.spockT lowerIO $
---           httpApp env corsCfg serverCtx enableConsole consoleAssetsDir enableTelemetry
--- =======
       Spock.spockAsApp $ Spock.spockT lowerIO $
         httpApp env corsCfg serverCtx enableConsole consoleAssetsDir enableTelemetry
 
@@ -704,9 +675,6 @@ mkWaiApp env isoLevel logger sqlGenCtx enableAL pool pgExecCtxCustom ci httpMana
         stopWSServer = WS.stopWSServerApp wsServerEnv
 
     waiApp <- liftWithStateless $ \lowerIO ->
--- <<<<<<< HEAD
---       pure $ WSC.websocketsOr WS.defaultConnectionOptions (\ip pc -> lowerIO $ wsServerApp ip pc) spockApp
--- =======
       pure $ WSC.websocketsOr WS.defaultConnectionOptions (\ip conn -> lowerIO $ wsServerApp ip conn) spockApp
 
     return $ HasuraApp waiApp schemaCacheRef cacheBuiltTime stopWSServer
@@ -714,25 +682,6 @@ mkWaiApp env isoLevel logger sqlGenCtx enableAL pool pgExecCtxCustom ci httpMana
     getTimeMs :: IO Int64
     getTimeMs = (round . (* 1000)) `fmap` getPOSIXTime
 
--- <<<<<<< HEAD
---     migrateAndInitialiseSchemaCache = do
---       let isPgSerCtx = withTxIsolation Q.Serializable isPgCtx
---           adminRunCtx = RunCtx adminUserInfo httpManager sqlGenCtx
---       currentTime <- liftIO getCurrentTime
---       initialiseResult <- runExceptT $ peelRun adminRunCtx isPgSerCtx (runLazyTx Q.ReadWrite) $ do
---         (,) <$> migrateCatalog env currentTime <*> liftTx fetchLastUpdate
-
---       ((migrationResult, schemaCache), lastUpdateEvent) <-
---         initialiseResult `onLeft` \err -> do
---           L.unLogger logger StartupLog
---             { slLogLevel = L.LevelError
---             , slKind = "db_migrate"
---             , slInfo = toJSON err
---             }
---           liftIO (exitWith (ExitFailure 14))
---       L.unLogger logger migrationResult
-
--- =======
     initialiseCache :: m (E.PlanCache, SchemaCacheRef)
     initialiseCache = do
       cacheLock <- liftIO $ newMVar ()
@@ -748,14 +697,6 @@ httpApp
      , MonadBaseControl IO m
      , ConsoleRenderer m
      , HttpLog m
--- <<<<<<< HEAD
---      , QueryLogger m
---      , MetadataApiAuthorization m
---      , E.GQLApiAuthorization m
---      , ConfigApiHandler m
---      )
---   -> CorsConfig
--- =======
      -- , UserAuthentication m
      , UserAuthentication (Tracing.TraceT m)
      , MetadataApiAuthorization m
@@ -812,13 +753,6 @@ httpApp env corsCfg serverCtx enableConsole consoleAssetsDir enableTelemetry = d
       Spock.post "v1alpha1/pg_dump" $ spockAction encodeQErr id $
         mkPostHandler v1Alpha1PGDumpHandler
 
--- <<<<<<< HEAD
---     when enableConfig $ runConfigApiHandler serverCtx
-
---     when enableGraphQL $ do
---       Spock.post "v1alpha1/graphql" $ spockAction GH.encodeGQErr id $
---         mkPostHandler $ mkAPIRespHandler (v1Alpha1GQHandler env)
--- =======
     when enableConfig $ runConfigApiHandler serverCtx consoleAssetsDir
 
     when enableGraphQL $ do

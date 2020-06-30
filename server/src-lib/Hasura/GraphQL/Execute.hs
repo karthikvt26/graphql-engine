@@ -25,23 +25,11 @@ module Hasura.GraphQL.Execute
 
 import           Control.Lens
 import           Data.Has
-import           Data.String                            (fromString)
 
 import qualified Data.Aeson                             as J
+import qualified Data.Environment                       as Env
 import qualified Data.HashMap.Strict                    as Map
 import qualified Data.HashSet                           as Set
--- <<<<<<< HEAD
--- import qualified Data.Text                              as T
--- import qualified Language.GraphQL.Draft.Syntax          as G
--- import qualified Network.HTTP.Client                    as HTTP
--- import qualified Network.HTTP.Types                     as HTTP
--- import qualified Network.Wreq                           as Wreq
-
--- import           Hasura.EncJSON
--- import           Hasura.GraphQL.Context
--- =======
-import qualified Data.Environment                       as Env
-import qualified Database.PG.Query                      as Q
 import qualified Language.GraphQL.Draft.Syntax          as G
 import qualified Network.HTTP.Client                    as HTTP
 import qualified Network.HTTP.Types                     as HTTP
@@ -59,11 +47,6 @@ import           Hasura.GraphQL.Validate.Types
 import           Hasura.HTTP
 import           Hasura.Prelude
 import           Hasura.RQL.Types
--- <<<<<<< HEAD
--- import           Hasura.Server.Logging                  (QueryLogger (..))
--- import           Hasura.Server.Utils                    (IpAddress, RequestId,
---                                                          mkClientHeadersForward, mkSetCookieHeaders)
--- =======
 import           Hasura.Server.Utils                    (RequestId)
 import           Hasura.Server.Version                  (HasVersion)
 import           Hasura.Session
@@ -121,17 +104,6 @@ class Monad m => MonadGQLExecutionCheck m where
     -> GQLReqUnparsed
     -- ^ the unparsed GraphQL query string (and related values)
     -> m (Either QErr GQLReqParsed)
--- <<<<<<< HEAD
---     -- ^ after enforcing authorization, it should return the parsed GraphQL query
-
--- instance GQLApiAuthorization m => GQLApiAuthorization (ExceptT e m) where
---   authorizeGQLApi ui det enableAL sc req =
---     lift $ authorizeGQLApi ui det enableAL sc req
-
--- instance GQLApiAuthorization m => GQLApiAuthorization (ReaderT r m) where
---   authorizeGQLApi ui det enableAL sc req =
---     lift $ authorizeGQLApi ui det enableAL sc req
--- =======
 
 instance MonadGQLExecutionCheck m => MonadGQLExecutionCheck (ExceptT e m) where
   checkGQLExecution ui det enableAL sc req =
@@ -361,14 +333,7 @@ getQueryOp
   -> UserInfo
   -> QueryReusability
   -> QueryActionExecuter
--- <<<<<<< HEAD
---   -> VQ.SelSet
---   -> m (LazyRespTx, Maybe EQ.ReusableQueryPlan, EQ.GeneratedSqlMap, [GR.QueryRootFldUnresolved])
--- getQueryOp env gCtx sqlGenCtx userInfo queryReusability actionExecuter selSet =
---   runE gCtx sqlGenCtx userInfo $ EQ.convertQuerySelSet env queryReusability selSet actionExecuter
--- =======
   -> VQ.ObjectSelectionSet
-  -- -> m (LazyRespTx, Maybe EQ.ReusableQueryPlan, EQ.GeneratedSqlMap)
   -> m (LazyRespTx, Maybe EQ.ReusableQueryPlan, EQ.GeneratedSqlMap, [GR.QueryRootFldUnresolved])
 getQueryOp env gCtx sqlGenCtx manager reqHdrs userInfo queryReusability actionExecuter selSet =
   runE gCtx sqlGenCtx userInfo $ EQ.convertQuerySelSet env manager reqHdrs queryReusability selSet actionExecuter
@@ -388,16 +353,6 @@ resolveMutSelSet
      , MonadIO m
      , Tracing.MonadTrace m
      )
--- <<<<<<< HEAD
---   -> VQ.SelSet
---   -> m (LazyRespTx, HTTP.ResponseHeaders)
--- resolveMutSelSet env fields = do
---   aliasedTxs <- forM (toList fields) $ \fld -> do
---     fldRespTx <- case VQ._fName fld of
---       "__typename" -> return (return $ encJFromJValue mutationRootNamedType, [])
---       _            -> evalReusabilityT $ GR.mutFldToTx env fld
---     return (G.unName $ G.unAlias $ VQ._fAlias fld, fldRespTx)
--- =======
   => Env.Environment
   -> VQ.ObjectSelectionSet
   -> m (LazyRespTx, HTTP.ResponseHeaders)
@@ -430,12 +385,6 @@ getMutOp
   -> UserInfo
   -> HTTP.Manager
   -> [HTTP.Header]
--- <<<<<<< HEAD
---   -> VQ.SelSet
---   -> m (LazyRespTx, HTTP.ResponseHeaders)
--- getMutOp env ctx sqlGenCtx userInfo manager reqHeaders selSet =
---   peelReaderT $ resolveMutSelSet env selSet
--- =======
   -> VQ.ObjectSelectionSet
   -> m (LazyRespTx, HTTP.ResponseHeaders)
 getMutOp env ctx sqlGenCtx userInfo manager reqHeaders selSet =
@@ -468,18 +417,13 @@ getSubsOp
   -> UserInfo
   -> QueryReusability
   -> QueryActionExecuter
--- <<<<<<< HEAD
---   -> VQ.SelSet
---   -> m (EL.LiveQueryPlan, Maybe EL.ReusableLiveQueryPlan)
--- getSubsOp env isPgCtx gCtx sqlGenCtx userInfo queryReusability actionExecuter fields =
---   runE gCtx sqlGenCtx userInfo $ EL.buildLiveQueryPlan env isPgCtx queryReusability actionExecuter fields
--- =======
   -> VQ.ObjectSelectionSet
   -> m (EL.LiveQueryPlan, Maybe EL.ReusableLiveQueryPlan)
 getSubsOp env pgExecCtx gCtx sqlGenCtx userInfo queryReusability actionExecuter =
   runE gCtx sqlGenCtx userInfo .
   EL.buildLiveQueryPlan env pgExecCtx queryReusability actionExecuter
 
+-- FIXME(Phil): sanity check.
 execRemoteGQ
   :: ( HasVersion
      , MonadIO m

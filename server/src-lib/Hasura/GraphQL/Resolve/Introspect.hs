@@ -6,15 +6,6 @@ module Hasura.GraphQL.Resolve.Introspect
 import           Data.Has
 import           Hasura.Prelude
 
--- <<<<<<< HEAD
--- import qualified Data.Aeson                         as J
--- import qualified Data.HashMap.Strict                as Map
--- import qualified Data.HashSet                       as Set
--- import qualified Data.Text                          as T
--- import qualified Language.GraphQL.Draft.Syntax      as G
--- import qualified Hasura.SQL.Value                   as S
--- import qualified Hasura.SQL.Types                   as S
--- =======
 import qualified Data.Aeson                           as J
 import qualified Data.HashMap.Strict                  as Map
 import qualified Data.HashSet                         as Set

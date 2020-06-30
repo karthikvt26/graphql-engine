@@ -98,16 +98,6 @@ addLiveQuery logger subscriberMetadata lqState plan onResultAction = do
   -- we can then attach a polling thread if it is new the livequery can only be
   -- cancelled after putTMVar
   onJust handlerM $ \handler -> do
--- <<<<<<< HEAD
---     metrics <- initRefetchMetrics
---     pollerId <- PollerId <$> UUID.nextRandom
-
---     threadRef <- forkImmortal ("pollQuery." <> show sinkId) logger $ forever $ do
---       pollQuery logger pollerId metrics lqOpts pgExecCtx query handler
---       sleep $ unRefetchInterval refetchInterval
-
---     let !pState = PollerIOState threadRef metrics
--- =======
     pollerId <- PollerId <$> UUID.nextRandom
     threadRef <- forkImmortal ("pollQuery." <> show pollerId) logger $ forever $ do
       pollQuery logger pollerId lqOpts pgExecCtx query $ _pCohorts handler
@@ -124,11 +114,6 @@ addLiveQuery logger subscriberMetadata lqState plan onResultAction = do
 
     handlerId = PollerKey role query
 
--- <<<<<<< HEAD
---     !subscriber = Subscriber onResultAction wsOpId
---     addToCohort sinkId handlerC =
---       TMap.insert subscriber sinkId $ _cNewSubscribers handlerC
--- =======
     addToCohort subscriber handlerC =
       TMap.insert subscriber (_sId subscriber) $ _cNewSubscribers handlerC
 
