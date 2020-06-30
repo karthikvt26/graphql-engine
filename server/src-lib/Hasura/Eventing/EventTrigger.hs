@@ -56,9 +56,9 @@ import           Control.Monad.Trans.Control          (MonadBaseControl)
 import           Data.Aeson
 import           Data.Aeson.Casing
 import           Data.Aeson.TH
+import           Data.Has
 import           Data.Int                             (Int64)
 import           Data.String
-import           Data.Has
 import           Data.Time.Clock
 import           Data.Word
 import           Hasura.Eventing.HTTP
@@ -201,7 +201,7 @@ processEventQueue
   => L.Logger L.Hasura
   -> LogEnvHeaders
   -> HTTP.Manager
-  -> IsPGExecCtx
+  -> Q.PGPool
   -> IO SchemaCache
   -> EventEngineCtx
   -> m void
@@ -217,10 +217,10 @@ processEventQueue logger logenv httpMgr pool getSchemaCache eeCtx@EventEngineCtx
   where
     fetchBatchSize = 100
     popEventsBatch = do
-      let run = runExceptT . runLazyTx Q.ReadWrite isPgCtx' . liftTx
+      let run = liftIO . runExceptT . Q.runTx pool (Q.RepeatableRead, Just Q.ReadWrite)
       run (fetchEvents fetchBatchSize) >>= \case
           Left err -> do
-            L.unLogger logger $ EventInternalErr err
+            liftIO $ L.unLogger logger $ EventInternalErr err
             return []
           Right events -> do
             saveLockedEvents events
@@ -229,7 +229,7 @@ processEventQueue logger logenv httpMgr pool getSchemaCache eeCtx@EventEngineCtx
     -- After the events are fetched from the DB, we store the locked events
     -- in a hash set(order doesn't matter and look ups are faster) in the
     -- event engine context
-    saveLockedEvents :: [Event] -> m ()
+    saveLockedEvents :: MonadIO m => [Event] -> m ()
     saveLockedEvents evts =
       liftIO $ atomically $ do
         lockedEvents <- readTVar _eeCtxLockedEvents
@@ -241,7 +241,7 @@ processEventQueue logger logenv httpMgr pool getSchemaCache eeCtx@EventEngineCtx
 --     isPgCtx' = withTxIsolation Q.RepeatableRead isPgCtx
 
 -- =======
-    removeEventFromLockedEvents :: EventId -> IO ()
+    removeEventFromLockedEvents :: EventId -> m ()
     removeEventFromLockedEvents eventId = do
       liftIO $ atomically $ do
         lockedEvents <- readTVar _eeCtxLockedEvents
@@ -281,7 +281,8 @@ processEventQueue logger logenv httpMgr pool getSchemaCache eeCtx@EventEngineCtx
 --         -- return when next batch ready; some 'processEvent' threads may be running.
 -- =======
         forM_ events $ \event -> do
-             runReaderT (withEventEngineCtx eeCtx $ (processEvent event)) (logger, httpMgr)
+             -- FIXME(Phil): not sure how to fix this.
+             -- runReaderT (withEventEngineCtx eeCtx (processEvent event)) (logger, httpMgr)
              -- removing an event from the _eeCtxLockedEvents after the event has
              -- been processed
              removeEventFromLockedEvents (eId event)
@@ -307,7 +308,15 @@ processEventQueue logger logenv httpMgr pool getSchemaCache eeCtx@EventEngineCtx
                  "It looks like the events processor is keeping up again."
              go eventsNext 0 False
 
-    processEvent :: Event -> Tracing.TraceT m ()
+    processEvent
+      :: ( HasVersion
+         , MonadReader r m
+         , Has HTTP.Manager r
+         , Has (L.Logger L.Hasura) r
+         , MonadIO m
+         , Tracing.MonadTrace m
+         )
+      => Event -> m ()
     processEvent e = do
       cache <- liftIO getSchemaCache
       let meti = getEventTriggerInfoFromEvent cache e
@@ -316,12 +325,12 @@ processEventQueue logger logenv httpMgr pool getSchemaCache eeCtx@EventEngineCtx
           --  This rare error can happen in the following known cases:
           --  i) schema cache is not up-to-date (due to some bug, say during schema syncing across multiple instances)
           --  ii) the event trigger is dropped when this event was just fetched
-          logQErr logger $ err500 Unexpected "table or event-trigger not found in schema cache"
-          liftIO . runExceptT $ runLazyTx Q.ReadWrite isPgCtx $ liftTx $ do
+          logQErr $ err500 Unexpected "table or event-trigger not found in schema cache"
+          liftIO . runExceptT $ Q.runTx pool (Q.RepeatableRead, Just Q.ReadWrite) $ do
             currentTime <- liftIO getCurrentTime
             -- For such an event, we unlock the event and retry after a minute
             setRetry e (addUTCTime 60 currentTime)
-          >>= flip onLeft (logQErr logger)
+          >>= flip onLeft logQErr
         Just eti -> do
           let webhook = T.unpack $ wciCachedValue $ etiWebhookInfo eti
               retryConf = etiRetryConf eti
@@ -339,9 +348,12 @@ processEventQueue logger logenv httpMgr pool getSchemaCache eeCtx@EventEngineCtx
           logHTTPForET res extraLogCtx
           let decodedHeaders = map (decodeHeader logenv headerInfos) headers
           either
-            (processError logger isPgCtx e retryConf decodedHeaders ep)
-            (processSuccess isPgCtx e decodedHeaders ep) res
-            >>= flip onLeft (logQErr logger)
+            (processError pool e retryConf decodedHeaders ep)
+            (processSuccess pool e decodedHeaders ep) res
+            >>= flip onLeft logQErr
+          -- either
+          --   (processError logger isPgCtx e retryConf decodedHeaders ep)
+          --   (processSuccess isPgCtx e decodedHeaders ep) res
 
 withEventEngineCtx ::
     ( MonadIO m
@@ -380,7 +392,7 @@ processSuccess
 -- =======
   => Q.PGPool -> Event -> [HeaderConf] -> EventPayload -> HTTPResp a
   -> m (Either QErr ())
-processSuccess isPgCtx e decodedHeaders ep resp = do
+processSuccess pool e decodedHeaders ep resp = do
   let respBody = hrsBody resp
       respHeaders = hrsHeaders resp
       respStatus = hrsStatus resp
@@ -392,8 +404,6 @@ processSuccess isPgCtx e decodedHeaders ep resp = do
   liftIO $ runExceptT $ Q.runTx pool (Q.RepeatableRead, Just Q.ReadWrite) $ do
     insertInvocation invocation
     setSuccess e
-  where
-    isPgCtx' = withTxIsolation Q.RepeatableRead isPgCtx
 
 processError
 -- <<<<<<< HEAD:server/src-lib/Hasura/Events/Lib.hs
@@ -435,7 +445,6 @@ processError pool e retryConf decodedHeaders ep err = do
   liftIO $ runExceptT $ Q.runTx pool (Q.RepeatableRead, Just Q.ReadWrite) $ do
     insertInvocation invocation
     retryOrSetError e retryConf err
-  where isPgCtx' = withTxIsolation Q.RepeatableRead isPgCtx
 
 retryOrSetError :: Event -> RetryConf -> HTTPErr a -> Q.TxE QErr ()
 retryOrSetError e retryConf err = do

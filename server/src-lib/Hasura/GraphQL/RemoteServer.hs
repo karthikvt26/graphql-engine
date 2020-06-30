@@ -13,6 +13,7 @@ import qualified Data.Environment                       as Env
 import qualified Data.HashMap.Strict                    as Map
 import qualified Data.Text                              as T
 import qualified Language.GraphQL.Draft.Syntax          as G
+import qualified Language.GraphQL.Draft.Parser          as G
 import qualified Language.Haskell.TH.Syntax             as TH
 import qualified Network.HTTP.Client                    as HTTP
 import qualified Network.HTTP.Types                     as N

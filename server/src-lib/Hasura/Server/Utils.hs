@@ -12,7 +12,6 @@ import           System.Exit
 import           System.Process
 
 import qualified Data.ByteString            as B
-import qualified Data.ByteString.Char8      as BS
 import qualified Data.CaseInsensitive       as CI
 import qualified Data.HashSet               as Set
 import qualified Data.List.NonEmpty         as NE
@@ -24,7 +23,6 @@ import qualified Data.Vector                as V
 import qualified Language.Haskell.TH.Syntax as TH
 import qualified Network.HTTP.Client        as HC
 import qualified Network.HTTP.Types         as HTTP
-import qualified Network.Wai                as Wai
 import qualified Network.Wreq               as Wreq
 import qualified Text.Regex.TDFA            as TDFA
 import qualified Text.Regex.TDFA.ReadRegex  as TDFA
