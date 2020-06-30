@@ -396,7 +396,7 @@ buildSchemaCacheRule env = proc (catalogMetadata, invalidationKeys) -> do
           let triggerName = triggerNameToTxt $ _cctName cronTrigger
               addCronTriggerContext e = "in cron trigger " <> triggerName <> ": " <> e
           (| withRecordInconsistency (
-            (| modifyErrA (bindErrorA -< resolveCronTrigger cronTrigger)
+            (| modifyErrA (bindErrorA -< resolveCronTrigger env cronTrigger)
              |) addCronTriggerContext)
            |) (mkCronTriggerMetadataObject cronTrigger)
 

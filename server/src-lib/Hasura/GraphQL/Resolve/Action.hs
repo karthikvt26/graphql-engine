@@ -21,28 +21,8 @@ import           Control.Monad.Trans.Control       (MonadBaseControl)
 import           Data.Has
 import           Data.IORef
 
--- <<<<<<< HEAD
--- import qualified Control.Concurrent.Async.Lifted.Safe as LA
--- import qualified Data.Aeson                        as J
--- import qualified Data.Aeson.Casing                 as J
--- import qualified Data.Aeson.TH                     as J
--- import qualified Data.ByteString.Lazy              as BL
--- import qualified Data.CaseInsensitive              as CI
--- import qualified Data.HashMap.Strict               as Map
--- import qualified Data.Text                         as T
--- import qualified Data.UUID                         as UUID
--- import qualified Database.PG.Query                 as Q
--- import qualified Language.GraphQL.Draft.Syntax     as G
--- import qualified Network.HTTP.Client               as HTTP
--- import qualified Network.HTTP.Types                as HTTP
--- import qualified Network.Wreq                      as Wreq
--- import qualified Data.Environment                  as Env
-
--- import qualified Hasura.GraphQL.Resolve.Select     as GRS
--- import qualified Hasura.RQL.DML.Select             as RS
--- =======
--- import qualified Control.Concurrent.Async             as A
 import qualified Control.Concurrent.Async.Lifted.Safe as LA
+import qualified Data.Environment                     as Env
 import qualified Data.Aeson                           as J
 import qualified Data.Aeson.Casing                    as J
 import qualified Data.Aeson.TH                        as J

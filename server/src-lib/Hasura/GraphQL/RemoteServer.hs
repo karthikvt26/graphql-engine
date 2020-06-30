@@ -47,7 +47,6 @@ fetchRemoteSchema
   :: (HasVersion, MonadIO m, MonadError QErr m)
   => Env.Environment
   -> HTTP.Manager
-  -> RemoteSchemaName
   -> RemoteSchemaInfo
   -> m GC.RemoteGCtx
 fetchRemoteSchema env manager def@(RemoteSchemaInfo name url headerConf _ timeout) = do
@@ -350,6 +349,7 @@ execRemoteGQ'
   :: ( HasVersion
      , MonadIO m
      , MonadError QErr m
+     , Tracing.MonadTrace m
      )
   => Env.Environment
   -> HTTP.Manager
@@ -359,7 +359,7 @@ execRemoteGQ'
   -> RemoteSchemaInfo
   -> G.OperationType
   -> m (DiffTime, [N.Header], BL.ByteString)
-execRemoteGQ' env manager userInfo reqHdrs q rsi opType = Tracing.traceHttpRequest (_ (show url)) do
+execRemoteGQ' env manager userInfo reqHdrs q rsi opType = Tracing.traceHttpRequest (undefined (show url)) do -- FIXME: Phil
   when (opType == G.OperationTypeSubscription) $
     throw400 NotSupported "subscription to remote server is not supported"
   confHdrs <- makeHeadersFromConf env hdrConf

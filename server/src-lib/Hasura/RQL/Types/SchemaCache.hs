@@ -168,7 +168,7 @@ type WithDeps a = (a, [SchemaDependency])
 
 data RemoteSchemaCtx
   = RemoteSchemaCtx
-  { rscName :: !RemoteSchemaName
+  { rscName :: !RemoteSchemaName -- TODO: Name should already be in RemoteSchemaInfo
   , rscGCtx :: !GC.GCtx
   , rscInfo :: !RemoteSchemaInfo
   } deriving (Show, Eq)

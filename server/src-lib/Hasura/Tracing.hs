@@ -28,6 +28,8 @@ import qualified Network.HTTP.Types.Header   as HTTP
 import qualified System.Random               as Rand
 import qualified Web.HttpApiData             as HTTP
 
+import qualified Database.PG.Query.Transaction as Tx
+
 -- | Any additional human-readable key-value pairs relevant
 -- to the execution of a block of code.
 type TracingMetadata = [(Text, Text)]
@@ -158,6 +160,9 @@ instance MonadTrace m => MonadTrace (ExceptT e m) where
   trace = mapExceptT . trace
   currentContext = lift currentContext
   attachMetadata = lift . attachMetadata
+
+instance MonadTrace (Tx.TxE a) where
+  -- FIXME: Phil - Could you add an implementation of trace here if required?
 
 -- | A HTTP request, which can be modified before execution.
 data SuspendedRequest m a = SuspendedRequest HTTP.Request (HTTP.Request -> m a)
