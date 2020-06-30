@@ -271,7 +271,6 @@ runHGEServer
      , MonadCatch m
      , MonadStateless IO m
      , LA.Forall (LA.Pure m)
-     , LA.Forall (LA.Pure (ExceptT Text m))
      , UserAuthentication (Tracing.TraceT m)
      , HttpLog m
      , ConsoleRenderer m
@@ -282,7 +281,6 @@ runHGEServer
      , WS.MonadWSLog m
      , MonadExecuteQuery m
      , Tracing.HasReporter m
-     , Tracing.MonadTrace m
      )
   => Env.Environment
   -> ServeOptions impl

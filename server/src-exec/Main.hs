@@ -50,7 +50,6 @@ runApp env (HGEOptionsG rci hgeCmd) =
         Signals.sigTERM
         (Signals.CatchOnce (Conc.putMVar shutdownLatch ()))
         Nothing
-
       runHGEServer env serveOptions initCtx Nothing initTime (shutdownLatch, shutdownApp)
 
     HCExport -> do

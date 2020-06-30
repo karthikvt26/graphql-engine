@@ -102,11 +102,9 @@ data AuthMode
 -- This must only be run once, on launch.
 setupAuthMode
   :: ( HasVersion
-     , MonadError Text m
      , MonadIO m
      , MonadBaseControl IO m
      , LA.Forall (LA.Pure m)
-     , Tracing.MonadTrace m
      , Tracing.HasReporter m
      )
   => Maybe AdminSecretHash
@@ -115,7 +113,7 @@ setupAuthMode
   -> Maybe RoleName
   -> H.Manager
   -> Logger Hasura
-  -> m AuthMode
+  -> ExceptT Text m AuthMode
 setupAuthMode mAdminSecretHash mWebHook mJwtSecret mUnAuthRole httpManager logger =
   case (mAdminSecretHash, mWebHook, mJwtSecret) of
     (Just hash, Nothing,   Nothing)      -> return $ AMAdminSecret hash mUnAuthRole
@@ -148,6 +146,15 @@ setupAuthMode mAdminSecretHash mWebHook mJwtSecret mUnAuthRole httpManager logge
     -- | Given the 'JWTConfig' (the user input of JWT configuration), create
     -- the 'JWTCtx' (the runtime JWT config used)
     -- mkJwtCtx :: HasVersion => JWTConfig -> m JWTCtx
+    mkJwtCtx
+      :: ( HasVersion
+         , MonadIO m
+         , MonadBaseControl IO m
+         , LA.Forall (LA.Pure m)
+         , Tracing.HasReporter m
+         )
+      => JWTConfig
+      -> ExceptT T.Text m JWTCtx
     mkJwtCtx JWTConfig{..} = do
       jwkRef <- case jcKeyOrUrl of
         Left jwk  -> liftIO $ newIORef (JWKSet [jwk])
@@ -159,11 +166,11 @@ setupAuthMode mAdminSecretHash mWebHook mJwtSecret mUnAuthRole httpManager logge
         -- header), do not start a background thread for refreshing the JWK
         getJwkFromUrl url = do
           ref <- liftIO $ newIORef $ JWKSet []
-          maybeExpiry <- withJwkError $ updateJwkRef logger httpManager url ref
+          maybeExpiry <- withJwkError $ Tracing.runTraceT "jwk init" $ updateJwkRef logger httpManager url ref
           case maybeExpiry of
             Nothing   -> return ref
             Just time -> do
-              void $ forkImmortal "jwkRefreshCtrl" logger $
+              void . lift $ forkImmortal "jwkRefreshCtrl" logger $
                 jwkRefreshCtrl logger httpManager url ref (convertDuration time)
               return ref
 

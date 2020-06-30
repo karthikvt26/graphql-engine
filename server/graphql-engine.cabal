@@ -336,6 +336,7 @@ library
                      -- required for buildRebuildableSchemaCache and runCacheRWT to be exposed
                      , Hasura.Session
                      , Network.Wai.Extended
+                     , Hasura.Tracing
 
   other-modules:       Hasura.Server.Auth.WebHook
                      , Hasura.Server.Middleware
@@ -405,7 +406,6 @@ library
                      , Hasura.SQL.Time
                      , Hasura.SQL.Types
                      , Hasura.SQL.Value
-                     , Hasura.Tracing
                      , Network.URI.Extended
                      , Network.Wai.Handler.WebSockets.Custom
 executable graphql-engine

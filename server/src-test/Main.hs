@@ -35,7 +35,6 @@ import qualified Hasura.IncrementalSpec       as IncrementalSpec
 -- import qualified Hasura.RQL.MetadataSpec      as MetadataSpec
 import qualified Hasura.Server.MigrateSpec    as MigrateSpec
 import qualified Hasura.Server.TelemetrySpec  as TelemetrySpec
-import qualified Hasura.Server.AuthSpec       as AuthSpec
 
 data TestSuites
   = AllSuites !RawConnInfo
@@ -66,7 +65,6 @@ unitSpecs = do
   -- describe "Hasura.RQL.Metadata" MetadataSpec.spec -- Commenting until optimizing the test in CI
   describe "Data.Time" TimeSpec.spec
   describe "Hasura.Server.Telemetry" TelemetrySpec.spec
-  describe "Hasura.Server.Auth" AuthSpec.spec
 
 buildPostgresSpecs :: (HasVersion) => RawConnInfo -> IO Spec
 buildPostgresSpecs pgConnOptions = do
@@ -77,15 +75,13 @@ buildPostgresSpecs pgConnOptions = do
 
   let setupCacheRef = do
         pgPool <- Q.initPGPool pgConnInfo Q.defaultConnParams { Q.cpConns = 1 } print
-        let pgContext = PGExecCtx pgPool Q.Serializable
-            isPgCtx = IsPGExecCtx (const $ return pgContext) [pgPool]
+        let pgContext = mkPGExecCtx Q.Serializable pgPool
         httpManager <- HTTP.newManager HTTP.tlsManagerSettings
         let runContext = RunCtx adminUserInfo httpManager (SQLGenCtx False)
-            pgContext = mkPGExecCtx Q.Serializable pgPool
 
             runAsAdmin :: Run a -> IO a
             runAsAdmin =
-                  peelRun runContext isPgCtx (runLazyTx Q.ReadWrite)
+                  peelRun runContext pgContext Q.ReadWrite
               >>> runExceptT
               >=> flip onLeft printErrJExit
 
