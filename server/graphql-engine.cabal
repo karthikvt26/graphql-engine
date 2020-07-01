@@ -337,6 +337,7 @@ library
                      , Hasura.Session
                      , Network.Wai.Extended
                      , Hasura.Tracing
+                     , Hasura.SQL.Value
 
   other-modules:       Hasura.Server.Auth.WebHook
                      , Hasura.Server.Middleware
@@ -405,7 +406,6 @@ library
                      , Hasura.SQL.Rewrite
                      , Hasura.SQL.Time
                      , Hasura.SQL.Types
-                     , Hasura.SQL.Value
                      , Network.URI.Extended
                      , Network.Wai.Handler.WebSockets.Custom
 executable graphql-engine
