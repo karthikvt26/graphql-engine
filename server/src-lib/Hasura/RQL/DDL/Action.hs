@@ -34,15 +34,14 @@ import           Hasura.SQL.Types
 import qualified Hasura.GraphQL.Validate.Types as VT
 
 import qualified Data.Aeson                    as J
+import qualified Data.Environment              as Env
 import qualified Data.Aeson.Casing             as J
 import qualified Data.Aeson.TH                 as J
 import qualified Data.HashMap.Strict           as Map
 import qualified Data.HashSet                  as Set
-import qualified Data.Text                     as T
 import qualified Database.PG.Query             as Q
 import qualified Language.GraphQL.Draft.Syntax as G
 
-import           Data.URL.Template             (renderURLTemplate)
 import           Language.Haskell.TH.Syntax    (Lift)
 
 getActionInfo
@@ -79,7 +78,7 @@ persistCreateAction (CreateAction actionName actionDefinition comment) = do
       VALUES ($1, $2, $3)
   |] (actionName, Q.AltJ actionDefinition, comment) True
 
-{- Note [Postgres scalars in action input arguments]
+{-| Note [Postgres scalars in action input arguments]
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 It's very comfortable to be able to reference Postgres scalars in actions
 input arguments. For example, see the following action mutation:
@@ -98,15 +97,18 @@ referred scalars.
 -}
 
 resolveAction
-  :: (QErrM m, MonadIO m)
-  => (NonObjectTypeMap, AnnotatedObjects)
-  -> HashSet PGScalarType -- ^ List of all Postgres scalar types.
+  :: QErrM m
+  => Env.Environment
+  -> (NonObjectTypeMap, AnnotatedObjects)
+  -> HashSet PGScalarType 
+  -- ^ List of all Postgres scalar types.
   -> ActionDefinitionInput
   -> m ( ResolvedActionDefinition
        , AnnotatedObjectType
-       , HashSet PGScalarType -- ^ see Note [Postgres scalars in action input arguments].
+       , HashSet PGScalarType
+       -- ^ see Note [Postgres scalars in action input arguments].
        )
-resolveAction customTypes allPGScalars actionDefinition = do
+resolveAction env customTypes allPGScalars actionDefinition = do
   let responseType = unGraphQLType $ _adOutputType actionDefinition
       responseBaseType = G.getBaseType responseType
 
@@ -133,7 +135,7 @@ resolveAction customTypes allPGScalars actionDefinition = do
 
   -- Check if the response type is an object
   outputObject <- getObjectTypeInfo responseBaseType
-  resolvedDef <- traverse resolveWebhook actionDefinition
+  resolvedDef <- traverse (resolveWebhook env) actionDefinition
   pure (resolvedDef, outputObject, reusedPGScalars)
   where
     getNonObjectTypeInfo typeName =
@@ -141,10 +143,13 @@ resolveAction customTypes allPGScalars actionDefinition = do
           inputTypeInfos = nonObjectTypeMap <> mapFromL VT.getNamedTy defaultTypes
       in Map.lookup typeName inputTypeInfos
 
-    resolveWebhook (InputWebhook urlTemplate) = do
-      eitherRenderedTemplate <- renderURLTemplate urlTemplate
-      either (throw400 Unexpected . T.pack) (pure . ResolvedWebhook) eitherRenderedTemplate
+-- <<<<<<< HEAD
+--     resolveWebhook (InputWebhook urlTemplate) = do
+--       let eitherRenderedTemplate = renderURLTemplate env urlTemplate
+--       either (throw400 Unexpected . T.pack) (pure . ResolvedWebhook) eitherRenderedTemplate
 
+-- =======
+-- >>>>>>> master
     getObjectTypeInfo typeName =
       onNothing (Map.lookup (ObjectTypeName typeName) (snd customTypes)) $
         throw400 NotExists $ "the type: "

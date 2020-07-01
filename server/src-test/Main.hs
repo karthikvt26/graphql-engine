@@ -12,12 +12,13 @@ import           Test.Hspec
 
 import qualified Data.Aeson                   as A
 import qualified Data.ByteString.Lazy.Char8   as BL
+import qualified Data.Environment             as Env
 import qualified Database.PG.Query            as Q
 import qualified Network.HTTP.Client          as HTTP
 import qualified Network.HTTP.Client.TLS      as HTTP
 import qualified Test.Hspec.Runner            as Hspec
 
-import           Hasura.Db                    (IsPGExecCtx (..), PGExecCtx (..), runLazyTx)
+import           Hasura.Db                    (mkPGExecCtx)
 import           Hasura.RQL.Types             (SQLGenCtx (..))
 import           Hasura.RQL.Types.Run
 import           Hasura.Server.Init           (RawConnInfo, mkConnInfo, mkRawConnInfo,
@@ -74,18 +75,17 @@ buildPostgresSpecs pgConnOptions = do
 
   let setupCacheRef = do
         pgPool <- Q.initPGPool pgConnInfo Q.defaultConnParams { Q.cpConns = 1 } print
-        let pgContext = PGExecCtx pgPool Q.Serializable
-            isPgCtx = IsPGExecCtx (const $ return pgContext) [pgPool]
+        let pgContext = mkPGExecCtx Q.Serializable pgPool
         httpManager <- HTTP.newManager HTTP.tlsManagerSettings
         let runContext = RunCtx adminUserInfo httpManager (SQLGenCtx False)
 
             runAsAdmin :: Run a -> IO a
             runAsAdmin =
-                  peelRun runContext isPgCtx (runLazyTx Q.ReadWrite)
+                  peelRun runContext pgContext Q.ReadWrite
               >>> runExceptT
               >=> flip onLeft printErrJExit
 
-        schemaCache <- snd <$> runAsAdmin (migrateCatalog =<< liftIO getCurrentTime)
+        schemaCache <- snd <$> runAsAdmin (migrateCatalog (Env.mkEnvironment env) =<< liftIO getCurrentTime)
         cacheRef <- newMVar schemaCache
         pure $ NT (runAsAdmin . flip MigrateSpec.runCacheRefT cacheRef)
 

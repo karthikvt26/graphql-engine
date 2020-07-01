@@ -2,6 +2,7 @@
 module Hasura.Server.Init.Config where
 
 import qualified Data.Aeson                       as J
+import qualified Data.Aeson.Casing                as J
 import qualified Data.Aeson.TH                    as J
 import qualified Data.HashSet                     as Set
 import qualified Data.String                      as DataString
@@ -9,7 +10,6 @@ import qualified Data.Text                        as T
 import qualified Database.PG.Query                as Q
 
 import           Data.Char                        (toLower)
-import           Data.Time.Clock.Units            (milliseconds)
 import           Network.Wai.Handler.Warp         (HostPreference)
 
 import qualified Hasura.Cache                     as Cache
@@ -38,7 +38,7 @@ data RawServeOptions impl
   , rsoHost                :: !(Maybe HostPreference)
   , rsoConnParams          :: !RawConnParams
   , rsoTxIso               :: !(Maybe Q.TxIsolation)
-  , rsoAdminSecret         :: !(Maybe AdminSecret)
+  , rsoAdminSecret         :: !(Maybe AdminSecretHash)
   , rsoAuthHook            :: !RawAuthHook
   , rsoJwtSecret           :: !(Maybe JWTConfig)
   , rsoUnAuthRole          :: !(Maybe RoleName)
@@ -80,7 +80,7 @@ data ServeOptions impl
   , soHost                         :: !HostPreference
   , soConnParams                   :: !Q.ConnParams
   , soTxIso                        :: !Q.TxIsolation
-  , soAdminSecret                  :: !(Maybe AdminSecret)
+  , soAdminSecret                  :: !(Maybe AdminSecretHash)
   , soAuthHook                     :: !(Maybe AuthHook)
   , soJwtSecret                    :: !(Maybe JWTConfig)
   , soUnAuthRole                   :: !(Maybe RoleName)
@@ -132,10 +132,13 @@ data API
   | DEVELOPER
   | CONFIG
   deriving (Show, Eq, Read, Generic)
+  
 $(J.deriveJSON (J.defaultOptions { J.constructorTagModifier = map toLower })
   ''API)
 
 instance Hashable API
+
+$(J.deriveJSON (J.aesonDrop 4 J.camelCase){J.omitNothingFields=True} ''RawConnInfo)
 
 type HGECommand impl = HGECommandG (ServeOptions impl)
 type RawHGECommand impl = HGECommandG (RawServeOptions impl)
@@ -218,8 +221,8 @@ instance FromEnv AuthHookType where
 instance FromEnv Int where
   fromEnv = maybe (Left "Expecting Int value") Right . readMaybe
 
-instance FromEnv AdminSecret where
-  fromEnv = Right . AdminSecret . T.pack
+instance FromEnv AdminSecretHash where
+  fromEnv = Right . hashAdminSecret . T.pack
 
 instance FromEnv RoleName where
   fromEnv string = case mkRoleName (T.pack string) of
@@ -254,7 +257,7 @@ instance FromEnv L.LogLevel where
   fromEnv = readLogLevel
 
 instance FromEnv Cache.CacheSize where
-  fromEnv = Cache.mkCacheSize
+  fromEnv = Cache.parseCacheSize
 
 type WithEnv a = ReaderT Env (ExceptT String Identity) a
 

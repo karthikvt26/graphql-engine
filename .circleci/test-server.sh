@@ -188,15 +188,24 @@ echo -e "INFO: Logs Folder        : $OUTPUT_FOLDER\n"
 
 pip3 install -r requirements.txt
 
+# node js deps
+curl -sL https://deb.nodesource.com/setup_8.x | bash -
+apt-get install -y nodejs
+npm_config_loglevel=error npm install $PYTEST_ROOT/remote_schemas/nodejs/
+
+npm install apollo-server graphql
+
 mkdir -p "$OUTPUT_FOLDER/hpc"
 
 export EVENT_WEBHOOK_HEADER="MyEnvValue"
+
 export HGE_URL="http://localhost:8080"
 export HGE_URL_2=""
 if [ -n ${HASURA_GRAPHQL_DATABASE_URL_2:-} ] ; then
 	HGE_URL_2="http://localhost:8081"
 fi
 export WEBHOOK_FROM_ENV="http://127.0.0.1:5592"
+export SCHEDULED_TRIGGERS_WEBHOOK_DOMAIN="http://127.0.0.1:5594"
 export HASURA_GRAPHQL_STRINGIFY_NUMERIC_TYPES=true
 
 HGE_PIDS=""

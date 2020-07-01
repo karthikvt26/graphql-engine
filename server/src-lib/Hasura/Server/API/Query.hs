@@ -8,8 +8,8 @@ import           Data.Aeson
 import           Data.Aeson.Casing
 import           Data.Aeson.TH
 import           Data.Time                          (UTCTime)
-import           Language.Haskell.TH.Syntax         (Lift)
 
+import qualified Data.Environment                   as Env
 import qualified Data.HashMap.Strict                as HM
 import qualified Data.Text                          as T
 import qualified Database.PG.Query                  as Q
@@ -26,7 +26,9 @@ import           Hasura.RQL.DDL.Permission
 import           Hasura.RQL.DDL.QueryCollection
 import           Hasura.RQL.DDL.Relationship
 import           Hasura.RQL.DDL.Relationship.Rename
+import           Hasura.RQL.DDL.RemoteRelationship
 import           Hasura.RQL.DDL.RemoteSchema
+import           Hasura.RQL.DDL.ScheduledTrigger
 import           Hasura.RQL.DDL.Schema
 import           Hasura.RQL.DML.Count
 import           Hasura.RQL.DML.Delete
@@ -40,6 +42,7 @@ import           Hasura.Server.Utils
 import           Hasura.Server.Version              (HasVersion)
 import           Hasura.Session
 
+import qualified Hasura.Tracing                     as Tracing
 
 data RQLQueryV1
   = RQAddExistingTableOrView !TrackTable
@@ -57,9 +60,12 @@ data RQLQueryV1
   | RQRenameRelationship !RenameRel
 
   -- computed fields related
-
   | RQAddComputedField !AddComputedField
   | RQDropComputedField !DropComputedField
+
+  | RQCreateRemoteRelationship !RemoteRelationship
+  | RQUpdateRemoteRelationship !RemoteRelationship
+  | RQDeleteRemoteRelationship !DeleteRemoteRelationship
 
   | RQCreateInsertPermission !CreateInsPerm
   | RQCreateSelectPermission !CreateSelPerm
@@ -86,11 +92,18 @@ data RQLQueryV1
   | RQAddRemoteSchema !AddRemoteSchemaQuery
   | RQRemoveRemoteSchema !RemoteSchemaNameQuery
   | RQReloadRemoteSchema !RemoteSchemaNameQuery
+  | RQIntrospectRemoteSchema !RemoteSchemaNameQuery
 
   | RQCreateEventTrigger !CreateEventTriggerQuery
   | RQDeleteEventTrigger !DeleteEventTriggerQuery
   | RQRedeliverEvent     !RedeliverEventQuery
   | RQInvokeEventTrigger !InvokeEventTriggerQuery
+
+  -- scheduled triggers
+  | RQCreateCronTrigger !CreateCronTrigger
+  | RQDeleteCronTrigger !ScheduledTriggerName
+
+  | RQCreateScheduledEvent !CreateScheduledEvent
 
   -- query collections, allow list related
   | RQCreateQueryCollection !CreateCollection
@@ -114,19 +127,20 @@ data RQLQueryV1
   | RQDropActionPermission !DropActionPermission
 
   | RQDumpInternalState !DumpInternalState
+
   | RQSetCustomTypes !CustomTypes
-  deriving (Show, Eq, Lift)
+  deriving (Show, Eq)
 
 data RQLQueryV2
   = RQV2TrackTable !TrackTableV2
   | RQV2SetTableCustomFields !SetTableCustomFields
   | RQV2TrackFunction !TrackFunctionV2
-  deriving (Show, Eq, Lift)
+  deriving (Show, Eq)
 
 data RQLQuery
   = RQV1 !RQLQueryV1
   | RQV2 !RQLQueryV2
-  deriving (Show, Eq, Lift)
+  deriving (Show, Eq)
 
 instance FromJSON RQLQuery where
   parseJSON = withObject "Object" $ \o -> do
@@ -177,17 +191,20 @@ recordSchemaUpdate instanceId invalidations =
              DO UPDATE SET instance_id = $1::uuid, occurred_at = DEFAULT, invalidations = $2::json
             |] (instanceId, Q.AltJ invalidations) True
 
+instance Tracing.MonadTrace (HasSystemDefinedT (CacheRWT Run)) where
+  -- FIXME: Phil - Could you add an implementation of trace here if required?
+
 runQuery
   :: (HasVersion, MonadIO m, MonadError QErr m)
-  => IsPGExecCtx -> InstanceId
+  => Env.Environment -> PGExecCtx -> InstanceId
   -> UserInfo -> RebuildableSchemaCache Run -> HTTP.Manager
   -> SQLGenCtx -> SystemDefined -> RQLQuery -> m (EncJSON, RebuildableSchemaCache Run)
-runQuery isPgCtx instanceId userInfo sc hMgr sqlGenCtx systemDefined query = do
+runQuery env pgExecCtx instanceId userInfo sc hMgr sqlGenCtx systemDefined query = do
   accessMode <- getQueryAccessMode query
-  resE <- runQueryM query
+  resE <- runQueryM env query
     & runHasSystemDefinedT systemDefined
     & runCacheRWT sc
-    & peelRun runCtx isPgCtx (runLazyTx accessMode)
+    & peelRun runCtx pgExecCtx accessMode
     & runExceptT
     & liftIO
   either throwError withReload resE
@@ -195,7 +212,7 @@ runQuery isPgCtx instanceId userInfo sc hMgr sqlGenCtx systemDefined query = do
     runCtx = RunCtx userInfo hMgr sqlGenCtx
     withReload (result, updatedCache, invalidations) = do
       when (queryModifiesSchemaCache query) $ do
-        e <- liftIO $ runExceptT $ runLazyTx Q.ReadWrite isPgCtx $ liftTx $
+        e <- liftIO $ runExceptT $ runLazyTx pgExecCtx Q.ReadWrite $ liftTx $
           recordSchemaUpdate instanceId invalidations
         liftEither e
       return (result, updatedCache)
@@ -225,6 +242,10 @@ queryModifiesSchemaCache (RQV1 qi) = case qi of
   RQAddComputedField _            -> True
   RQDropComputedField _           -> True
 
+  RQCreateRemoteRelationship _    -> True
+  RQUpdateRemoteRelationship _    -> True
+  RQDeleteRemoteRelationship _    -> True
+
   RQCreateInsertPermission _      -> True
   RQCreateSelectPermission _      -> True
   RQCreateUpdatePermission _      -> True
@@ -248,11 +269,17 @@ queryModifiesSchemaCache (RQV1 qi) = case qi of
   RQAddRemoteSchema _             -> True
   RQRemoveRemoteSchema _          -> True
   RQReloadRemoteSchema _          -> True
+  RQIntrospectRemoteSchema _      -> False
 
   RQCreateEventTrigger _          -> True
   RQDeleteEventTrigger _          -> True
   RQRedeliverEvent _              -> False
   RQInvokeEventTrigger _          -> False
+
+  RQCreateCronTrigger _           -> True
+  RQDeleteCronTrigger _           -> True
+
+  RQCreateScheduledEvent _        -> False
 
   RQCreateQueryCollection _       -> True
   RQDropQueryCollection _         -> True
@@ -278,6 +305,7 @@ queryModifiesSchemaCache (RQV1 qi) = case qi of
   RQSetCustomTypes _              -> True
 
   RQBulk qs                       -> any queryModifiesSchemaCache qs
+
 queryModifiesSchemaCache (RQV2 qi) = case qi of
   RQV2TrackTable _           -> True
   RQV2SetTableCustomFields _ -> True
@@ -322,10 +350,12 @@ runQueryM
   :: ( HasVersion, QErrM m, CacheRWM m, UserInfoM m, MonadTx m
      , MonadIO m, HasHttpManager m, HasSQLGenCtx m
      , HasSystemDefined m
+     , Tracing.MonadTrace m
      )
-  => RQLQuery
+  => Env.Environment
+  -> RQLQuery
   -> m EncJSON
-runQueryM rq = withPathK "args" $ case rq of
+runQueryM env rq = withPathK "args" $ case rq of
   RQV1 q -> runQueryV1M q
   RQV2 q -> runQueryV2M q
   where
@@ -361,20 +391,30 @@ runQueryM rq = withPathK "args" $ case rq of
       RQGetInconsistentMetadata q  -> runGetInconsistentMetadata q
       RQDropInconsistentMetadata q -> runDropInconsistentMetadata q
 
-      RQInsert q                   -> runInsert q
+      RQInsert q                   -> runInsert env q
       RQSelect q                   -> runSelect q
-      RQUpdate q                   -> runUpdate q
-      RQDelete q                   -> runDelete q
+      RQUpdate q                   -> runUpdate env q
+      RQDelete q                   -> runDelete env q
       RQCount  q                   -> runCount q
 
-      RQAddRemoteSchema    q       -> runAddRemoteSchema q
+      RQAddRemoteSchema    q       -> runAddRemoteSchema env q
       RQRemoveRemoteSchema q       -> runRemoveRemoteSchema q
       RQReloadRemoteSchema q       -> runReloadRemoteSchema q
+      RQIntrospectRemoteSchema q   -> runIntrospectRemoteSchema q
+
+      RQCreateRemoteRelationship q -> runCreateRemoteRelationship q
+      RQUpdateRemoteRelationship q -> runUpdateRemoteRelationship q
+      RQDeleteRemoteRelationship q -> runDeleteRemoteRelationship q
 
       RQCreateEventTrigger q       -> runCreateEventTriggerQuery q
       RQDeleteEventTrigger q       -> runDeleteEventTriggerQuery q
       RQRedeliverEvent q           -> runRedeliverEvent q
       RQInvokeEventTrigger q       -> runInvokeEventTrigger q
+
+      RQCreateCronTrigger q      -> runCreateCronTrigger q
+      RQDeleteCronTrigger q      -> runDeleteCronTrigger q
+
+      RQCreateScheduledEvent q   -> runCreateScheduledEvent q
 
       RQCreateQueryCollection q        -> runCreateCollection q
       RQDropQueryCollection q          -> runDropCollection q
@@ -400,7 +440,7 @@ runQueryM rq = withPathK "args" $ case rq of
 
       RQSetCustomTypes q           -> runSetCustomTypes q
 
-      RQBulk qs                    -> encJFromList <$> indexedMapM runQueryM qs
+      RQBulk qs                    -> encJFromList <$> indexedMapM (runQueryM env) qs
 
     runQueryV2M = \case
       RQV2TrackTable q           -> runTrackTableV2Q q
@@ -428,6 +468,10 @@ requiresAdmin = \case
     RQAddComputedField _            -> True
     RQDropComputedField _           -> True
 
+    RQCreateRemoteRelationship _    -> True
+    RQUpdateRemoteRelationship _    -> True
+    RQDeleteRemoteRelationship _    -> True
+
     RQCreateInsertPermission _      -> True
     RQCreateSelectPermission _      -> True
     RQCreateUpdatePermission _      -> True
@@ -451,11 +495,17 @@ requiresAdmin = \case
     RQAddRemoteSchema    _          -> True
     RQRemoveRemoteSchema _          -> True
     RQReloadRemoteSchema _          -> True
+    RQIntrospectRemoteSchema _      -> True
 
     RQCreateEventTrigger _          -> True
     RQDeleteEventTrigger _          -> True
     RQRedeliverEvent _              -> True
     RQInvokeEventTrigger _          -> True
+
+    RQCreateCronTrigger _           -> True
+    RQDeleteCronTrigger _           -> True
+
+    RQCreateScheduledEvent _        -> True
 
     RQCreateQueryCollection _       -> True
     RQDropQueryCollection _         -> True
