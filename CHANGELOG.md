@@ -1,15 +1,5 @@
-# Hasura GraphQL Engine Changelog
 
 ## Next release
-
-<<<<<<< HEAD
-### Bug fixes and improvements
-
-(Add entries here in the order of: server, console, cli, docs, others)
-- server: fix explain queries with role permissions (fix #4816)
-- server: compile with GHC 8.10.1, closing a space leak with subscriptions. (close #4517) (#3388)
-
-=======
 
 ### Bug fixes and improvements
 
@@ -134,14 +124,10 @@ hasura seed apply --file 1234_add_some_seed_data.sql
 
 - server: fix explain queries with role permissions (fix #4816)
 - server: compile with GHC 8.10.1, closing a space leak with subscriptions. (close #4517) (#3388)
->>>>>>> master
 - server: fixes an issue where introspection queries with variables would fail because of caching (fix #4547)
 - server: avoid loss of precision when passing values in scientific notation (fix #4733)
 - server: fix mishandling of GeoJSON inputs in subscriptions (fix #3239)
 - server: fix importing of allow list query from metadata (fix #4687)
-<<<<<<< HEAD
-- server: fix edge case with printing logs on startup failure (fix #4772)
-=======
 - server: flush log buffer during shutdown (#4800)
 - server: fix edge case with printing logs on startup failure (fix #4772)
 - console: allow entering big int values in the console (close #3667) (#4775)
@@ -176,7 +162,6 @@ hasura seed apply --file 1234_add_some_seed_data.sql
 - docs: add content on how to secure action handlers and other actions docs improvements (#4743)
 - docs: make header common with other hasura.io/ pages (#4957)
 - install manifests: update all install manifests to enable dev mode by default (close #4599) (#4716)
->>>>>>> master
 
 ## `v1.2.0`
 
@@ -193,18 +178,6 @@ Another flag `--insecure-skip-tls-verification` is added to skip verifying the c
 in case you don't have access to the CA certificate. As the name suggests,
 using this flag is insecure since verification is not carried out.
 
-<<<<<<< HEAD
-### CLI: Support servers with self-signed certificates (close #4564) (#4582)
-
-A new flag `--certificate-authority` is added so that the CA certificate can be
-provided to trust the Hasura Endpoint with a self-signed SSL certificate.
-
-Another flag `--insecure-skip-tls-verification` is added to skip verifying the certificate
-in case you don't have access to the CA certificate. As the name suggests,
-using this flag is insecure since verification is not carried out.
-
-=======
->>>>>>> master
 ### Bug fixes and improvements
 
 - console: update graphiql explorer to support operation transform (#4567)
@@ -212,11 +185,8 @@ using this flag is insecure since verification is not carried out.
 - console: fix table columns type comparision during column edit (close #4125) (#4393)
 - cli: allow initialising project in current directory (fix #4560) #4566
 - cli: remove irrelevant flags from init command (close #4508) (#4549)
-<<<<<<< HEAD
-=======
 - docs: update migrations docs with config v2 (#4586)
 - docs: update actions docs (#4586)
->>>>>>> master
 
 ## `v1.2.0-beta.5`
 
