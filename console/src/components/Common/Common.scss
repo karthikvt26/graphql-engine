@@ -1379,8 +1379,6 @@ code {
   flex-direction: column;
 }
 
-<<<<<<< HEAD
-=======
 .textNoNewLine {
   word-break: break-all;
   hyphens: auto;
@@ -1388,7 +1386,6 @@ code {
   display: block;
 }
 
->>>>>>> master
 /* container height subtracting top header and bottom scroll bar */
 $mainContainerHeight: calc(100vh - 50px - 20px);
 

@@ -18,12 +18,8 @@ import monitoring from './images/monitoring.svg';
 import rate from './images/rate.svg';
 import regression from './images/regression.svg';
 import management from './images/management.svg';
-<<<<<<< HEAD
-import allow from './images/allow.svg';
-=======
 import allow from './images/allow-listing.svg';
 import read from './images/read-replica.svg';
->>>>>>> master
 import arrowForwardRed from './images/arrow_forward-red.svg';
 
 import styles from './Main.scss';

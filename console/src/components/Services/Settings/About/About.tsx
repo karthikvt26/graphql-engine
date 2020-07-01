@@ -11,10 +11,7 @@ import requestAction from '../../../../utils/requestAction';
 import { showErrorNotification } from '../../Common/Notification';
 import { getRunSqlQuery } from '../../../Common/utils/v1QueryUtils';
 import { versionGT } from '../../../../helpers/versionUtils';
-<<<<<<< HEAD:console/src/components/Services/Settings/About/About.js
-=======
 import { ReduxState, ConnectInjectedProps } from '../../../../types';
->>>>>>> master:console/src/components/Services/Settings/About/About.tsx
 
 type AboutState = {
   consoleAssetVersion?: string;

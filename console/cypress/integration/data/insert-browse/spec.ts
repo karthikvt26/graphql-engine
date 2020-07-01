@@ -431,17 +431,11 @@ export const checkViewRelationship = () => {
   cy.wait(1000);
   cy.get(getElementFromAlias('table-browse-rows')).click();
   cy.wait(1000);
-<<<<<<< HEAD:console/cypress/integration/data/insert-browse/spec.js
-  cy.get(getElementFromAlias('view-relationship-0')).click();
-  cy.wait(1000);
-  cy.get(getElementFromAlias('close-relationship-0')).click();
-=======
   cy.get('.rt-table').within(() => {
     cy.get('a').contains('View').click();
     cy.wait(1000);
   });
   cy.get('a').contains('Close').first().click();
->>>>>>> master:console/cypress/integration/data/insert-browse/spec.ts
 };
 
 export const passDeleteRow = () => {
