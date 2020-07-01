@@ -393,6 +393,7 @@ fakeAuthHook = AuthHookG "http://fake" AHTGet
 mkRoleNameE :: Text -> RoleName
 mkRoleNameE = fromMaybe (error "fixme") . mkRoleName
 
+-- FIXME(Phil): do we need this? I added this for the below setupAuthMode' function to work
 instance Tracing.HasReporter IO
 
 setupAuthMode'

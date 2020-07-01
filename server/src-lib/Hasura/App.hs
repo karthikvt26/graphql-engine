@@ -235,12 +235,6 @@ runTxIO pool isoLevel tx = do
   either (printErrJExit 5) return eVal
 
 
-class Monad m => Telemetry m where
-  -- an abstract method to start telemetry
-  startTelemetry
-    :: HasVersion
-    => Logger Hasura -> ServeOptions impl -> SchemaCacheRef -> InitCtx -> m ()
-
 -- TODO: Put Env into ServeOptions?
 
 -- | A latch for the graceful shutdown of a server process.
@@ -545,19 +539,6 @@ instance MetadataApiAuthorization AppM where
       withPathK "args" $ throw400 AccessDenied errMsg
     where
       errMsg = "restricted access : admin only"
-
-instance Telemetry AppM where
-  startTelemetry logger serveOptions cacheRef InitCtx{..} = do
-    -- start a background thread for telemetry
-    when (soEnableTelemetry serveOptions) $ do
-      unLogger logger $ mkGenericStrLog LevelInfo "telemetry" telemetryNotice
-
-      (dbId, pgVersion) <- liftIO $ runTxIO _icPgPool undefined $
-        (,) <$> getDbId <*> getPgVersion
-
-      void $ C.forkImmortal "runTelemetry" logger $ liftIO $
-        runTelemetry logger _icHttpManager (getSCFromRef cacheRef) dbId _icInstanceId pgVersion
-
 
 instance ConsoleRenderer AppM where
   renderConsole path authMode enableTelemetry consoleAssetsDir =
