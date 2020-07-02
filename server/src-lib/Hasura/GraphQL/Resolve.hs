@@ -31,6 +31,7 @@ import qualified Language.GraphQL.Draft.Syntax     as G
 import qualified Network.HTTP.Client               as HTTP
 import qualified Network.HTTP.Types                as HTTP
 
+import           Hasura.EncJSON
 import           Hasura.GraphQL.Resolve.Context
 import           Hasura.Prelude
 import           Hasura.RQL.Types
@@ -179,10 +180,13 @@ mutFldToTx
      , Has [HTTP.Header] r
      , MonadIO m
      , Tracing.MonadTrace m
+     , MonadIO tx
+     , MonadTx tx
+     , Tracing.MonadTrace tx
      )
   => Env.Environment
   -> V.Field
-  -> m (RespTx, HTTP.ResponseHeaders)
+  -> m (tx EncJSON, HTTP.ResponseHeaders)
 mutFldToTx env fld = do
   userInfo <- asks getter
   reqHeaders <- asks getter

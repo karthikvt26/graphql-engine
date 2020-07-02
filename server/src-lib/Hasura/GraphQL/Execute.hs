@@ -204,16 +204,24 @@ checkQueryInAllowlist enableAL userInfo req sc =
 
 -- An execution operation, in case of queries and mutations it is just a
 -- transaction to be executed
-data ExecOp
-  = ExOpQuery !LazyRespTx !(Maybe EQ.GeneratedSqlMap) ![GR.QueryRootFldUnresolved]
-  | ExOpMutation !HTTP.ResponseHeaders !LazyRespTx
+data ExecOp m
+  = ExOpQuery !(m EncJSON) !(Maybe EQ.GeneratedSqlMap) ![GR.QueryRootFldUnresolved]
+  | ExOpMutation !HTTP.ResponseHeaders !(m EncJSON)
   | ExOpSubs !EL.LiveQueryPlan
 
 -- The graphql query is resolved into an execution operation
-type GQExecPlanResolved = GQExecPlan ExecOp
+type GQExecPlanResolved m = GQExecPlan (ExecOp m)
 
 getResolvedExecPlan
-  :: forall m. (HasVersion, MonadError QErr m, MonadIO m, Tracing.MonadTrace m)
+  :: forall m tx
+   . ( HasVersion
+     , MonadError QErr m
+     , MonadIO m
+     , Tracing.MonadTrace m
+     , MonadIO tx
+     , MonadTx tx
+     , Tracing.MonadTrace tx
+     )
   => Env.Environment
   -> PGExecCtx
   -> EP.PlanCache
@@ -225,7 +233,7 @@ getResolvedExecPlan
   -> HTTP.Manager
   -> [HTTP.Header]
   -> (GQLReqUnparsed, GQLReqParsed)
-  -> m (Telem.CacheHit, GQExecPlanResolved)
+  -> m (Telem.CacheHit, GQExecPlanResolved tx)
 getResolvedExecPlan env pgExecCtx planCache userInfo sqlGenCtx
   sc scVer queryType httpManager reqHeaders (reqUnparsed, reqParsed) = do
 
@@ -247,7 +255,7 @@ getResolvedExecPlan env pgExecCtx planCache userInfo sqlGenCtx
       liftIO $ EP.addPlan scVer (_uiRole userInfo)
       operationNameM queryStr plan queryType planCache
 
-    noExistingPlan :: m GQExecPlanResolved
+    noExistingPlan :: m (GQExecPlanResolved tx)
     noExistingPlan = do
       -- req <- toParsed reqUnparsed
       (partialExecPlan, queryReusability) <- runReusabilityT $
@@ -324,6 +332,9 @@ getQueryOp
      , MonadError QErr m
      , MonadIO m
      , Tracing.MonadTrace m
+     , MonadIO tx
+     , MonadTx tx
+     , Tracing.MonadTrace tx
      )
   => Env.Environment
   -> GCtx
@@ -334,7 +345,7 @@ getQueryOp
   -> QueryReusability
   -> QueryActionExecuter
   -> VQ.ObjectSelectionSet
-  -> m (LazyRespTx, Maybe EQ.ReusableQueryPlan, EQ.GeneratedSqlMap, [GR.QueryRootFldUnresolved])
+  -> m (tx EncJSON, Maybe EQ.ReusableQueryPlan, EQ.GeneratedSqlMap, [GR.QueryRootFldUnresolved])
 getQueryOp env gCtx sqlGenCtx manager reqHdrs userInfo queryReusability actionExecuter selSet =
   runE gCtx sqlGenCtx userInfo $ EQ.convertQuerySelSet env manager reqHdrs queryReusability selSet actionExecuter
 
@@ -352,10 +363,13 @@ resolveMutSelSet
      , Has [HTTP.Header] r
      , MonadIO m
      , Tracing.MonadTrace m
+     , MonadIO tx
+     , MonadTx tx
+     , Tracing.MonadTrace tx
      )
   => Env.Environment
   -> VQ.ObjectSelectionSet
-  -> m (LazyRespTx, HTTP.ResponseHeaders)
+  -> m (tx EncJSON, HTTP.ResponseHeaders)
 resolveMutSelSet env fields = do
   aliasedTxs <- traverseObjectSelectionSet fields $ \fld ->
     case VQ._fName fld of
@@ -363,7 +377,7 @@ resolveMutSelSet env fields = do
       _            -> evalReusabilityT $ GR.mutFldToTx env fld
 
   -- combines all transactions into a single transaction
-  return (liftTx $ toSingleTx aliasedTxs, concatMap (snd . snd) aliasedTxs)
+  return (toSingleTx aliasedTxs, concatMap (snd . snd) aliasedTxs)
   where
     -- A list of aliased transactions for eg
     -- [("f1", Tx r1), ("f2", Tx r2)]
@@ -378,6 +392,9 @@ getMutOp
      , MonadError QErr m
      , MonadIO m
      , Tracing.MonadTrace m
+     , MonadIO tx
+     , MonadTx tx
+     , Tracing.MonadTrace tx
      )
   => Env.Environment
   -> GCtx
@@ -386,7 +403,7 @@ getMutOp
   -> HTTP.Manager
   -> [HTTP.Header]
   -> VQ.ObjectSelectionSet
-  -> m (LazyRespTx, HTTP.ResponseHeaders)
+  -> m (tx EncJSON, HTTP.ResponseHeaders)
 getMutOp env ctx sqlGenCtx userInfo manager reqHeaders selSet =
   peelReaderT $ resolveMutSelSet env selSet
   where

@@ -6,6 +6,7 @@ import           Control.Concurrent.STM.TVar               (readTVarIO)
 import           Control.Exception (throwIO)
 import           Control.Monad.Base
 import           Control.Monad.Catch                       (MonadCatch, MonadThrow, onException, Exception)
+import           Control.Monad.Morph                       (hoist)
 import           Control.Lens                              (view, _2)
 import           Control.Monad.Stateless
 import           Control.Monad.STM                         (atomically)
@@ -514,7 +515,8 @@ instance HttpLog AppM where
       mkHttpAccessLogContext userInfoM reqId httpReq compressedResponse qTime cType headers
 
 instance MonadExecuteQuery AppM where
-  executeQuery _ _ _ pgCtx txAccess tx = ([],) <$> runLazyTx pgCtx txAccess tx
+  executeQuery _ _ _ pgCtx txAccess tx =
+    ([],) <$> hoist (runLazyTx pgCtx txAccess . Tracing.runNoReporter) tx
 
 instance UserAuthentication (Tracing.TraceT AppM) where
   resolveUserInfo logger manager headers authMode =

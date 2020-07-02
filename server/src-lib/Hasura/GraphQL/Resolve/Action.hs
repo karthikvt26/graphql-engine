@@ -130,12 +130,15 @@ resolveActionMutation
      , Has HTTP.Manager r
      , Has [HTTP.Header] r
      , Tracing.MonadTrace m
+     , MonadIO tx
+     , MonadTx tx
+     , Tracing.MonadTrace tx
      )
   => Env.Environment
   -> Field
   -> ActionMutationExecutionContext
   -> UserInfo
-  -> m (RespTx, HTTP.ResponseHeaders)
+  -> m (tx EncJSON, HTTP.ResponseHeaders)
 resolveActionMutation env field executionContext userInfo =
   case executionContext of
     ActionMutationSyncWebhook executionContextSync ->
@@ -156,12 +159,15 @@ resolveActionMutationSync
      , Has HTTP.Manager r
      , Has [HTTP.Header] r
      , Tracing.MonadTrace m
+     , MonadIO tx
+     , MonadTx tx
+     , Tracing.MonadTrace tx
      )
   => Env.Environment
   -> Field
   -> ActionExecutionContext
   -> UserInfo
-  -> m (RespTx, HTTP.ResponseHeaders)
+  -> m (tx EncJSON, HTTP.ResponseHeaders)
 resolveActionMutationSync env field executionContext userInfo = do
   let inputArgs = J.toJSON $ fmap annInpValueToJson $ _fArguments field
       actionContext = ActionContext actionName
@@ -187,7 +193,7 @@ resolveActionMutationSync env field executionContext userInfo = do
                     RS.mkSQLSelect jsonAggType astResolvedWithoutRemoteJoins
         in RJ.executeQueryWithRemoteJoins env manager reqHeaders userInfo query [] remoteJoins
       Nothing ->
-        asSingleRowJsonResp (Q.fromBuilder $ toSQL $ RS.mkSQLSelect jsonAggType astResolved) []
+        liftTx $ asSingleRowJsonResp (Q.fromBuilder $ toSQL $ RS.mkSQLSelect jsonAggType astResolved) []
 
   where
     ActionExecutionContext actionName outputType outputFields definitionList resolvedWebhook confHeaders
@@ -296,17 +302,19 @@ table provides the action response. See Note [Resolving async action query/subsc
 
 -- | Resolve asynchronous action mutation which returns only the action uuid
 resolveActionMutationAsync
-  :: ( MonadError QErr m, MonadReader r m
+  :: ( MonadError QErr m
+     , MonadReader r m
      , Has [HTTP.Header] r
+     , MonadTx tx
      )
   => Field
   -> UserInfo
-  -> m RespTx
+  -> m (tx EncJSON)
 resolveActionMutationAsync field userInfo = do
   let sessionVariables = _uiSession userInfo
   reqHeaders <- asks getter
   let inputArgs = J.toJSON $ fmap annInpValueToJson $ _fArguments field
-  pure $ do
+  pure $ liftTx do
     actionId <- runIdentity . Q.getRow <$> Q.withQE defaultTxErrorHandler [Q.sql|
       INSERT INTO
           "hdb_catalog"."hdb_action_log"

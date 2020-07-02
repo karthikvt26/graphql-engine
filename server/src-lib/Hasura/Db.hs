@@ -242,7 +242,3 @@ instance MonadBaseControl IO (LazyTx e) where
 
 instance MonadUnique (LazyTx e) where
   newUnique = liftIO newUnique
-
-instance Tracing.MonadTrace (LazyTx e) where
-  -- FIXME: Phil - Could you add an implementation of trace here if required?
-

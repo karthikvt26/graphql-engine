@@ -191,9 +191,6 @@ recordSchemaUpdate instanceId invalidations =
              DO UPDATE SET instance_id = $1::uuid, occurred_at = DEFAULT, invalidations = $2::json
             |] (instanceId, Q.AltJ invalidations) True
 
-instance Tracing.MonadTrace (HasSystemDefinedT (CacheRWT Run)) where
-  -- FIXME: Phil - Could you add an implementation of trace here if required?
-
 runQuery
   :: (HasVersion, MonadIO m, MonadError QErr m)
   => Env.Environment -> PGExecCtx -> InstanceId
@@ -202,6 +199,8 @@ runQuery
 runQuery env pgExecCtx instanceId userInfo sc hMgr sqlGenCtx systemDefined query = do
   accessMode <- getQueryAccessMode query
   resE <- runQueryM env query
+    & Tracing.runTraceT "runQuery" -- turn off tracing here, until we can refactor
+    & Tracing.runNoReporter        -- things to use the AppM monad
     & runHasSystemDefinedT systemDefined
     & runCacheRWT sc
     & peelRun runCtx pgExecCtx accessMode

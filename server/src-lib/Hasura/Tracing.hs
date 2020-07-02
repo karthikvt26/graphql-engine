@@ -18,6 +18,8 @@ module Hasura.Tracing
 
 import           Hasura.Prelude
 import           Control.Monad.Trans.Control
+import           Control.Monad.Morph
+import           Control.Monad.Unique
 import           Data.String                 (fromString)
 
 import qualified Data.ByteString             as BS
@@ -26,7 +28,6 @@ import qualified Network.HTTP.Client         as HTTP
 import qualified Network.HTTP.Types.Header   as HTTP
 import qualified System.Random               as Rand
 import qualified Web.HttpApiData             as HTTP
-import qualified Database.PG.Query as Q
 
 -- | Any additional human-readable key-value pairs relevant
 -- to the execution of a block of code.
@@ -49,7 +50,7 @@ class Monad m => HasReporter m where
   report _ _ = fmap fst
 
 newtype NoReporter m a = NoReporter { runNoReporter :: m a }
-  deriving (Functor, Applicative, Monad, MonadIO, MonadBase b, MonadBaseControl b, MonadError e, MonadReader r)
+  deriving (Functor, Applicative, Monad, MonadIO, MonadBase b, MonadBaseControl b, MonadError e, MonadReader r, MonadUnique)
 
 instance MonadTrans NoReporter where
   lift = NoReporter
@@ -76,10 +77,13 @@ data TraceContext = TraceContext
 -- | The 'TraceT' monad transformer adds the ability to keep track of
 -- the current trace context.
 newtype TraceT m a = TraceT { unTraceT :: ReaderT TraceContext (WriterT TracingMetadata m) a }
-  deriving (Functor, Applicative, Monad, MonadIO)
+  deriving (Functor, Applicative, Monad, MonadIO, MonadUnique)
 
 instance MonadTrans TraceT where
   lift = TraceT . lift . lift
+
+instance MFunctor TraceT where 
+  hoist f (TraceT rwma) = TraceT (hoist (hoist f) rwma)
 
 deriving instance MonadBase b m => MonadBase b (TraceT m)
 deriving instance MonadBaseControl b m => MonadBaseControl b (TraceT m)
@@ -158,10 +162,6 @@ instance MonadTrace m => MonadTrace (ExceptT e m) where
   trace = mapExceptT . trace
   currentContext = lift currentContext
   attachMetadata = lift . attachMetadata
-
-instance MonadTrace (Q.TxE a) where
-  -- FIXME: Phil - Could you add an implementation of trace here if required?
-
 
 -- | A HTTP request, which can be modified before execution.
 data SuspendedRequest m a = SuspendedRequest HTTP.Request (HTTP.Request -> m a)
