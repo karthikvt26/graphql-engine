@@ -159,17 +159,21 @@ mkServeOptions rso = do
   devMode <- withEnvBool (rsoDevMode rso) $ fst devModeEnv
   adminInternalErrors <- fromMaybe True <$> -- Default to `true` to enable backwards compatibility
                                 withEnv (rsoAdminInternalErrors rso) (fst adminInternalErrorsEnv)
-  eventsHttpPoolSize <- withEnv (rsoEventsHttpPoolSize rso) (fst eventsHttpPoolSizeEnv)
   let internalErrorsConfig =
         if | devMode             -> InternalErrorsAllRequests
            | adminInternalErrors -> InternalErrorsAdminOnly
            | otherwise           -> InternalErrorsDisabled
 
+  eventsHttpPoolSize <- withEnv (rsoEventsHttpPoolSize rso) (fst eventsHttpPoolSizeEnv)
+  eventsFetchInterval <- withEnv (rsoEventsFetchInterval rso) (fst eventsFetchIntervalEnv)
+  logHeadersFromEnv <- withEnvBool (rsoLogHeadersFromEnv rso) (fst logHeadersFromEnvEnv)
+
   return $ ServeOptions port host connParams txIso adminScrt authHook jwtSecret
                         unAuthRole corsCfg enableConsole consoleAssetsDir
                         enableTelemetry strfyNum enabledAPIs lqOpts enableAL
                         enabledLogs serverLogLevel planCacheOptions
-                        internalErrorsConfig eventsHttpPoolSize
+                        internalErrorsConfig eventsHttpPoolSize eventsFetchInterval
+                        logHeadersFromEnv
   where
 #ifdef DeveloperAPIs
     defaultAPIs = [METADATA,GRAPHQL,PGDUMP,CONFIG,DEVELOPER]
@@ -322,6 +326,12 @@ eventsFetchIntervalEnv :: (String, String)
 eventsFetchIntervalEnv =
   ( "HASURA_GRAPHQL_EVENTS_FETCH_INTERVAL"
   , "Interval in milliseconds to sleep before trying to fetch events again after a fetch returned no events from postgres."
+  )
+
+logHeadersFromEnvEnv :: (String, String)
+logHeadersFromEnvEnv =
+  ( "HASURA_GRAPHQL_LOG_HEADERS_FROM_ENV"
+  , "Log headers sent instead of logging referenced environment variables."
   )
 
 retriesNumEnv :: (String, String)
@@ -772,6 +782,20 @@ parseGraphqlEventsHttpPoolSize = optional $
     help (snd eventsHttpPoolSizeEnv)
   )
 
+parseGraphqlEventsFetchInterval :: Parser (Maybe Milliseconds)
+parseGraphqlEventsFetchInterval = optional $
+  option (eitherReader readEither)
+  ( long "events-fetch-interval" <>
+    metavar (fst eventsFetchIntervalEnv)  <>
+    help (snd eventsFetchIntervalEnv)
+  )
+
+parseLogHeadersFromEnv :: Parser Bool
+parseLogHeadersFromEnv =
+  switch ( long "log-headers-from-env" <>
+           help (snd devModeEnv)
+         )
+
 mxRefetchDelayEnv :: (String, String)
 mxRefetchDelayEnv =
   ( "HASURA_GRAPHQL_LIVE_QUERIES_MULTIPLEXED_REFETCH_INTERVAL"
@@ -917,6 +941,8 @@ serveOptionsParser =
   <*> parseGraphqlDevMode
   <*> parseGraphqlAdminInternalErrors
   <*> parseGraphqlEventsHttpPoolSize
+  <*> parseGraphqlEventsFetchInterval
+  <*> parseLogHeadersFromEnv
 
 -- | This implements the mapping between application versions
 -- and catalog schema versions.

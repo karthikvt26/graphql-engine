@@ -14,7 +14,7 @@ import           Data.Aeson                                ((.=))
 import           Data.Time.Clock                           (UTCTime)
 import           GHC.AssertNF
 import           Options.Applicative
-import           System.Environment                        (getEnvironment, lookupEnv)
+import           System.Environment                        (getEnvironment)
 
 import qualified Control.Concurrent.Async.Lifted.Safe      as LA
 import qualified Control.Concurrent.Extended               as C
@@ -338,11 +338,10 @@ runHGEServer env ServeOptions{..} InitCtx{..} pgExecCtx initTime (shutdownLatch,
     startSchemaSyncThreads sqlGenCtx _icPgPool logger _icHttpManager
                            cacheRef _icInstanceId cacheInitTime
 
-  let maxEvThrds = fromMaybe defaultMaxEventThreads soEventsHttpPoolSize
-
-  fetchI  <- fmap milliseconds $ liftIO $
-    getFromEnv (Milliseconds defaultFetchInterval) "HASURA_GRAPHQL_EVENTS_FETCH_INTERVAL"
-  logEnvHeaders <- liftIO $ getFromEnv False "LOG_HEADERS_FROM_ENV"
+  let
+    maxEvThrds    = fromMaybe defaultMaxEventThreads soEventsHttpPoolSize
+    fetchI        = milliseconds $ fromMaybe (Milliseconds defaultFetchInterval) soEventsFetchInterval
+    logEnvHeaders = soLogHeadersFromEnv
 
   -- prepare event triggers data
   prepareEvents _icPgPool logger
@@ -430,17 +429,6 @@ runHGEServer env ServeOptions{..} InitCtx{..} pgExecCtx initTime (shutdownLatch,
                          LevelWarn "event_triggers" ("Error in unlocking the events " ++ (show err))
             Right count -> logger $ mkGenericStrLog
                             LevelInfo "event_triggers" ((show count) ++ " events were updated")
-
-    -- This should be isolated to the few env variables required for starting the application server,
-    -- Not any variables supplied by the user for URL templating etc.
-    getFromEnv :: (Read a) => a -> String -> IO a
-    getFromEnv defaults k = do
-      mEnv <- lookupEnv k
-      let mRes = case mEnv of
-            Nothing  -> Just defaults
-            Just val -> readMaybe val
-          eRes = maybe (Left $ "Wrong expected type for environment variable: " <> k) Right mRes
-      either (printErrExit 8) return eRes
 
     runTx :: Q.PGPool -> Q.TxMode -> Q.TxE QErr a -> IO (Either QErr a)
     runTx pool txLevel tx =
