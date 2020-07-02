@@ -338,8 +338,8 @@ runHGEServer env ServeOptions{..} InitCtx{..} pgExecCtx initTime (shutdownLatch,
     startSchemaSyncThreads sqlGenCtx _icPgPool logger _icHttpManager
                            cacheRef _icInstanceId cacheInitTime
 
+  let maxEvThrds = fromMaybe defaultMaxEventThreads soEventsHttpPoolSize
 
-  maxEvThrds <- liftIO $ getFromEnv defaultMaxEventThreads "HASURA_GRAPHQL_EVENTS_HTTP_POOL_SIZE"
   fetchI  <- fmap milliseconds $ liftIO $
     getFromEnv (Milliseconds defaultFetchInterval) "HASURA_GRAPHQL_EVENTS_FETCH_INTERVAL"
   logEnvHeaders <- liftIO $ getFromEnv False "LOG_HEADERS_FROM_ENV"
