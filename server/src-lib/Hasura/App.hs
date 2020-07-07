@@ -225,7 +225,7 @@ migrateCatalogSchema env logger pool httpManager sqlGenCtx = do
         , slKind = "db_migrate"
         , slInfo = A.toJSON err
         }
-      liftIO (printErrExit 14 "Migrate error")
+      liftIO (printErrExit 14 (BLC.unpack $ A.encode err))
   unLogger logger migrationResult
   return (schemaCache, view _2 <$> lastUpdateEvent)
 
