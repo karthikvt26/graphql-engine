@@ -715,11 +715,8 @@ createWSServerApp
   -> AuthMode
   -> WSServerEnv
   -> WS.HasuraServerApp m
-createWSServerApp env authMode serverEnv = \ !ipAddress !pendingConn ->
--- =======
 --   -- ^ aka generalized 'WS.ServerApp'
--- createWSServerApp authMode serverEnv = \ !ipAddress !pendingConn ->
--- >>>>>>> master
+createWSServerApp env authMode serverEnv = \ !ipAddress !pendingConn ->
   WS.createServerApp (_wseServer serverEnv) handlers ipAddress pendingConn
   where
     handlers =
@@ -727,10 +724,6 @@ createWSServerApp env authMode serverEnv = \ !ipAddress !pendingConn ->
       -- Mask async exceptions during event processing to help maintain integrity of mutable vars:
       (\rid rh ip -> mask_ $ onConn (_wseLogger serverEnv) (_wseCorsPolicy serverEnv) rid rh ip)
       (\conn bs -> mask_ $ onMessage env authMode serverEnv conn bs)
--- =======
---       (\rid rh ip ->  mask_ $ onConn (_wseLogger serverEnv) (_wseCorsPolicy serverEnv) rid rh ip)
---       (\conn bs -> mask_ $ onMessage authMode serverEnv conn bs)
--- >>>>>>> master
       (\conn ->    mask_ $ onClose (_wseLogger serverEnv) (_wseLiveQMap serverEnv) conn)
 
 stopWSServerApp :: WSServerEnv -> IO ()

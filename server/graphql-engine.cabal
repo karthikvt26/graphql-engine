@@ -411,69 +411,6 @@ library
                      , Hasura.RQL.DML.Select.Internal
                      , Hasura.RQL.DML.Select.Types
                      , Hasura.RQL.DML.Update
--- <<<<<<< HEAD
--- =======
---                      , Hasura.RQL.DML.Count
---                      , Hasura.RQL.DML.RemoteJoin
---                      , Hasura.RQL.GBoolExp
-
---                      , Hasura.GraphQL.Transport.HTTP.Protocol
---                      , Hasura.GraphQL.Transport.WebSocket
---                      , Hasura.GraphQL.Schema.BoolExp
---                      , Hasura.GraphQL.Schema.Common
---                      , Hasura.GraphQL.Schema.CustomTypes
---                      , Hasura.GraphQL.Schema.Builder
---                      , Hasura.GraphQL.Schema.Action
---                      , Hasura.GraphQL.Schema.Function
---                      , Hasura.GraphQL.Schema.OrderBy
---                      , Hasura.GraphQL.Schema.Select
---                      , Hasura.GraphQL.Schema.Merge
---                      , Hasura.GraphQL.Schema.Mutation.Common
---                      , Hasura.GraphQL.Schema.Mutation.Insert
---                      , Hasura.GraphQL.Schema.Mutation.Update
---                      , Hasura.GraphQL.Schema.Mutation.Delete
---                      , Hasura.GraphQL.Schema
---                      , Hasura.GraphQL.RelaySchema
---                      , Hasura.GraphQL.Utils
---                      , Hasura.GraphQL.NormalForm
---                      , Hasura.GraphQL.Validate.Types
---                      , Hasura.GraphQL.Validate.Context
---                      , Hasura.GraphQL.Validate.SelectionSet
---                      , Hasura.GraphQL.Validate.InputValue
---                      , Hasura.GraphQL.Explain
---                      , Hasura.GraphQL.Execute.Plan
---                      , Hasura.GraphQL.Execute.LiveQuery.Options
---                      , Hasura.GraphQL.Execute.LiveQuery.Plan
---                      , Hasura.GraphQL.Execute.LiveQuery.Poll
---                      , Hasura.GraphQL.Execute.LiveQuery.State
---                      , Hasura.GraphQL.Execute.LiveQuery.TMap
---                      , Hasura.GraphQL.Resolve
---                      , Hasura.GraphQL.Resolve.Action
---                      , Hasura.GraphQL.Resolve.Types
---                      , Hasura.GraphQL.Resolve.Context
---                      , Hasura.GraphQL.Resolve.BoolExp
---                      , Hasura.GraphQL.Resolve.InputValue
---                      , Hasura.GraphQL.Resolve.Introspect
---                      , Hasura.GraphQL.Resolve.Insert
---                      , Hasura.GraphQL.Resolve.Mutation
---                      , Hasura.GraphQL.Resolve.Select
---                      , Hasura.GraphQL.RemoteServer
---                      , Hasura.GraphQL.Context
-
---                      , Hasura.Eventing.HTTP
---                      , Hasura.Eventing.EventTrigger
---                      , Hasura.Eventing.ScheduledTrigger
-
---                      , Control.Lens.Extended
---                      , Data.Aeson.Extended
---                      , Data.List.Extended
---                      , Data.HashMap.Strict.Extended
---                      , Data.HashMap.Strict.InsOrd.Extended
---                      , Data.Sequence.NonEmpty
---                      , Data.Text.Extended
---                      , Data.Parser.Expires
-
--- >>>>>>> master
                      , Hasura.SQL.DML
                      , Hasura.SQL.Error
                      , Hasura.SQL.GeoJSON

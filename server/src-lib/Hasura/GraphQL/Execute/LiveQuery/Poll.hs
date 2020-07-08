@@ -56,7 +56,6 @@ import qualified ListT
 import qualified StmContainers.Map                        as STMMap
 
 import           Control.Lens
--- import           GHC.AssertNF
 
 import qualified Hasura.GraphQL.Execute.LiveQuery.TMap    as TMap
 import qualified Hasura.Logging                           as L
@@ -96,9 +95,6 @@ data Subscriber
   , _sMetadata         :: !SubscriberMetadata
   , _sOnChangeCallback :: !OnChange
   }
--- =======
--- newtype Subscriber = Subscriber { _sOnChangeCallback :: OnChange }
--- >>>>>>> stable
 
 -- | live query onChange metadata, used for adding more extra analytics data
 data LiveQueryMetadata

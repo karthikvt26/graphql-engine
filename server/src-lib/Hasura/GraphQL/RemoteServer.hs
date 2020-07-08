@@ -359,7 +359,7 @@ execRemoteGQ'
   -> RemoteSchemaInfo
   -> G.OperationType
   -> m (DiffTime, [N.Header], BL.ByteString)
-execRemoteGQ' env manager userInfo reqHdrs q rsi opType = Tracing.traceHttpRequest (T.pack (show url)) do
+execRemoteGQ' env manager userInfo reqHdrs q rsi opType = Tracing.traceHttpRequest (T.pack (show url)) $ do
   when (opType == G.OperationTypeSubscription) $
     throw400 NotSupported "subscription to remote server is not supported"
   confHdrs <- makeHeadersFromConf env hdrConf

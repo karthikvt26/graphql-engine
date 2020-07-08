@@ -14,7 +14,6 @@ import           Test.Hspec.Core.Spec
 import           Test.Hspec.Expectations.Lifted
 
 import qualified Database.PG.Query              as Q
-import qualified Safe
 import qualified Data.Environment as Env
 
 import           Hasura.RQL.DDL.Metadata        (ClearMetadata (..), runClearMetadata)

@@ -34,9 +34,9 @@ import           Hasura.SQL.Types
 import qualified Hasura.GraphQL.Validate.Types as VT
 
 import qualified Data.Aeson                    as J
-import qualified Data.Environment              as Env
 import qualified Data.Aeson.Casing             as J
 import qualified Data.Aeson.TH                 as J
+import qualified Data.Environment              as Env
 import qualified Data.HashMap.Strict           as Map
 import qualified Data.HashSet                  as Set
 import qualified Database.PG.Query             as Q
@@ -100,7 +100,7 @@ resolveAction
   :: QErrM m
   => Env.Environment
   -> (NonObjectTypeMap, AnnotatedObjects)
-  -> HashSet PGScalarType 
+  -> HashSet PGScalarType
   -- ^ List of all Postgres scalar types.
   -> ActionDefinitionInput
   -> m ( ResolvedActionDefinition
@@ -143,13 +143,6 @@ resolveAction env customTypes allPGScalars actionDefinition = do
           inputTypeInfos = nonObjectTypeMap <> mapFromL VT.getNamedTy defaultTypes
       in Map.lookup typeName inputTypeInfos
 
--- <<<<<<< HEAD
---     resolveWebhook (InputWebhook urlTemplate) = do
---       let eitherRenderedTemplate = renderURLTemplate env urlTemplate
---       either (throw400 Unexpected . T.pack) (pure . ResolvedWebhook) eitherRenderedTemplate
-
--- =======
--- >>>>>>> master
     getObjectTypeInfo typeName =
       onNothing (Map.lookup (ObjectTypeName typeName) (snd customTypes)) $
         throw400 NotExists $ "the type: "

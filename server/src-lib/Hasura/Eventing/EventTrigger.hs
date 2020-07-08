@@ -175,13 +175,6 @@ processEventQueue
   -> EventEngineCtx
   -> LockedEventsCtx
   -> m void
--- processEventQueue logger logenv httpMgr pool getSchemaCache eeCtx@EventEngineCtx{..} = do
--- =======
---   :: (HasVersion) => L.Logger L.Hasura -> LogEnvHeaders -> HTTP.Manager-> Q.PGPool
---   -> IO SchemaCache -> EventEngineCtx
---   -> IO void
--- processEventQueue logger logenv httpMgr pool getSchemaCache eeCtx@EventEngineCtx{..} = do
--- >>>>>>> master:server/src-lib/Hasura/Eventing/EventTrigger.hs
 processEventQueue logger logenv httpMgr pool getSchemaCache eeCtx@EventEngineCtx{..} LockedEventsCtx{leEvents} = do
   events0 <- popEventsBatch
   go events0 0 False
@@ -218,13 +211,6 @@ processEventQueue logger logenv httpMgr pool getSchemaCache eeCtx@EventEngineCtx
           -- been processed
           removeEventFromLockedEvents (eId event) leEvents
         LA.wait eventsNextA
--- =======
---              runReaderT (withEventEngineCtx eeCtx $ (processEvent event)) (logger, httpMgr)
---              -- removing an event from the _eeCtxLockedEvents after the event has
---              -- been processed
---              removeEventFromLockedEvents (eId event) leEvents
---         wait eventsNextA
--- >>>>>>> master
 
       let lenEvents = length events
       if | lenEvents == fetchBatchSize -> do
