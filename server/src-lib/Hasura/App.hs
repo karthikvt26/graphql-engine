@@ -298,10 +298,10 @@ runHGEServer
   -- and mutations
   -> UTCTime
   -- ^ start time
-  -> (C.MVar (), IO ())
-  -- ^ shutdown latch and a shutdown function
+  -> IO ()
+  -- ^ shutdown function
   -> m ()
-runHGEServer env ServeOptions{..} InitCtx{..} pgExecCtx initTime (shutdownLatch, shutdownApp) = do
+runHGEServer env ServeOptions{..} InitCtx{..} pgExecCtx initTime shutdownApp = do
   -- Comment this to enable expensive assertions from "GHC.AssertNF". These
   -- will log lines to STDOUT containing "not in normal form". In the future we
   -- could try to integrate this into our tests. For now this is a development
@@ -490,12 +490,8 @@ runHGEServer env ServeOptions{..} InitCtx{..} pgExecCtx initTime (shutdownLatch,
       -> IO ()
     shutdownHandler (Loggers loggerCtx (Logger logger) _) immortalThreads stopWsServer leCtx pool closeSocket =
       LA.link =<< LA.async do
-        -- TODO: clarify with Phil/Lyndon, why do we need to MVars for the
-        -- shutdown latch here?. There's already a shutdown latch that's part of
-        -- 'InitCtx'
-        _ <- C.takeMVar shutdownLatch
-        logger $ mkGenericStrLog LevelInfo "server" "gracefully shutting down server"
         waitForShutdown _icShutdownLatch
+        logger $ mkGenericStrLog LevelInfo "server" "gracefully shutting down server"
         shutdownEvents pool (Logger logger) leCtx
         closeSocket
         stopWsServer
