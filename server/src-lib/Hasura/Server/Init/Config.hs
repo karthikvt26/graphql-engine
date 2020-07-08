@@ -10,6 +10,7 @@ import qualified Data.Text                        as T
 import qualified Database.PG.Query                as Q
 
 import           Data.Char                        (toLower)
+import           Data.Time
 import           Network.Wai.Handler.Warp         (HostPreference)
 
 import qualified Hasura.Cache                     as Cache
@@ -27,6 +28,9 @@ data RawConnParams
   { rcpStripes      :: !(Maybe Int)
   , rcpConns        :: !(Maybe Int)
   , rcpIdleTime     :: !(Maybe Int)
+  , rcpConnLifetime :: !(Maybe NominalDiffTime)
+  -- ^ Time from connection creation after which to destroy a connection and
+  -- choose a different/new one.
   , rcpAllowPrepare :: !(Maybe Bool)
   } deriving (Show, Eq)
 
@@ -211,6 +215,11 @@ readJson = J.eitherDecodeStrict . txtToBs . T.pack
 
 class FromEnv a where
   fromEnv :: String -> Either String a
+
+-- Deserialize from seconds, in the usual way
+instance FromEnv NominalDiffTime where
+  fromEnv s = maybe (Left "could not parse as a Double") (Right . realToFrac) $
+                (readMaybe s :: Maybe Double)
 
 instance FromEnv String where
   fromEnv = Right

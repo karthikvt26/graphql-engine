@@ -257,55 +257,6 @@ mkSpockAction serverCtx qErrEncoder qErrModifier apiHandler = do
     let headers = Wai.requestHeaders req
         authMode = scAuthMode serverCtx
         manager = scManager serverCtx
--- <<<<<<< HEAD
---         ipAddress = getSourceFromFallback req
---         pathInfo = Wai.rawPathInfo req
-
---     tracingCtx <- liftIO $ Tracing.extractHttpContext headers
-
---     let runTraceT
---           :: forall m a
---            . (MonadIO m, Tracing.HasReporter m)
---           => Tracing.TraceT m a
---           -> m a
---         runTraceT = maybe
---           Tracing.runTraceT
---           Tracing.runTraceTWith
---           tracingCtx
---           (fromString (B8.unpack pathInfo))
-
---     requestId <- getRequestId headers
-
---     mapActionT runTraceT $ do
---       userInfoE <- fmap fst <$> lift (resolveUserInfo logger manager headers authMode)
---       userInfo  <- either (logErrorAndResp Nothing requestId req (Left reqBody) False headers . qErrModifier)
---                    return userInfoE
-
---       let handlerState = HandlerCtx serverCtx userInfo headers ipAddress requestId
---           includeInternal = shouldIncludeInternal (_uiRole userInfo) $
---                             scResponseInternalErrorsConfig serverCtx
---           -- curRole = userRole userInfo
-
---       (serviceTime, (result, q)) <- withElapsedTime $ case apiHandler of
---         AHGet handler -> do
---           res <- lift $ runReaderT (runExceptT handler) handlerState
---           return (res, Nothing)
---         AHPost handler -> do
---           parsedReqE <- runExceptT $ parseBody reqBody
---           parsedReq  <- either (logErrorAndResp (Just userInfo) requestId req (Left reqBody) includeInternal headers . qErrModifier)
---                         return parsedReqE
---           res <- lift $ runReaderT (runExceptT $ handler parsedReq) handlerState
---           return (res, Just parsedReq)
-
---       -- apply the error modifier
---       let modResult = fmapL qErrModifier result
-
---       -- log and return result
---       case modResult of
---         Left err  -> let jErr = maybe (Left reqBody) (Right . toJSON) q
---                      in logErrorAndResp (Just userInfo) requestId req jErr includeInternal headers err
---         Right res -> logSuccessAndResp (Just userInfo) requestId req (fmap toJSON q) res (Just (ioWaitTime, serviceTime)) headers
--- =======
         ipAddress = Wai.getSourceFromFallback req
         pathInfo = Wai.rawPathInfo req
 
@@ -762,8 +713,8 @@ httpApp env corsCfg serverCtx enableConsole consoleAssetsDir enableTelemetry = d
       Spock.post "v1/graphql" $ spockAction GH.encodeGQErr allMod200 $
         mkPostHandler $ mkAPIRespHandler (v1GQHandler env)
 
-      Spock.post "v1/relay" $ spockAction GH.encodeGQErr allMod200 $
-        mkPostHandler $ mkAPIRespHandler (v1GQRelayHandler env)
+      Spock.post "v1beta1/relay" $ spockAction GH.encodeGQErr allMod200 $
+        mkPostHandler $ mkAPIRespHandler $ v1GQRelayHandler env
 
     when (isDeveloperAPIEnabled serverCtx) $ do
       Spock.get "dev/ekg" $ spockAction encodeQErr id $

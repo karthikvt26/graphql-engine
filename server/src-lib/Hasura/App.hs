@@ -2,12 +2,12 @@
 
 module Hasura.App where
 
-import           Control.Concurrent.STM.TVar               (readTVarIO)
-import           Control.Exception (throwIO)
+import           Control.Concurrent.STM.TVar               (readTVarIO, TVar)
+import           Control.Exception                         (throwIO)
+import           Control.Lens                              (view, _2)
 import           Control.Monad.Base
 import           Control.Monad.Catch                       (MonadCatch, MonadMask, MonadThrow, onException, Exception)
 import           Control.Monad.Morph                       (hoist)
-import           Control.Lens                              (view, _2)
 import           Control.Monad.Stateless
 import           Control.Monad.STM                         (atomically)
 import           Control.Monad.Trans.Control               (MonadBaseControl (..))
@@ -39,6 +39,7 @@ import           Hasura.GraphQL.Transport.HTTP             (MonadExecuteQuery(..
 import           Hasura.Db
 import           Hasura.EncJSON
 import           Hasura.Eventing.EventTrigger
+import           Hasura.Eventing.Common
 import           Hasura.Eventing.ScheduledTrigger
 import           Hasura.GraphQL.Execute                    (MonadGQLExecutionCheck (..),
                                                             checkQueryInAllowlist)
@@ -269,8 +270,8 @@ shutdownGracefully = flip C.putMVar () . unShutdownLatch . _icShutdownLatch
 -- rethrow If we do not flush the log buffer on exception, then log lines
 -- may be missed
 -- See: https://github.com/hasura/graphql-engine/issues/4772
-flushLogger :: (MonadIO m) => LoggerCtx impl -> m ()
-flushLogger loggerCtx = liftIO $ FL.flushLogStr $ _lcLoggerSet loggerCtx
+flushLogger :: MonadIO m => LoggerCtx impl -> m ()
+flushLogger = liftIO . FL.flushLogStr . _lcLoggerSet
 
 runHGEServer
   :: ( HasVersion
@@ -317,9 +318,6 @@ runHGEServer env ServeOptions{..} InitCtx{..} pgExecCtx initTime (shutdownLatch,
 
   authMode <- either (printErrExit AuthConfigurationError . T.unpack) return authModeRes
 
-  -- See: https://github.com/hasura/graphql-engine/issues/4772
-  -- let flushLogger = liftIO $ FL.flushLogStr $ _lcLoggerSet loggerCtx
-
   HasuraApp app cacheRef cacheInitTime stopWsServer <- flip onException (flushLogger loggerCtx) $
     mkWaiApp env
              soTxIso
@@ -356,6 +354,8 @@ runHGEServer env ServeOptions{..} InitCtx{..} pgExecCtx initTime (shutdownLatch,
     fetchI        = milliseconds $ fromMaybe (Milliseconds defaultFetchInterval) soEventsFetchInterval
     logEnvHeaders = soLogHeadersFromEnv
 
+  lockedEventsCtx <- liftIO $ atomically $ initLockedEventsCtx
+
   -- prepare event triggers data
   prepareEvents _icPgPool logger
   eventEngineCtx <- liftIO $ atomically $ initEventEngineCtx maxEvThrds fetchI
@@ -363,7 +363,7 @@ runHGEServer env ServeOptions{..} InitCtx{..} pgExecCtx initTime (shutdownLatch,
 
   _eventQueueThread <- C.forkImmortal "processEventQueue" logger $
     processEventQueue logger logEnvHeaders
-    _icHttpManager _icPgPool (getSCFromRef cacheRef) eventEngineCtx
+    _icHttpManager _icPgPool (getSCFromRef cacheRef) eventEngineCtx lockedEventsCtx
 
   -- start a backgroud thread to handle async actions
   asyncActionsThread <- C.forkImmortal "asyncActionsProcessor" logger $
@@ -373,9 +373,12 @@ runHGEServer env ServeOptions{..} InitCtx{..} pgExecCtx initTime (shutdownLatch,
   void $ liftIO $ C.forkImmortal "runCronEventsGenerator" logger $
     runCronEventsGenerator logger _icPgPool (getSCFromRef cacheRef)
 
+  -- prepare scheduled triggers
+  prepareScheduledEvents _icPgPool logger
+
   -- start a background thread to deliver the scheduled events
   void $ C.forkImmortal "processScheduledTriggers" logger $
-    processScheduledTriggers env logger logEnvHeaders _icHttpManager _icPgPool (getSCFromRef cacheRef)
+    processScheduledTriggers env logger logEnvHeaders _icHttpManager _icPgPool (getSCFromRef cacheRef) lockedEventsCtx
 
   -- start a background thread to check for updates
   updateThread <- C.forkImmortal "checkForUpdates" logger $ liftIO $
@@ -404,7 +407,7 @@ runHGEServer env ServeOptions{..} InitCtx{..} pgExecCtx initTime (shutdownLatch,
   let warpSettings = Warp.setPort soPort
                      . Warp.setHost soHost
                      . Warp.setGracefulShutdownTimeout (Just 30) -- 30s graceful shutdown
-                     . Warp.setInstallShutdownHandler (shutdownHandler _icLoggers immortalThreads stopWsServer eventEngineCtx _icPgPool)
+                     . Warp.setInstallShutdownHandler (shutdownHandler _icLoggers immortalThreads stopWsServer lockedEventsCtx _icPgPool)
                      $ Warp.defaultSettings
   liftIO $ Warp.runSettings warpSettings app
 
@@ -425,23 +428,47 @@ runHGEServer env ServeOptions{..} InitCtx{..} pgExecCtx initTime (shutdownLatch,
       res <- liftIO $ runTx pool (Q.ReadCommitted, Nothing) unlockAllEvents
       either (printErrJExit EventSubSystemError) return res
 
+    -- | prepareScheduledEvents is like prepareEvents, but for scheduled triggers
+    prepareScheduledEvents pool (Logger logger) = do
+      liftIO $ logger $ mkGenericStrLog LevelInfo "scheduled_triggers" "preparing data"
+      res <- liftIO $ runTx pool (Q.ReadCommitted, Nothing) unlockAllLockedScheduledEvents
+      either (printErrJExit EventSubSystemError) return res
+
     -- | shutdownEvents will be triggered when a graceful shutdown has been inititiated, it will
-    -- get the locked events from the event engine context and then it will unlock all those events.
+    -- get the locked events from the event engine context and the scheduled event engine context
+    -- then it will unlock all those events.
     -- It may happen that an event may be processed more than one time, an event that has been already
     -- processed but not been marked as delivered in the db will be unlocked by `shutdownEvents`
     -- and will be processed when the events are proccessed next time.
-    shutdownEvents :: Q.PGPool -> Logger Hasura -> EventEngineCtx -> IO ()
-    shutdownEvents pool (Logger logger) EventEngineCtx {..} = do
+    shutdownEvents
+      :: Q.PGPool
+      -> Logger Hasura
+      -> LockedEventsCtx
+      -> IO ()
+    shutdownEvents pool hasuraLogger@(Logger logger) LockedEventsCtx {..} = do
       liftIO $ logger $ mkGenericStrLog LevelInfo "event_triggers" "unlocking events that are locked by the HGE"
-      lockedEvents <- readTVarIO _eeCtxLockedEvents
-      liftIO $ do
-        when (not $ Set.null $ lockedEvents) $ do
-          res <- runTx pool (Q.ReadCommitted, Nothing) (unlockEvents $ toList lockedEvents)
-          case res of
-            Left err -> logger $ mkGenericStrLog
-                         LevelWarn "event_triggers" ("Error in unlocking the events " ++ (show err))
-            Right count -> logger $ mkGenericStrLog
-                            LevelInfo "event_triggers" ((show count) ++ " events were updated")
+      unlockEventsForShutdown pool hasuraLogger "event_triggers" "" unlockEvents leEvents
+      liftIO $ logger $ mkGenericStrLog LevelInfo "scheduled_triggers" "unlocking scheduled events that are locked by the HGE"
+      unlockEventsForShutdown pool hasuraLogger "scheduled_triggers" "cron events" unlockCronEvents leCronEvents
+      unlockEventsForShutdown pool hasuraLogger "scheduled_triggers" "scheduled events" unlockCronEvents leStandAloneEvents
+
+    unlockEventsForShutdown
+      :: Q.PGPool
+      -> Logger Hasura
+      -> Text -- ^ trigger type
+      -> Text -- ^ event type
+      -> ([eventId] -> Q.TxE QErr Int)
+      -> TVar (Set.Set eventId)
+      -> IO ()
+    unlockEventsForShutdown pool (Logger logger) triggerType eventType doUnlock lockedIdsVar = do
+      lockedIds <- readTVarIO lockedIdsVar
+      unless (Set.null lockedIds) do
+        result <- runTx pool (Q.ReadCommitted, Nothing) (doUnlock $ toList lockedIds)
+        case result of
+          Left err -> logger $ mkGenericStrLog LevelWarn triggerType $
+            "Error while unlocking " ++ T.unpack eventType ++ " events: " ++ show err
+          Right count -> logger $ mkGenericStrLog LevelInfo triggerType $
+            show count ++ " " ++ T.unpack eventType ++ " events successfully unlocked"
 
     runTx :: Q.PGPool -> Q.TxMode -> Q.TxE QErr a -> IO (Either QErr a)
     runTx pool txLevel tx =
@@ -456,22 +483,20 @@ runHGEServer env ServeOptions{..} InitCtx{..} pgExecCtx initTime (shutdownLatch,
       -> [Immortal.Thread]
       -> IO ()
       -- ^ the stop websocket server function
-      -> EventEngineCtx
+      -> LockedEventsCtx
       -> Q.PGPool
       -> IO ()
       -- ^ the closeSocket callback
       -> IO ()
-    shutdownHandler (Loggers loggerCtx (Logger logger) _) immortalThreads stopWsServer eeCtx pool closeSocket =
+    shutdownHandler (Loggers loggerCtx (Logger logger) _) immortalThreads stopWsServer leCtx pool closeSocket =
       LA.link =<< LA.async do
+        -- TODO: clarify with Phil/Lyndon, why do we need to MVars for the
+        -- shutdown latch here?. There's already a shutdown latch that's part of
+        -- 'InitCtx'
         _ <- C.takeMVar shutdownLatch
--- =======
---     shutdownHandler :: Loggers -> IO () -> EventEngineCtx -> Q.PGPool -> IO () -> IO ()
---     shutdownHandler (Loggers loggerCtx (Logger logger) _) shutdownApp eeCtx pool closeSocket =
---       void . Async.async $ do
--- >>>>>>> master
         logger $ mkGenericStrLog LevelInfo "server" "gracefully shutting down server"
         waitForShutdown _icShutdownLatch
-        shutdownEvents pool (Logger logger) eeCtx
+        shutdownEvents pool (Logger logger) leCtx
         closeSocket
         stopWsServer
         -- kill all the background immortal threads
