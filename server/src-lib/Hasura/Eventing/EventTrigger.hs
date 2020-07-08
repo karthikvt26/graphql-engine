@@ -273,9 +273,6 @@ processEventQueue logger logenv httpMgr pool getSchemaCache eeCtx@EventEngineCtx
             (processError pool e retryConf decodedHeaders ep)
             (processSuccess pool e decodedHeaders ep) res
             >>= flip onLeft logQErr
-          -- either
-          --   (processError logger isPgCtx e retryConf decodedHeaders ep)
-          --   (processSuccess isPgCtx e decodedHeaders ep) res
 
 withEventEngineCtx ::
     ( MonadIO m

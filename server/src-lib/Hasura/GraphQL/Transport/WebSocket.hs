@@ -84,18 +84,6 @@ data ErrRespType
   | ERTGraphqlCompliant
   deriving (Show)
 
--- data WsClientState
---   = WsClientState
---   { wscsUserInfo     :: !UserInfo
---   -- ^ the 'UserInfo' required to execute the query and various other things
---   , wscsTokenExpTime :: !(Maybe TC.UTCTime)
---   -- ^ the JWT expiry time, if any
---   , wscsReqHeaders   :: ![H.Header]
---   -- ^ headers from the client (in conn params) to forward to the remote schema
---   , wscsIpAddress    :: !IpAddress
---   -- ^ IP address required for 'GQLApiAuthorization'
---   }
-
 data WSConnState
   = CSNotInitialised !WsHeaders !Wai.IpAddress
   -- ^ headers and IP address from the client for websockets

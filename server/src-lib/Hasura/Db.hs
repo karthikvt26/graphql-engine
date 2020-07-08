@@ -87,10 +87,6 @@ instance (MonadTx m) => MonadTx (Tracing.TraceT m) where
 instance (MonadTx m) => MonadTx (Tracing.NoReporter m) where
   liftTx = lift . liftTx
 
--- | Like 'Q.TxE', but defers acquiring a Postgres connection until the first execution of 'liftTx'.
--- If no call to 'liftTx' is ever reached (i.e. a successful result is returned or an error is
--- raised before ever executing a query), no connection is ever acquired.
-
 -- | Like 'Q.TxE', but defers acquiring a Postgres connection until the first
 -- execution of 'liftTx'.  If no call to 'liftTx' is ever reached (i.e. a
 -- successful result is returned or an error is raised before ever executing a

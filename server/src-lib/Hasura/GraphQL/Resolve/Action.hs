@@ -198,35 +198,6 @@ resolveActionMutationSync env field executionContext userInfo = do
   where
     ActionExecutionContext actionName outputType outputFields definitionList resolvedWebhook confHeaders
       forwardClientHeaders = executionContext
---   let inputArgs = J.toJSON $ fmap annInpValueToJson $ _fArguments field
---       actionContext = ActionContext actionName
---       sessionVariables = _uiSession userInfo
---       handlerPayload = ActionWebhookPayload actionContext sessionVariables inputArgs
---   manager <- asks getter
---   reqHeaders <- asks getter
---   (webhookRes, respHeaders) <- callWebhook env manager outputType outputFields reqHeaders confHeaders
---                                forwardClientHeaders resolvedWebhook handlerPayload
---   let webhookResponseExpression = RS.AEInput $ UVSQL $
---         toTxtValue $ WithScalarType PGJSONB $ PGValJSONB $ Q.JSONB $ J.toJSON webhookRes
---   selSet <- asObjectSelectionSet $ _fSelSet field
---   selectAstUnresolved <-
---     processOutputSelectionSet webhookResponseExpression outputType definitionList
---     (_fType field) selSet
---   astResolved <- RS.traverseAnnSimpleSelect resolveValTxt selectAstUnresolved
---   let (astResolvedWithoutRemoteJoins,maybeRemoteJoins) = RJ.getRemoteJoins astResolved
---       jsonAggType = mkJsonAggSelect outputType
---   return $ (,respHeaders) $
---     case maybeRemoteJoins of
---       Just remoteJoins ->
---         let query = Q.fromBuilder $ toSQL $
---                     RS.mkSQLSelect jsonAggType astResolvedWithoutRemoteJoins
---         in RJ.executeQueryWithRemoteJoins manager reqHeaders userInfo query [] remoteJoins
---       Nothing ->
---         asSingleRowJsonResp (Q.fromBuilder $ toSQL $ RS.mkSQLSelect jsonAggType astResolved) []
-
---   where
---     ActionExecutionContext actionName outputType outputFields definitionList resolvedWebhook confHeaders
---       forwardClientHeaders = executionContext
 
 -- QueryActionExecuter is a type for a higher function, this is being used
 -- to allow or disallow where a query action can be executed. We would like

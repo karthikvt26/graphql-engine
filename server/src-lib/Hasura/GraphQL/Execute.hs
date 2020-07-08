@@ -275,26 +275,6 @@ getResolvedExecPlan env pgExecCtx planCache userInfo sqlGenCtx
               (restrictActionExecuter "query actions cannot be run as a subscription") fields
             traverse_ (addPlanToCache . EP.RPSubs) plan
             return $ ExOpSubs lqOp
-    -- noExistingPlan :: m GQExecPlanResolved
-    -- noExistingPlan = do
-    --   -- req <- toParsed reqUnparsed
-    --   (partialExecPlan, queryReusability) <- runReusabilityT $
-    --     getExecPlanPartial userInfo sc queryType reqParsed
-    --   forM partialExecPlan $ \(gCtx, rootSelSet) ->
-    --     case rootSelSet of
-    --       VQ.RMutation selSet -> do
-    --         (tx, respHeaders) <- getMutOp env gCtx sqlGenCtx userInfo httpManager reqHeaders selSet
-    --         pure $ (ExOpMutation respHeaders tx, Q.ReadWrite)
-    --       VQ.RQuery selSet -> do
-    --         (queryTx, plan, genSql) <- getQueryOp env gCtx sqlGenCtx httpManager reqHeaders userInfo
-    --                                    queryReusability (allowQueryActionExecuter httpManager reqHeaders) selSet
-    --         traverse_ (addPlanToCache . EP.RPQuery) plan
-    --         return $ ExOpQuery queryTx (Just genSql)
-    --       VQ.RSubscription fields -> do
-    --         (lqOp, plan) <- getSubsOp env pgExecCtx gCtx sqlGenCtx userInfo queryReusability
-    --           (restrictActionExecuter "query actions cannot be run as a subscription") fields
-    --         traverse_ (addPlanToCache . EP.RPSubs) plan
-    --           return $ ExOpSubs lqOp
 
 -- Monad for resolving a hasura query/mutation
 type E m =
