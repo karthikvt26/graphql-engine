@@ -71,7 +71,7 @@ runApp env (HGEOptionsG rci hgeCmd) =
         schemaCache <- buildRebuildableSchemaCache env
         execQuery env queryBs
           & Tracing.runTraceT "execute"
-          & Tracing.runNoReporter 
+          & Tracing.runNoReporter
           & runHasSystemDefinedT (SystemDefined False)
           & runCacheRWT schemaCache
           & fmap (\(res, _, _) -> res)

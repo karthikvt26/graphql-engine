@@ -81,7 +81,7 @@ data ExitCode
   | EventEnvironmentVariableError
   | MetadataExportError
   | MetadataCleanError
-  | SchemaCacheMigrationError
+  | DatabaseMigrationError
   | ExecuteProcessError
   | DowngradeProcessError
   | UnexpectedHasuraError
@@ -241,7 +241,7 @@ migrateCatalogSchema env logger pool httpManager sqlGenCtx = do
         , slKind = "db_migrate"
         , slInfo = A.toJSON err
         }
-      liftIO (printErrExit SchemaCacheMigrationError (BLC.unpack $ A.encode err))
+      liftIO (printErrExit DatabaseMigrationError (BLC.unpack $ A.encode err))
   unLogger logger migrationResult
   return (schemaCache, view _2 <$> lastUpdateEvent)
 
@@ -249,7 +249,7 @@ migrateCatalogSchema env logger pool httpManager sqlGenCtx = do
 runTxIO :: Q.PGPool -> Q.TxMode -> Q.TxE QErr a -> IO a
 runTxIO pool isoLevel tx = do
   eVal <- liftIO $ runExceptT $ Q.runTx pool isoLevel tx
-  either (printErrJExit SchemaCacheMigrationError) return eVal
+  either (printErrJExit DatabaseMigrationError) return eVal
 
 -- | A latch for the graceful shutdown of a server process.
 newtype ShutdownLatch = ShutdownLatch { unShutdownLatch :: C.MVar () }
