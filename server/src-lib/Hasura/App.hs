@@ -71,20 +71,35 @@ import           Hasura.Session
 import qualified Hasura.Tracing                            as Tracing
 import qualified Hasura.GraphQL.Transport.WebSocket.Server as WS
 
+data ExitCode
+  = InvalidEnvironmentVariableOptionsError
+  | InvalidDatabaseConnectionParamsError
+  | MetadataCatalogFetchingError
+  | AuthConfigurationError
+  | EventSubSystemError
+  | EventEnvironmentVariableError
+  | MetadataExportError
+  | MetadataCleanError
+  | SchemaCacheMigrationError
+  | ExecuteProcessError
+  | DowngradeProcessError
+  | UnexpectedHasuraError
+  | ExitFailureError Int
+  deriving Show
 
 data ExitException
   = ExitException
-  { eeCode :: !Int
+  { eeCode    :: !ExitCode
   , eeMessage :: !BC.ByteString
   } deriving (Show)
 
 instance Exception ExitException
 
-printErrExit :: (MonadIO m) => forall a . Int -> String -> m a
-printErrExit code = liftIO . throwIO . ExitException code . BC.pack
+printErrExit :: (MonadIO m) => forall a . ExitCode -> String -> m a
+printErrExit reason = liftIO . throwIO . ExitException reason . BC.pack
 
-printErrJExit :: (A.ToJSON a, MonadIO m) => forall b . Int -> a -> m b
-printErrJExit code = liftIO . throwIO . ExitException code . BLC.toStrict . A.encode
+printErrJExit :: (A.ToJSON a, MonadIO m) => forall b . ExitCode -> a -> m b
+printErrJExit reason = liftIO . throwIO . ExitException reason . BLC.toStrict . A.encode
 
 parseHGECommand :: EnabledLogTypes impl => Parser (RawHGECommand impl)
 parseHGECommand =
@@ -110,7 +125,7 @@ parseArgs = do
   rawHGEOpts <- execParser opts
   env <- getEnvironment
   let eitherOpts = runWithEnv env $ mkHGEOptions rawHGEOpts
-  either (printErrExit 3) return eitherOpts
+  either (printErrExit InvalidEnvironmentVariableOptionsError) return eitherOpts
   where
     opts = info (helper <*> hgeOpts)
            ( fullDesc <>
@@ -194,7 +209,7 @@ initialiseCtx env hgeCmd rci = do
   pure (InitCtx httpManager instanceId loggers connInfo pool latch res, initTime)
   where
     procConnInfo =
-      either (printErrExit 4 . ("Fatal Error : " <>)) return $ mkConnInfo rci
+      either (printErrExit InvalidDatabaseConnectionParamsError . ("Fatal Error : " <>)) return $ mkConnInfo rci
 
     getMinimalPool pgLogger ci = do
       let connParams = Q.defaultConnParams { Q.cpConns = 1 }
@@ -225,7 +240,7 @@ migrateCatalogSchema env logger pool httpManager sqlGenCtx = do
         , slKind = "db_migrate"
         , slInfo = A.toJSON err
         }
-      liftIO (printErrExit 14 (BLC.unpack $ A.encode err))
+      liftIO (printErrExit SchemaCacheMigrationError (BLC.unpack $ A.encode err))
   unLogger logger migrationResult
   return (schemaCache, view _2 <$> lastUpdateEvent)
 
@@ -233,10 +248,7 @@ migrateCatalogSchema env logger pool httpManager sqlGenCtx = do
 runTxIO :: Q.PGPool -> Q.TxMode -> Q.TxE QErr a -> IO a
 runTxIO pool isoLevel tx = do
   eVal <- liftIO $ runExceptT $ Q.runTx pool isoLevel tx
-  either (printErrJExit 5) return eVal
-
-
--- TODO: Put Env into ServeOptions?
+  either (printErrJExit SchemaCacheMigrationError) return eVal
 
 -- | A latch for the graceful shutdown of a server process.
 newtype ShutdownLatch = ShutdownLatch { unShutdownLatch :: C.MVar () }
@@ -303,7 +315,7 @@ runHGEServer env ServeOptions{..} InitCtx{..} pgExecCtx initTime (shutdownLatch,
   authModeRes <- runExceptT $ setupAuthMode soAdminSecret soAuthHook soJwtSecret soUnAuthRole
                               _icHttpManager logger
 
-  authMode <- either (printErrExit 6 . T.unpack) return authModeRes
+  authMode <- either (printErrExit AuthConfigurationError . T.unpack) return authModeRes
 
   -- See: https://github.com/hasura/graphql-engine/issues/4772
   -- let flushLogger = liftIO $ FL.flushLogStr $ _lcLoggerSet loggerCtx
@@ -411,7 +423,7 @@ runHGEServer env ServeOptions{..} InitCtx{..} pgExecCtx initTime (shutdownLatch,
     prepareEvents pool (Logger logger) = do
       liftIO $ logger $ mkGenericStrLog LevelInfo "event_triggers" "preparing data"
       res <- liftIO $ runTx pool (Q.ReadCommitted, Nothing) unlockAllEvents
-      either (printErrJExit 7) return res
+      either (printErrJExit EventSubSystemError) return res
 
     -- | shutdownEvents will be triggered when a graceful shutdown has been inititiated, it will
     -- get the locked events from the event engine context and then it will unlock all those events.

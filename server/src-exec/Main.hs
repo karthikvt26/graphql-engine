@@ -33,7 +33,7 @@ main = do
     unAppM (runApp env args)
   where
     tryExit io = try io >>= \case
-      Left (ExitException code msg) -> BC.putStrLn msg >> Sys.exitWith (Sys.ExitFailure code)
+      Left (ExitException _code msg) -> BC.putStrLn msg >> Sys.exitFailure
       Right r -> return r
 
 runApp :: Env.Environment -> HGEOptions Hasura -> AppM ()
@@ -56,12 +56,12 @@ runApp env (HGEOptionsG rci hgeCmd) =
     HCExport -> do
       (initCtx, _) <- initialiseCtx env hgeCmd rci
       res <- runTx' initCtx fetchMetadata Q.ReadCommitted
-      either (printErrJExit 9) printJSON res
+      either (printErrJExit MetadataExportError) printJSON res
 
     HCClean -> do
       (initCtx, _) <- initialiseCtx env hgeCmd rci
       res <- runTx' initCtx dropCatalog Q.ReadCommitted
-      either (printErrJExit 10) (const cleanSuccess) res
+      either (printErrJExit MetadataCleanError) (const cleanSuccess) res
 
     HCExecute -> do
       (InitCtx{..}, _) <- initialiseCtx env hgeCmd rci
@@ -75,14 +75,14 @@ runApp env (HGEOptionsG rci hgeCmd) =
           & runHasSystemDefinedT (SystemDefined False)
           & runCacheRWT schemaCache
           & fmap (\(res, _, _) -> res)
-      either (printErrJExit 11) (liftIO . BLC.putStrLn) res
+      either (printErrJExit ExecuteProcessError) (liftIO . BLC.putStrLn) res
 
     HCDowngrade opts -> do
       (InitCtx{..}, initTime) <- initialiseCtx env hgeCmd rci
       let sqlGenCtx = SQLGenCtx False
       res <- downgradeCatalog opts initTime
              & runAsAdmin _icPgPool sqlGenCtx _icHttpManager
-      either (printErrJExit 12) (liftIO . print) res
+      either (printErrJExit DowngradeProcessError) (liftIO . print) res
 
     HCVersion -> liftIO $ putStrLn $ "Hasura GraphQL Engine: " ++ convertText currentVersion
   where
