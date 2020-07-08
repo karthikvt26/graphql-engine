@@ -309,7 +309,6 @@ mkLazyRespTx
   -> [(G.Alias, ResolvedQuery)] 
   -> m (tx EncJSON)
 mkLazyRespTx env manager reqHdrs userInfo resolved = do
-  -- FIXME(phil): is this correct?
   pure $ fmap encJFromAssocList $ forM resolved $ \(alias, node) -> do
     resp <- case node of
       RRRaw bs                      -> return $ encJFromBS bs

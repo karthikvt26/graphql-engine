@@ -94,6 +94,7 @@ import qualified Data.TByteString                  as TBS
 import qualified Data.Text                         as T
 import qualified Database.PG.Query                 as Q
 import qualified Hasura.Logging                    as L
+import qualified Hasura.Tracing                    as Tracing
 import qualified Network.HTTP.Client               as HTTP
 import qualified Text.Builder                      as TB (run)
 import qualified PostgreSQL.Binary.Decoding        as PD
@@ -313,18 +314,18 @@ generateScheduleTimes from n cron = take n $ go from
     go = unfoldr (fmap dup . nextMatch cron)
 
 processCronEvents
-  :: HasVersion
+  :: (HasVersion, MonadIO m, Tracing.HasReporter m)
   => L.Logger L.Hasura
   -> LogEnvHeaders
   -> HTTP.Manager
   -> Q.PGPool
   -> IO SchemaCache
-  -> IO ()
+  -> m ()
 processCronEvents logger logEnv httpMgr pgpool getSC = do
-  cronTriggersInfo <- scCronTriggers <$> getSC
+  cronTriggersInfo <- scCronTriggers <$> liftIO getSC
   cronScheduledEvents <-
-    runExceptT $
-    Q.runTx pgpool (Q.ReadCommitted, Just Q.ReadWrite) getPartialCronEvents
+    liftIO . runExceptT $
+      Q.runTx pgpool (Q.ReadCommitted, Just Q.ReadWrite) getPartialCronEvents
   case cronScheduledEvents of
     Right partialEvents ->
       for_ partialEvents $ \(CronEventPartial id' name st tries)-> do
@@ -344,24 +345,24 @@ processCronEvents logger logEnv httpMgr pgpool getSC = do
                                        ctiRetryConf
                                        ctiHeaders
                                        ctiComment
-            finally <- runExceptT $
+            finally <- Tracing.runTraceT "scheduled event" . runExceptT $
               runReaderT (processScheduledEvent logEnv pgpool scheduledEvent CronScheduledEvent) (logger, httpMgr)
             either logInternalError pure finally
     Left err -> logInternalError err
   where
-    logInternalError err = L.unLogger logger $ ScheduledTriggerInternalErr err
+    logInternalError err = liftIO . L.unLogger logger $ ScheduledTriggerInternalErr err
 
 processStandAloneEvents
-  :: HasVersion
+  :: (HasVersion, MonadIO m, Tracing.HasReporter m)
   => Env.Environment
   -> L.Logger L.Hasura
   -> LogEnvHeaders
   -> HTTP.Manager
   -> Q.PGPool
-  -> IO ()
+  -> m ()
 processStandAloneEvents env logger logEnv httpMgr pgpool = do
   standAloneScheduledEvents <-
-    runExceptT $
+    liftIO . runExceptT $
       Q.runTx pgpool (Q.ReadCommitted, Just Q.ReadWrite) getOneOffScheduledEvents
   case standAloneScheduledEvents of
     Right standAloneScheduledEvents' ->
@@ -375,8 +376,8 @@ processStandAloneEvents env logger logEnv httpMgr pgpool = do
                                         headerConf
                                         comment  )
         -> do
-        webhookInfo <- runExceptT $ resolveWebhook env webhookConf
-        headerInfo <- runExceptT $ getHeaderInfosFromConf env headerConf
+        webhookInfo <- liftIO . runExceptT $ resolveWebhook env webhookConf
+        headerInfo <- liftIO . runExceptT $ getHeaderInfosFromConf env headerConf
 
         case webhookInfo of
           Right webhookInfo' -> do
@@ -393,7 +394,7 @@ processStandAloneEvents env logger logEnv httpMgr pgpool = do
                                                         retryConf
                                                         headerInfo'
                                                         comment
-                finally <- runExceptT $
+                finally <- Tracing.runTraceT "scheduled event" . runExceptT $
                   runReaderT (processScheduledEvent logEnv pgpool scheduledEvent StandAloneEvent) $
                                  (logger, httpMgr)
                 either logInternalError pure finally
@@ -404,22 +405,22 @@ processStandAloneEvents env logger logEnv httpMgr pgpool = do
 
     Left standAloneScheduledEventsErr -> logInternalError standAloneScheduledEventsErr
   where
-    logInternalError err = L.unLogger logger $ ScheduledTriggerInternalErr err
+    logInternalError err = liftIO . L.unLogger logger $ ScheduledTriggerInternalErr err
 
 processScheduledTriggers
-  :: HasVersion
+  :: (HasVersion, MonadIO m, Tracing.HasReporter m)
   => Env.Environment
   -> L.Logger L.Hasura
   -> LogEnvHeaders
   -> HTTP.Manager
   -> Q.PGPool
   -> IO SchemaCache
-  -> IO void
-processScheduledTriggers env logger logEnv httpMgr pgpool getSC=
+  -> m void
+processScheduledTriggers env logger logEnv httpMgr pgpool getSC =
   forever $ do
     processCronEvents logger logEnv httpMgr pgpool getSC
     processStandAloneEvents env logger logEnv httpMgr pgpool
-    sleep (minutes 1)
+    liftIO $ sleep (minutes 1)
 
 processScheduledEvent ::
   ( MonadReader r m
@@ -428,6 +429,7 @@ processScheduledEvent ::
   , HasVersion
   , MonadIO m
   , MonadError QErr m
+  , Tracing.MonadTrace m
   )
   => LogEnvHeaders
   -> Q.PGPool

@@ -440,7 +440,6 @@ getSubsOp env pgExecCtx gCtx sqlGenCtx userInfo queryReusability actionExecuter 
   runE gCtx sqlGenCtx userInfo .
   EL.buildLiveQueryPlan env pgExecCtx queryReusability actionExecuter
 
--- FIXME(Phil): sanity check.
 execRemoteGQ
   :: ( HasVersion
      , MonadIO m

@@ -5,7 +5,7 @@ module Hasura.App where
 import           Control.Concurrent.STM.TVar               (readTVarIO)
 import           Control.Exception (throwIO)
 import           Control.Monad.Base
-import           Control.Monad.Catch                       (MonadCatch, MonadThrow, onException, Exception)
+import           Control.Monad.Catch                       (MonadCatch, MonadMask, MonadThrow, onException, Exception)
 import           Control.Monad.Morph                       (hoist)
 import           Control.Lens                              (view, _2)
 import           Control.Monad.Stateless
@@ -152,7 +152,7 @@ data Loggers
   }
 
 newtype AppM a = AppM { unAppM :: IO a }
-  deriving (Functor, Applicative, Monad, MonadIO, MonadBase IO, MonadBaseControl IO, MonadCatch, MonadThrow)
+  deriving (Functor, Applicative, Monad, MonadIO, MonadBase IO, MonadBaseControl IO, MonadCatch, MonadThrow, MonadMask)
 
 -- | this function initializes the catalog and returns an @InitCtx@, based on the command given
 -- - for serve command it creates a proper PG connection pool
@@ -263,7 +263,7 @@ flushLogger loggerCtx = liftIO $ FL.flushLogStr $ _lcLoggerSet loggerCtx
 runHGEServer
   :: ( HasVersion
      , MonadIO m
-     , MonadCatch m
+     , MonadMask m
      , MonadStateless IO m
      , LA.Forall (LA.Pure m)
      , UserAuthentication (Tracing.TraceT m)
@@ -362,7 +362,7 @@ runHGEServer env ServeOptions{..} InitCtx{..} pgExecCtx initTime (shutdownLatch,
     runCronEventsGenerator logger _icPgPool (getSCFromRef cacheRef)
 
   -- start a background thread to deliver the scheduled events
-  void $ liftIO $ C.forkImmortal "processScheduledTriggers" logger $
+  void $ C.forkImmortal "processScheduledTriggers" logger $
     processScheduledTriggers env logger logEnvHeaders _icHttpManager _icPgPool (getSCFromRef cacheRef)
 
   -- start a background thread to check for updates

@@ -45,11 +45,11 @@ module Hasura.Eventing.EventTrigger
 -- import           Control.Concurrent.STM.TVar
 -- =======
 
-import           Control.Concurrent.Async             (wait, withAsync)
+-- import           Control.Concurrent.Async             (wait, withAsync)
 import           Control.Concurrent.Async.Lifted.Safe as LA
 import           Control.Concurrent.Extended          (sleep)
 import           Control.Concurrent.STM.TVar
-import           Control.Exception.Lifted             (finally, mask_, try)
+-- import           Control.Exception.Lifted             (finally, mask_, try)
 import           Control.Monad.Catch                  (MonadMask, bracket_)
 import           Control.Monad.STM
 import           Control.Monad.Trans.Control          (MonadBaseControl)
@@ -197,6 +197,7 @@ processEventQueue
      , Tracing.HasReporter m
      , MonadBaseControl IO m
      , LA.Forall (LA.Pure m)
+     , MonadMask m
      )
   => L.Logger L.Hasura
   -> LogEnvHeaders
@@ -229,7 +230,7 @@ processEventQueue logger logenv httpMgr pool getSchemaCache eeCtx@EventEngineCtx
     -- After the events are fetched from the DB, we store the locked events
     -- in a hash set(order doesn't matter and look ups are faster) in the
     -- event engine context
-    saveLockedEvents :: MonadIO m => [Event] -> m ()
+    saveLockedEvents :: [Event] -> m ()
     saveLockedEvents evts =
       liftIO $ atomically $ do
         lockedEvents <- readTVar _eeCtxLockedEvents
@@ -281,11 +282,13 @@ processEventQueue logger logenv httpMgr pool getSchemaCache eeCtx@EventEngineCtx
 --         -- return when next batch ready; some 'processEvent' threads may be running.
 -- =======
         forM_ events $ \event -> do
-             -- FIXME(Phil): not sure how to fix this.
-             -- runReaderT (withEventEngineCtx eeCtx (processEvent event)) (logger, httpMgr)
-             -- removing an event from the _eeCtxLockedEvents after the event has
-             -- been processed
-             removeEventFromLockedEvents (eId event)
+          processEvent event 
+            & Tracing.runTraceT "process event"
+            & withEventEngineCtx eeCtx
+            & flip runReaderT (logger, httpMgr)
+          -- removing an event from the _eeCtxLockedEvents after the event has
+          -- been processed
+          removeEventFromLockedEvents (eId event)
         LA.wait eventsNextA
 
       let lenEvents = length events
@@ -309,14 +312,15 @@ processEventQueue logger logenv httpMgr pool getSchemaCache eeCtx@EventEngineCtx
              go eventsNext 0 False
 
     processEvent
-      :: ( HasVersion
-         , MonadReader r m
+      :: forall io r
+       . ( HasVersion
+         , MonadIO io
+         , MonadReader r io
          , Has HTTP.Manager r
          , Has (L.Logger L.Hasura) r
-         , MonadIO m
-         , Tracing.MonadTrace m
+         , Tracing.MonadTrace io
          )
-      => Event -> m ()
+      => Event -> io ()
     processEvent e = do
       cache <- liftIO getSchemaCache
       let meti = getEventTriggerInfoFromEvent cache e
