@@ -35,7 +35,6 @@ import qualified Language.GraphQL.Draft.Syntax  as G
 
 import qualified Data.Aeson                     as J
 import qualified Hasura.RQL.Types               as RQL
-import qualified Language.GraphQL.Draft.Syntax  as G
 
 import           Hasura.GraphQL.Resolve.Context
 import           Hasura.GraphQL.Validate.Types
