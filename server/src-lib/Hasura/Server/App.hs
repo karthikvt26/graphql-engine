@@ -111,6 +111,7 @@ data ServerCtx
   , scEnableAllowlist              :: !Bool
   , scEkgStore                     :: !EKG.Store
   , scResponseInternalErrorsConfig :: !ResponseInternalErrorsConfig
+  , scEnvironment                  :: !Env.Environment
   }
 
 data HandlerCtx
@@ -204,10 +205,10 @@ onlyAdmin = do
 
 buildQCtx :: (MonadIO m) => Handler m QCtx
 buildQCtx = do
-  scRef    <- scCacheRef . hcServerCtx <$> ask
-  userInfo <- asks hcUser
-  cache <- getSCFromRef scRef
-  sqlGenCtx <- scSQLGenCtx . hcServerCtx <$> ask
+  scRef     <- asks (scCacheRef . hcServerCtx)
+  userInfo  <- asks hcUser
+  cache     <- getSCFromRef scRef
+  sqlGenCtx <- asks (scSQLGenCtx . hcServerCtx)
   return $ QCtx userInfo cache sqlGenCtx
 
 setHeader :: MonadIO m => HTTP.Header -> Spock.ActionT m ()
@@ -343,65 +344,64 @@ mkSpockAction serverCtx qErrEncoder qErrModifier apiHandler = do
 
 v1QueryHandler
   :: (HasVersion, MonadIO m, MonadBaseControl IO m, MetadataApiAuthorization m)
-  => Env.Environment
-  -> RQLQuery
+  => RQLQuery
   -> Handler m (HttpResponse EncJSON)
-v1QueryHandler env query = do
+v1QueryHandler query = do
   userInfo <- asks hcUser
   authorizeMetadataApi query userInfo
-  scRef <- scCacheRef . hcServerCtx <$> ask
-  logger <- scLogger . hcServerCtx <$> ask
-  res <- bool (fst <$> dbAction) (withSCUpdate scRef logger dbAction) $
-         queryModifiesSchemaCache query
+  scRef  <- asks (scCacheRef . hcServerCtx)
+  logger <- asks (scLogger . hcServerCtx)
+  res    <- bool (fst <$> dbAction) (withSCUpdate scRef logger dbAction) $ queryModifiesSchemaCache query
   return $ HttpResponse res []
   where
     -- Hit postgres
     dbAction = do
-      userInfo <- asks hcUser
-      scRef <- scCacheRef . hcServerCtx <$> ask
+      userInfo    <- asks hcUser
+      scRef       <- asks (scCacheRef . hcServerCtx)
       schemaCache <- fmap fst $ liftIO $ readIORef $ _scrCache scRef
-      httpMgr <- scManager . hcServerCtx <$> ask
-      sqlGenCtx <- scSQLGenCtx . hcServerCtx <$> ask
-      pgExecCtx <- scPGExecCtx . hcServerCtx <$> ask
-      instanceId <- scInstanceId . hcServerCtx <$> ask
+      httpMgr     <- asks (scManager . hcServerCtx)
+      sqlGenCtx   <- asks (scSQLGenCtx . hcServerCtx)
+      pgExecCtx   <- asks (scPGExecCtx . hcServerCtx)
+      instanceId  <- asks (scInstanceId . hcServerCtx)
+      env         <- asks (scEnvironment . hcServerCtx)
       runQuery env pgExecCtx instanceId userInfo schemaCache httpMgr sqlGenCtx (SystemDefined False) query
 
 v1Alpha1GQHandler
   :: (HasVersion, MonadIO m, E.MonadGQLExecutionCheck m, MonadQueryLog m, Tracing.MonadTrace m, GH.MonadExecuteQuery m)
-  => Env.Environment -> E.GraphQLQueryType -> GH.GQLBatchedReqs GH.GQLQueryText -> Handler m (HttpResponse EncJSON)
-v1Alpha1GQHandler env queryType query = do
-  userInfo <- asks hcUser
-  reqHeaders <- asks hcReqHeaders
-  ipAddress <- asks hcSourceIpAddress
-  requestId <- asks hcRequestId
-  -- Might be cleaner to use the asks function...
-  manager <- scManager . hcServerCtx <$> ask
-  scRef <- scCacheRef . hcServerCtx <$> ask
-
-  (sc, scVer) <- liftIO $ readIORef $ _scrCache scRef
-  pgExecCtx <- scPGExecCtx . hcServerCtx <$> ask
-  sqlGenCtx <- scSQLGenCtx . hcServerCtx <$> ask
-  planCache <- scPlanCache . hcServerCtx <$> ask
-  enableAL  <- scEnableAllowlist . hcServerCtx <$> ask
-  logger    <- scLogger . hcServerCtx <$> ask
+  => E.GraphQLQueryType -> GH.GQLBatchedReqs GH.GQLQueryText -> Handler m (HttpResponse EncJSON)
+v1Alpha1GQHandler queryType query = do
+  userInfo             <- asks hcUser
+  reqHeaders           <- asks hcReqHeaders
+  ipAddress            <- asks hcSourceIpAddress
+  requestId            <- asks hcRequestId
+  manager              <- asks (scManager . hcServerCtx)
+  scRef                <- asks (scCacheRef . hcServerCtx)
+  (sc, scVer)          <- liftIO $ readIORef $ _scrCache scRef
+  pgExecCtx            <- asks (scPGExecCtx . hcServerCtx)
+  sqlGenCtx            <- asks (scSQLGenCtx . hcServerCtx)
+  planCache            <- asks (scPlanCache . hcServerCtx)
+  enableAL             <- asks (scEnableAllowlist . hcServerCtx)
+  logger               <- asks (scLogger . hcServerCtx)
   responseErrorsConfig <- asks (scResponseInternalErrorsConfig . hcServerCtx)
+  env                  <- asks (scEnvironment . hcServerCtx)
+
   let execCtx = E.ExecutionCtx logger sqlGenCtx pgExecCtx planCache
                 (lastBuiltSchemaCache sc) scVer manager enableAL
+
   flip runReaderT execCtx $
     GH.runGQBatched env requestId responseErrorsConfig userInfo ipAddress reqHeaders queryType query
 
 v1GQHandler
   :: (HasVersion, MonadIO m, E.MonadGQLExecutionCheck m, MonadQueryLog m, Tracing.MonadTrace m, GH.MonadExecuteQuery m)
-  => Env.Environment
-  -> GH.GQLBatchedReqs GH.GQLQueryText
+  => GH.GQLBatchedReqs GH.GQLQueryText
   -> Handler m (HttpResponse EncJSON)
-v1GQHandler env = v1Alpha1GQHandler env E.QueryHasura
+v1GQHandler = v1Alpha1GQHandler E.QueryHasura
 
 v1GQRelayHandler
   :: (HasVersion, MonadIO m, E.MonadGQLExecutionCheck m, MonadQueryLog m, Tracing.MonadTrace m, GH.MonadExecuteQuery m)
-  => Env.Environment
-  -> GH.GQLBatchedReqs GH.GQLQueryText -> Handler m (HttpResponse EncJSON)
-v1GQRelayHandler env = v1Alpha1GQHandler env E.QueryRelay
+  => GH.GQLBatchedReqs GH.GQLQueryText
+  -> Handler m (HttpResponse EncJSON)
+v1GQRelayHandler = v1Alpha1GQHandler E.QueryRelay
 
 gqlExplainHandler
   :: forall m
@@ -409,15 +409,15 @@ gqlExplainHandler
      , MonadIO m
      , Tracing.HasReporter m
      )
-  => Env.Environment
-  -> GE.GQLExplain
+  => GE.GQLExplain
   -> Handler (Tracing.TraceT m) (HttpResponse EncJSON)
-gqlExplainHandler env query = do
+gqlExplainHandler query = do
   onlyAdmin
-  scRef <- scCacheRef . hcServerCtx <$> ask
-  sc <- getSCFromRef scRef
-  pgExecCtx <- scPGExecCtx . hcServerCtx <$> ask
-  sqlGenCtx <- scSQLGenCtx . hcServerCtx <$> ask
+  scRef     <- asks (scCacheRef . hcServerCtx)
+  sc        <- getSCFromRef scRef
+  pgExecCtx <- asks (scPGExecCtx . hcServerCtx)
+  sqlGenCtx <- asks (scSQLGenCtx . hcServerCtx)
+  env       <- asks (scEnvironment . hcServerCtx)
 
   -- let runTx :: ReaderT HandlerCtx (Tracing.TraceT (Tracing.NoReporter (LazyTx QErr))) a
   --           -> ExceptT QErr (ReaderT HandlerCtx (Tracing.TraceT m)) a
@@ -431,7 +431,7 @@ gqlExplainHandler env query = do
 v1Alpha1PGDumpHandler :: (MonadIO m) => PGD.PGDumpReqBody -> Handler m APIResp
 v1Alpha1PGDumpHandler b = do
   onlyAdmin
-  ci <- scConnInfo . hcServerCtx <$> ask
+  ci     <- asks (scConnInfo . hcServerCtx)
   output <- PGD.execPGDump b ci
   return $ RawResp $ HttpResponse output [sqlHeader]
 
@@ -498,12 +498,11 @@ queryParsers =
 
 legacyQueryHandler
   :: (HasVersion, MonadIO m, MonadBaseControl IO m, MetadataApiAuthorization m)
-  => Env.Environment
-  -> TableName -> T.Text -> Object
+  => TableName -> T.Text -> Object
   -> Handler m (HttpResponse EncJSON)
-legacyQueryHandler env tn queryType req =
+legacyQueryHandler tn queryType req =
   case M.lookup queryType queryParsers of
-    Just queryParser -> getLegacyQueryParser queryParser qt req >>= v1QueryHandler env . RQV1
+    Just queryParser -> getLegacyQueryParser queryParser qt req >>= v1QueryHandler . RQV1
     Nothing          -> throw404 "No such resource exists"
   where
     qt = QualifiedObject publicSchema tn
@@ -611,6 +610,7 @@ mkWaiApp env isoLevel logger sqlGenCtx enableAL pool pgExecCtxCustom ci httpMana
                     , scLQState         =  lqState
                     , scEnableAllowlist =  enableAL
                     , scEkgStore        =  ekgStore
+                    , scEnvironment     =  env
                     , scResponseInternalErrorsConfig = responseErrorsConfig
                     }
 
@@ -620,9 +620,9 @@ mkWaiApp env isoLevel logger sqlGenCtx enableAL pool pgExecCtxCustom ci httpMana
 
     spockApp <- liftWithStateless $ \lowerIO ->
       Spock.spockAsApp $ Spock.spockT lowerIO $
-        httpApp env corsCfg serverCtx enableConsole consoleAssetsDir enableTelemetry
+        httpApp corsCfg serverCtx enableConsole consoleAssetsDir enableTelemetry
 
-    let wsServerApp = WS.createWSServerApp env mode wsServerEnv
+    let wsServerApp  = WS.createWSServerApp env mode wsServerEnv -- TODO: Lyndon: Can we pass environment through wsServerEnv?
         stopWSServer = WS.stopWSServerApp wsServerEnv
 
     waiApp <- liftWithStateless $ \lowerIO ->
@@ -657,14 +657,13 @@ httpApp
      , Tracing.HasReporter m
      , GH.MonadExecuteQuery m
      )
-  => Env.Environment
-  -> CorsConfig
+  => CorsConfig
   -> ServerCtx
   -> Bool
   -> Maybe Text
   -> Bool
   -> Spock.SpockT m ()
-httpApp env corsCfg serverCtx enableConsole consoleAssetsDir enableTelemetry = do
+httpApp corsCfg serverCtx enableConsole consoleAssetsDir enableTelemetry = do
 
     -- cors middleware
     unless (isCorsDisabled corsCfg) $
@@ -694,11 +693,11 @@ httpApp env corsCfg serverCtx enableConsole consoleAssetsDir enableTelemetry = d
       Spock.post "v1alpha1/graphql/explain" gqlExplainAction
 
       Spock.post "v1/query" $ spockAction encodeQErr id $
-        mkPostHandler $ mkAPIRespHandler (v1QueryHandler env)
+        mkPostHandler $ mkAPIRespHandler v1QueryHandler
 
       Spock.post ("api/1/table" <//> Spock.var <//> Spock.var) $ \tableName queryType ->
         mkSpockAction serverCtx encodeQErr id $ mkPostHandler $
-          mkAPIRespHandler $ legacyQueryHandler env (TableName tableName) queryType
+          mkAPIRespHandler $ legacyQueryHandler (TableName tableName) queryType
 
     when enablePGDump $
       Spock.post "v1alpha1/pg_dump" $ spockAction encodeQErr id $
@@ -708,13 +707,13 @@ httpApp env corsCfg serverCtx enableConsole consoleAssetsDir enableTelemetry = d
 
     when enableGraphQL $ do
       Spock.post "v1alpha1/graphql" $ spockAction GH.encodeGQErr id $
-        mkPostHandler $ mkAPIRespHandler $ v1Alpha1GQHandler env E.QueryHasura
+        mkPostHandler $ mkAPIRespHandler $ v1Alpha1GQHandler E.QueryHasura
 
       Spock.post "v1/graphql" $ spockAction GH.encodeGQErr allMod200 $
-        mkPostHandler $ mkAPIRespHandler (v1GQHandler env)
+        mkPostHandler $ mkAPIRespHandler v1GQHandler
 
       Spock.post "v1beta1/relay" $ spockAction GH.encodeGQErr allMod200 $
-        mkPostHandler $ mkAPIRespHandler $ v1GQRelayHandler env
+        mkPostHandler $ mkAPIRespHandler $ v1GQRelayHandler
 
     when (isDeveloperAPIEnabled serverCtx) $ do
       Spock.get "dev/ekg" $ spockAction encodeQErr id $
@@ -755,16 +754,12 @@ httpApp env corsCfg serverCtx enableConsole consoleAssetsDir enableTelemetry = d
 
 
     -- all graphql errors should be of type 200
-    allMod200 qe = qe { qeStatus = HTTP.status200 }
-
-    gqlExplainAction =
-      spockAction encodeQErr id $ mkPostHandler $
-        mkAPIRespHandler (gqlExplainHandler env)
-
-    enableGraphQL = isGraphQLEnabled serverCtx
-    enableMetadata = isMetadataEnabled serverCtx
-    enablePGDump = isPGDumpEnabled serverCtx
-    enableConfig = isConfigEnabled serverCtx
+    allMod200 qe     = qe { qeStatus = HTTP.status200 }
+    gqlExplainAction = spockAction encodeQErr id $ mkPostHandler $ mkAPIRespHandler gqlExplainHandler
+    enableGraphQL    = isGraphQLEnabled serverCtx
+    enableMetadata   = isMetadataEnabled serverCtx
+    enablePGDump     = isPGDumpEnabled serverCtx
+    enableConfig     = isConfigEnabled serverCtx
 
     serveApiConsole = do
       -- redirect / to /console

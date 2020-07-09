@@ -62,7 +62,7 @@ addCronTriggerToCatalog CronTriggerMetadata {..} = liftTx $ do
   insertCronEvents $ map (CronEventSeed ctName) scheduleTimes
 
 resolveCronTrigger
-  :: (QErrM m, MonadIO m)
+  :: (QErrM m)
   => Env.Environment
   -> CatalogCronTrigger
   -> m CronTriggerInfo
