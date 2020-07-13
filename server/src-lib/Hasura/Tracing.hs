@@ -142,7 +142,7 @@ instance (HasReporter m, MonadIO m) => MonadTrace (TraceT m) where
     let subCtx = ctx { tcCurrentSpan = spanId
                      , tcCurrentParent = Just (tcCurrentSpan ctx)
                      }
-    lift . report ctx name . runWriterT $ runReaderT (unTraceT ma) subCtx
+    lift . report subCtx name . runWriterT $ runReaderT (unTraceT ma) subCtx
 
   currentContext = TraceT ask
 
