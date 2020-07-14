@@ -353,7 +353,7 @@ onStart env serverEnv wsConn (StartMsg opId q) = catchAndIgnore $ do
       -> GQLReqUnparsed
       -> GQLReqParsed
       -> UserInfo
-      -> E.ExecOp (Tracing.TraceT (Tracing.NoReporter (LazyTx QErr)))
+      -> E.ExecOp (Tracing.TraceT (LazyTx QErr))
       -> ExceptT () m ()
     runHasuraGQ timerTot telemCacheHit reqId query queryParsed userInfo = \case
       E.ExOpQuery opTx genSql asts -> Tracing.trace "pg" $
@@ -363,7 +363,7 @@ onStart env serverEnv wsConn (StartMsg opId q) = catchAndIgnore $ do
       -- Response headers discarded over websockets
       E.ExOpMutation _ opTx -> Tracing.trace "pg" do
         execQueryOrMut Telem.Mutation Nothing $
-          Tracing.interpTraceT (runLazyTx pgExecCtx Q.ReadWrite . withUserInfo userInfo . Tracing.runNoReporter) opTx
+          Tracing.interpTraceT (runLazyTx pgExecCtx Q.ReadWrite . withUserInfo userInfo) opTx
       E.ExOpSubs lqOp -> do
         -- log the graphql query
         logQueryLog logger query Nothing reqId

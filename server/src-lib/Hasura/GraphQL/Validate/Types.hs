@@ -805,6 +805,7 @@ instance (Monad m) => MonadReusability (ReusabilityT m) where
 instance Tracing.MonadTrace m => Tracing.MonadTrace (ReusabilityT m) where
   trace name (ReusabilityT ma) = ReusabilityT (Tracing.trace name ma)
   currentContext = lift Tracing.currentContext
+  currentReporter = lift Tracing.currentReporter
   attachMetadata = lift . Tracing.attachMetadata
 
 runReusabilityT :: ReusabilityT m a -> m (a, QueryReusability)

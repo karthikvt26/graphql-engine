@@ -68,9 +68,8 @@ runApp env (HGEOptionsG rci hgeCmd) =
       let sqlGenCtx = SQLGenCtx False
       res <- runAsAdmin _icPgPool sqlGenCtx _icHttpManager $ do
         schemaCache <- buildRebuildableSchemaCache env
-        execQuery env queryBs
-          & Tracing.runTraceT "execute"
-          & Tracing.runNoReporter
+        execQuery env queryBs 
+          & Tracing.runTraceTWithReporter Tracing.noReporter "execute"
           & runHasSystemDefinedT (SystemDefined False)
           & runCacheRWT schemaCache
           & fmap (\(res, _, _) -> res)

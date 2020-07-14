@@ -84,8 +84,8 @@ instance (MonadTx m) => MonadTx (ValidateT e m) where
   liftTx = lift . liftTx
 instance (MonadTx m) => MonadTx (Tracing.TraceT m) where
   liftTx = lift . liftTx
-instance (MonadTx m) => MonadTx (Tracing.NoReporter m) where
-  liftTx = lift . liftTx
+-- instance (MonadTx m) => MonadTx (Tracing.NoReporter m) where
+--   liftTx = lift . liftTx
 
 -- | Like 'Q.TxE', but defers acquiring a Postgres connection until the first
 -- execution of 'liftTx'.  If no call to 'liftTx' is ever reached (i.e. a

@@ -270,7 +270,7 @@ mkSpockAction serverCtx qErrEncoder qErrModifier apiHandler = do
           -> m a
         runTraceT = maybe
           Tracing.runTraceT
-          Tracing.runTraceTWith
+          Tracing.runTraceTInContext
           tracingCtx
           (fromString (B8.unpack pathInfo))
 
@@ -343,7 +343,7 @@ mkSpockAction serverCtx qErrEncoder qErrModifier apiHandler = do
 
 
 v1QueryHandler
-  :: (HasVersion, MonadIO m, MonadBaseControl IO m, MetadataApiAuthorization m)
+  :: (HasVersion, MonadIO m, MonadBaseControl IO m, MetadataApiAuthorization m, Tracing.MonadTrace m)
   => RQLQuery
   -> Handler m (HttpResponse EncJSON)
 v1QueryHandler query = do
@@ -407,7 +407,6 @@ gqlExplainHandler
   :: forall m
    . ( HasVersion
      , MonadIO m
-     , Tracing.HasReporter m
      )
   => GE.GQLExplain
   -> Handler (Tracing.TraceT m) (HttpResponse EncJSON)
@@ -422,7 +421,7 @@ gqlExplainHandler query = do
   -- let runTx :: ReaderT HandlerCtx (Tracing.TraceT (Tracing.NoReporter (LazyTx QErr))) a
   --           -> ExceptT QErr (ReaderT HandlerCtx (Tracing.TraceT m)) a
   let runTx rttx = ExceptT . ReaderT $ \ctx -> do
-        runExceptT (Tracing.interpTraceT (runLazyTx pgExecCtx Q.ReadOnly . Tracing.runNoReporter) (runReaderT rttx ctx))
+        runExceptT (Tracing.interpTraceT (runLazyTx pgExecCtx Q.ReadOnly) (runReaderT rttx ctx))
 
   res <- GE.explainGQLQuery env pgExecCtx runTx sc sqlGenCtx
          (restrictActionExecuter "query actions cannot be explained") query
@@ -497,7 +496,7 @@ queryParsers =
       return $ f q
 
 legacyQueryHandler
-  :: (HasVersion, MonadIO m, MonadBaseControl IO m, MetadataApiAuthorization m)
+  :: (HasVersion, MonadIO m, MonadBaseControl IO m, MetadataApiAuthorization m, Tracing.MonadTrace m)
   => TableName -> T.Text -> Object
   -> Handler m (HttpResponse EncJSON)
 legacyQueryHandler tn queryType req =

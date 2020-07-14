@@ -136,7 +136,7 @@ import           Hasura.RQL.Types.ScheduledTrigger
 import           Hasura.RQL.Types.SchemaCacheTypes
 import           Hasura.RQL.Types.Table
 import           Hasura.SQL.Types
-import           Hasura.Tracing                    (NoReporter, TraceT)
+import           Hasura.Tracing                    (TraceT)
 
 import           Data.Aeson
 import           Data.Aeson.Casing
@@ -251,8 +251,8 @@ instance (Monoid w, TableCoreInfoRM m) => TableCoreInfoRM (WriterT w m) where
   lookupTableCoreInfo = lift . lookupTableCoreInfo
 instance (TableCoreInfoRM m) => TableCoreInfoRM (TraceT m) where
   lookupTableCoreInfo = lift . lookupTableCoreInfo
-instance (TableCoreInfoRM m) => TableCoreInfoRM (NoReporter m) where
-  lookupTableCoreInfo = lift . lookupTableCoreInfo
+-- instance (TableCoreInfoRM m) => TableCoreInfoRM (NoReporter m) where
+--   lookupTableCoreInfo = lift . lookupTableCoreInfo
 
 newtype TableCoreCacheRT m a
   = TableCoreCacheRT { runTableCoreCacheRT :: Dependency TableCoreCache -> m a }
@@ -277,8 +277,8 @@ instance (Monoid w, CacheRM m) => CacheRM (WriterT w m) where
   askSchemaCache = lift askSchemaCache
 instance (CacheRM m) => CacheRM (TraceT m) where
   askSchemaCache = lift askSchemaCache
-instance (CacheRM m) => CacheRM (NoReporter m) where
-  askSchemaCache = lift askSchemaCache
+-- instance (CacheRM m) => CacheRM (NoReporter m) where
+--   askSchemaCache = lift askSchemaCache
 
 newtype CacheRT m a = CacheRT { runCacheRT :: SchemaCache -> m a }
   deriving (Functor, Applicative, Monad, MonadError e, MonadWriter w) via (ReaderT SchemaCache m)

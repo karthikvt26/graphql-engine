@@ -46,7 +46,7 @@ class Monad m => MonadExecuteQuery m where
     -> Maybe EQ.GeneratedSqlMap
     -> PGExecCtx
     -> Q.TxAccess
-    -> TraceT (Tracing.NoReporter (LazyTx QErr)) EncJSON
+    -> TraceT (LazyTx QErr) EncJSON
     -> TraceT (ExceptT QErr m) (HTTP.ResponseHeaders, EncJSON)
 
 instance MonadExecuteQuery m => MonadExecuteQuery (ReaderT r m) where
@@ -158,7 +158,7 @@ runHasuraGQ
   => RequestId
   -> (GQLReqUnparsed, GQLReqParsed)
   -> UserInfo
-  -> E.ExecOp (Tracing.TraceT (Tracing.NoReporter (LazyTx QErr)))
+  -> E.ExecOp (Tracing.TraceT (LazyTx QErr))
   -> m (DiffTime, Telem.QueryType, HTTP.ResponseHeaders, EncJSON)
   -- ^ Also return 'Mutation' when the operation was a mutation, and the time
   -- spent in the PG query; for telemetry.
@@ -172,7 +172,7 @@ runHasuraGQ reqId (query, queryParsed) userInfo resolvedOp = do
 
     E.ExOpMutation respHeaders tx -> trace "pg" $ do
       logQueryLog logger query Nothing reqId
-      (respHeaders,) <$> Tracing.interpTraceT (runLazyTx pgExecCtx Q.ReadWrite . withUserInfo userInfo . Tracing.runNoReporter) tx
+      (respHeaders,) <$> Tracing.interpTraceT (runLazyTx pgExecCtx Q.ReadWrite . withUserInfo userInfo) tx
 
     E.ExOpSubs _ ->
       throw400 UnexpectedPayload

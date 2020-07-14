@@ -552,7 +552,7 @@ instance HttpLog AppM where
 
 instance MonadExecuteQuery AppM where
   executeQuery _ _ _ pgCtx txAccess tx =
-    ([],) <$> hoist (runLazyTx pgCtx txAccess . Tracing.runNoReporter) tx
+    ([],) <$> hoist (runLazyTx pgCtx txAccess) tx
 
 instance UserAuthentication (Tracing.TraceT AppM) where
   resolveUserInfo logger manager headers authMode =
