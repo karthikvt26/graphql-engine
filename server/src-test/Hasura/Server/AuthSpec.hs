@@ -393,8 +393,6 @@ fakeAuthHook = AuthHookG "http://fake" AHTGet
 mkRoleNameE :: Text -> RoleName
 mkRoleNameE = fromMaybe (error "fixme") . mkRoleName
 
-instance Tracing.HasReporter IO
-
 setupAuthMode'
   :: Maybe AdminSecretHash
   -> Maybe AuthHook
@@ -405,7 +403,7 @@ setupAuthMode'  mAdminSecretHash mWebHook mJwtSecret mUnAuthRole =
   withVersion (VersionDev "fake") $
   -- just throw away the error message for ease of testing:
   fmap (either (const $ Left ()) Right) $
-  runExceptT $
-  setupAuthMode mAdminSecretHash mWebHook mJwtSecret mUnAuthRole
-    -- NOTE: this won't do any http or launch threads if we don't specify JWT URL:
-    (error "H.Manager") (Logger $ void . return)
+  Tracing.runNoReporter . runExceptT $
+    setupAuthMode mAdminSecretHash mWebHook mJwtSecret mUnAuthRole
+      -- NOTE: this won't do any http or launch threads if we don't specify JWT URL:
+      (error "H.Manager") (Logger $ void . return)

@@ -11,7 +11,6 @@ import           Control.Lens                 hiding (op)
 import           Control.Monad.Writer.Strict
 
 import qualified Data.HashMap.Strict          as HM
-import qualified Data.List                   as L
 import qualified Data.List.NonEmpty           as NE
 import qualified Data.Text                    as T
 

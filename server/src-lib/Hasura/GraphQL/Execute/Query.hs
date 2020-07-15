@@ -107,13 +107,19 @@ withPlan usrVars (PGPlan q reqVars prepMap rq) annVars = do
 
 -- turn the current plan into a transaction
 mkCurPlanTx
-  :: (HasVersion, MonadError QErr m, Tracing.MonadTrace m)
+  :: ( HasVersion
+     , MonadError QErr m
+     , Tracing.MonadTrace m
+     , MonadIO tx
+     , MonadTx tx
+     , Tracing.MonadTrace tx
+     )
   => Env.Environment
   -> HTTP.Manager
   -> [N.Header]
   -> UserInfo
   -> FieldPlans
-  -> m (LazyRespTx, GeneratedSqlMap)
+  -> m (tx EncJSON, GeneratedSqlMap)
 mkCurPlanTx env manager reqHdrs userInfo fldPlans = do
   -- generate the SQL and prepared vars or the bytestring
   resolved <- forM fldPlans $ \(alias, fldPlan) -> do
@@ -200,6 +206,9 @@ convertQuerySelSet
      , HasVersion
      , MonadIO m
      , Tracing.MonadTrace m
+     , MonadIO tx
+     , MonadTx tx
+     , Tracing.MonadTrace tx
      )
   => Env.Environment
   -> HTTP.Manager
@@ -207,7 +216,7 @@ convertQuerySelSet
   -> QueryReusability
   -> V.ObjectSelectionSet
   -> QueryActionExecuter
-  -> m (LazyRespTx, Maybe ReusableQueryPlan, GeneratedSqlMap, [R.QueryRootFldUnresolved])
+  -> m (tx EncJSON, Maybe ReusableQueryPlan, GeneratedSqlMap, [R.QueryRootFldUnresolved])
 convertQuerySelSet env manager reqHdrs initialReusability selSet actionRunner = do
   userInfo <- asks getter
   (fldPlansAndAst, finalReusability) <- runReusabilityTWith initialReusability $ do
@@ -232,14 +241,20 @@ convertQuerySelSet env manager reqHdrs initialReusability selSet actionRunner = 
 
 -- use the existing plan and new variables to create a pg query
 queryOpFromPlan
-  :: (HasVersion, MonadError QErr m, Tracing.MonadTrace m)
+  :: ( HasVersion
+     , MonadError QErr m
+     , Tracing.MonadTrace m
+     , MonadIO tx
+     , MonadTx tx
+     , Tracing.MonadTrace tx
+     )
   => Env.Environment
   -> HTTP.Manager
   -> [N.Header]
   -> UserInfo
   -> Maybe GH.VariableValues
   -> ReusableQueryPlan
-  -> m (LazyRespTx, GeneratedSqlMap)
+  -> m (tx EncJSON, GeneratedSqlMap)
 queryOpFromPlan env manager reqHdrs userInfo varValsM (ReusableQueryPlan varTypes fldPlans) = do
   validatedVars <- GV.validateVariablesForReuse varTypes varValsM
   -- generate the SQL and prepared vars or the bytestring
@@ -281,10 +296,19 @@ data ResolvedQuery
 type GeneratedSqlMap = [(G.Alias, Maybe PreparedSql)]
 
 mkLazyRespTx
-  :: (HasVersion, Tracing.MonadTrace m)
-  => Env.Environment -> HTTP.Manager -> [N.Header] -> UserInfo -> [(G.Alias, ResolvedQuery)] -> m LazyRespTx
+  :: ( HasVersion
+     , Tracing.MonadTrace m
+     , MonadIO tx
+     , MonadTx tx
+     , Tracing.MonadTrace tx
+     )
+  => Env.Environment 
+  -> HTTP.Manager 
+  -> [N.Header] 
+  -> UserInfo 
+  -> [(G.Alias, ResolvedQuery)] 
+  -> m (tx EncJSON)
 mkLazyRespTx env manager reqHdrs userInfo resolved = do
-  -- FIXME(phil): is this correct?
   pure $ fmap encJFromAssocList $ forM resolved $ \(alias, node) -> do
     resp <- case node of
       RRRaw bs                      -> return $ encJFromBS bs

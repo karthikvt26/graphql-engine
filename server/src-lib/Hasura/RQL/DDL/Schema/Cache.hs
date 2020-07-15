@@ -386,7 +386,6 @@ buildSchemaCacheRule env = proc (catalogMetadata, invalidationKeys) -> do
          , Inc.ArrowDistribute arr
          , ArrowWriter (Seq CollectedInfo) arr
          , Inc.ArrowCache m arr
-         , MonadIO m
          , MonadTx m)
       => ((),[CatalogCronTrigger])
          `arr` HashMap TriggerName CronTriggerInfo

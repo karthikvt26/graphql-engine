@@ -84,18 +84,6 @@ data ErrRespType
   | ERTGraphqlCompliant
   deriving (Show)
 
--- data WsClientState
---   = WsClientState
---   { wscsUserInfo     :: !UserInfo
---   -- ^ the 'UserInfo' required to execute the query and various other things
---   , wscsTokenExpTime :: !(Maybe TC.UTCTime)
---   -- ^ the JWT expiry time, if any
---   , wscsReqHeaders   :: ![H.Header]
---   -- ^ headers from the client (in conn params) to forward to the remote schema
---   , wscsIpAddress    :: !IpAddress
---   -- ^ IP address required for 'GQLApiAuthorization'
---   }
-
 data WSConnState
   = CSNotInitialised !WsHeaders !Wai.IpAddress
   -- ^ headers and IP address from the client for websockets
@@ -280,9 +268,9 @@ onConn (L.Logger logger) corsPolicy wsId requestHead ipAddress = do
     checkPath = case WS.requestPath requestHead of
       "/v1alpha1/graphql" -> return (ERTLegacy, E.QueryHasura)
       "/v1/graphql"       -> return (ERTGraphqlCompliant, E.QueryHasura)
-      "/v1/relay"         -> return (ERTGraphqlCompliant, E.QueryRelay)
+      "/v1beta1/relay"    -> return (ERTGraphqlCompliant, E.QueryRelay)
       _                   ->
-        throw404 "only '/v1/graphql', '/v1alpha1/graphql' are supported on websockets"
+        throw404 "only '/v1/graphql', '/v1alpha1/graphql' and '/v1beta1/relay' are supported on websockets"
 
     getOrigin =
       find ((==) "Origin" . fst) (WS.requestHeaders requestHead)
@@ -365,17 +353,17 @@ onStart env serverEnv wsConn (StartMsg opId q) = catchAndIgnore $ do
       -> GQLReqUnparsed
       -> GQLReqParsed
       -> UserInfo
-      -> E.ExecOp
+      -> E.ExecOp (Tracing.TraceT (LazyTx QErr))
       -> ExceptT () m ()
     runHasuraGQ timerTot telemCacheHit reqId query queryParsed userInfo = \case
       E.ExOpQuery opTx genSql asts -> Tracing.trace "pg" $
         execQueryOrMut Telem.Query genSql . fmap snd $
           -- runQueryTx pgExecCtx opTx
-          executeQuery queryParsed asts genSql pgExecCtx Q.ReadOnly opTx
+          Tracing.interpTraceT id $ executeQuery queryParsed asts genSql pgExecCtx Q.ReadOnly opTx
       -- Response headers discarded over websockets
       E.ExOpMutation _ opTx -> Tracing.trace "pg" do
         execQueryOrMut Telem.Mutation Nothing $
-          runLazyTx pgExecCtx Q.ReadWrite $ withUserInfo userInfo opTx
+          Tracing.interpTraceT (runLazyTx pgExecCtx Q.ReadWrite . withUserInfo userInfo) opTx
       E.ExOpSubs lqOp -> do
         -- log the graphql query
         logQueryLog logger query Nothing reqId
@@ -715,11 +703,8 @@ createWSServerApp
   -> AuthMode
   -> WSServerEnv
   -> WS.HasuraServerApp m
-createWSServerApp env authMode serverEnv = \ !ipAddress !pendingConn ->
--- =======
 --   -- ^ aka generalized 'WS.ServerApp'
--- createWSServerApp authMode serverEnv = \ !ipAddress !pendingConn ->
--- >>>>>>> master
+createWSServerApp env authMode serverEnv = \ !ipAddress !pendingConn ->
   WS.createServerApp (_wseServer serverEnv) handlers ipAddress pendingConn
   where
     handlers =
@@ -727,10 +712,6 @@ createWSServerApp env authMode serverEnv = \ !ipAddress !pendingConn ->
       -- Mask async exceptions during event processing to help maintain integrity of mutable vars:
       (\rid rh ip -> mask_ $ onConn (_wseLogger serverEnv) (_wseCorsPolicy serverEnv) rid rh ip)
       (\conn bs -> mask_ $ onMessage env authMode serverEnv conn bs)
--- =======
---       (\rid rh ip ->  mask_ $ onConn (_wseLogger serverEnv) (_wseCorsPolicy serverEnv) rid rh ip)
---       (\conn bs -> mask_ $ onMessage authMode serverEnv conn bs)
--- >>>>>>> master
       (\conn ->    mask_ $ onClose (_wseLogger serverEnv) (_wseLiveQMap serverEnv) conn)
 
 stopWSServerApp :: WSServerEnv -> IO ()

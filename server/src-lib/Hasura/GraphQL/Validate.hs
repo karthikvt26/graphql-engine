@@ -28,7 +28,6 @@ import qualified Data.Aeson                             as A
 import qualified Data.HashMap.Strict                    as Map
 import qualified Data.HashMap.Strict.InsOrd             as OMap
 import qualified Data.HashSet                           as HS
-import qualified Data.Sequence                          as Seq
 import qualified Data.Text                              as T
 import qualified Data.UUID                              as UUID
 import qualified Database.PG.Query                      as Q
@@ -151,18 +150,6 @@ validateFrag
 validateFrag (G.FragmentDefinition n onTy dirs selSet) = do
   unless (null dirs) $ throwVE
     "unexpected directives at fragment definition"
--- <<<<<<< HEAD
---   tyInfo <- getTyInfoVE onTy
---   objTyInfo <- onNothing (getObjTyM tyInfo) $ throwVE
---     "fragments can only be defined on object types"
---   return $ FragDef n objTyInfo selSet
-
--- data RootSelSet
---   = RQuery !SelSet
---   | RMutation !SelSet
---   | RSubscription !SelSet
---   deriving (Show, Eq)
--- =======
   fragmentTypeInfo <- getFragmentTyInfo onTy
   return $ FragDef n fragmentTypeInfo selSet
 

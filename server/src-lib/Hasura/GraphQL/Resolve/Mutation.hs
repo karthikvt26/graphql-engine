@@ -215,9 +215,14 @@ convertUpdateP1 opCtx boolExpParser selectionResolver fld = do
           Right items -> pure $ resolvedPreSetItems <> OMap.toList items
 
 convertUpdateGeneric
-  :: ( HasVersion, MonadReusability m, MonadError QErr m
-     , MonadReader r m , Has SQLGenCtx r
-     , Tracing.MonadTrace m 
+  :: ( HasVersion
+     , MonadReusability m
+     , MonadError QErr m
+     , MonadReader r m
+     , Has SQLGenCtx r 
+     , MonadIO tx 
+     , MonadTx tx 
+     , Tracing.MonadTrace tx 
      )
   => Env.Environment
   -> UpdOpCtx -- the update context
@@ -225,7 +230,7 @@ convertUpdateGeneric
   -> (ArgsMap -> m AnnBoolExpUnresolved) -- the bool exp parser
   -> (Field -> m (RR.MutationOutputG UnresolvedVal)) -- the selection set resolver
   -> Field
-  -> m RespTx
+  -> m (tx EncJSON)
 convertUpdateGeneric env opCtx rjCtx boolExpParser selectionResolver fld = do
   annUpdUnresolved <- convertUpdateP1 opCtx boolExpParser selectionResolver fld
   (annUpdResolved, prepArgs) <- withPrepArgs $ RU.traverseAnnUpd
@@ -240,30 +245,42 @@ convertUpdateGeneric env opCtx rjCtx boolExpParser selectionResolver fld = do
   bool whenNonEmptyItems whenEmptyItems $ null $ RU.uqp1SetExps annUpdResolved
 
 convertUpdate
-  :: ( HasVersion, MonadReusability m, MonadError QErr m
-     , MonadReader r m, Has FieldMap r
-     , Has OrdByCtx r, Has SQLGenCtx r
-     , Tracing.MonadTrace m
+  :: ( HasVersion
+     , MonadReusability m
+     , MonadError QErr m
+     , MonadReader r m
+     , Has FieldMap r
+     , Has OrdByCtx r
+     , Has SQLGenCtx r
+     , MonadIO tx
+     , MonadTx tx
+     , Tracing.MonadTrace tx
      )
   => Env.Environment
   -> UpdOpCtx -- the update context
   -> MutationRemoteJoinCtx
   -> Field -- the mutation field
-  -> m RespTx
+  -> m (tx EncJSON)
 convertUpdate env opCtx rjCtx =
   convertUpdateGeneric env opCtx rjCtx whereExpressionParser mutationFieldsResolver
 
 convertUpdateByPk
-  :: ( HasVersion, MonadReusability m, MonadError QErr m
-     , MonadReader r m, Has FieldMap r
-     , Has OrdByCtx r, Has SQLGenCtx r
-     , Tracing.MonadTrace m
+  :: ( HasVersion
+     , MonadReusability m
+     , MonadError QErr m
+     , MonadReader r m
+     , Has FieldMap r
+     , Has OrdByCtx r
+     , Has SQLGenCtx r
+     , MonadIO tx
+     , MonadTx tx
+     , Tracing.MonadTrace tx
      )
   => Env.Environment
   -> UpdOpCtx -- the update context
   -> MutationRemoteJoinCtx
   -> Field -- the mutation field
-  -> m RespTx
+  -> m (tx EncJSON)
 convertUpdateByPk env opCtx rjCtx field =
   convertUpdateGeneric env opCtx rjCtx boolExpParser tableSelectionAsMutationOutput field
   where
@@ -274,8 +291,11 @@ convertUpdateByPk env opCtx rjCtx field =
 
 convertDeleteGeneric
   :: ( HasVersion, MonadReusability m
-     , MonadReader r m, Has SQLGenCtx r
-     , Tracing.MonadTrace m
+     , MonadReader r m
+     , Has SQLGenCtx r
+     , MonadIO tx
+     , MonadTx tx
+     , Tracing.MonadTrace tx
      )
   => Env.Environment
   -> DelOpCtx -- the delete context
@@ -283,7 +303,7 @@ convertDeleteGeneric
   -> (ArgsMap -> m AnnBoolExpUnresolved) -- the bool exp parser
   -> (Field -> m (RR.MutationOutputG UnresolvedVal)) -- the selection set resolver
   -> Field -- the mutation field
-  -> m RespTx
+  -> m (tx EncJSON)
 convertDeleteGeneric env opCtx rjCtx boolExpParser selectionResolver fld = do
   whereExp <- boolExpParser $ _fArguments fld
   mutOutput  <- selectionResolver fld
@@ -300,30 +320,42 @@ convertDeleteGeneric env opCtx rjCtx boolExpParser selectionResolver fld = do
     allCols = Map.elems colGNameMap
 
 convertDelete
-  :: ( HasVersion, MonadReusability m, MonadError QErr m
-     , MonadReader r m, Has FieldMap r
-     , Has OrdByCtx r, Has SQLGenCtx r
-     , Tracing.MonadTrace m
+  :: ( HasVersion
+     , MonadReusability m
+     , MonadError QErr m
+     , MonadReader r m
+     , Has FieldMap r
+     , Has OrdByCtx r
+     , Has SQLGenCtx r
+     , MonadIO tx
+     , MonadTx tx
+     , Tracing.MonadTrace tx
      )
   => Env.Environment
   -> DelOpCtx -- the delete context
   -> MutationRemoteJoinCtx
   -> Field -- the mutation field
-  -> m RespTx
+  -> m (tx EncJSON)
 convertDelete env opCtx rjCtx =
   convertDeleteGeneric env opCtx rjCtx whereExpressionParser mutationFieldsResolver
 
 convertDeleteByPk
-  :: ( HasVersion, MonadReusability m, MonadError QErr m
-     , MonadReader r m, Has FieldMap r
-     , Has OrdByCtx r, Has SQLGenCtx r
-     , Tracing.MonadTrace m
+  :: ( HasVersion
+     , MonadReusability m
+     , MonadError QErr m
+     , MonadReader r m
+     , Has FieldMap r
+     , Has OrdByCtx r
+     , Has SQLGenCtx r
+     , MonadIO tx
+     , MonadTx tx
+     , Tracing.MonadTrace tx
      )
   => Env.Environment
   -> DelOpCtx -- the delete context
   -> MutationRemoteJoinCtx
   -> Field -- the mutation field
-  -> m RespTx
+  -> m (tx EncJSON)
 convertDeleteByPk env opCtx rjCtx field =
   convertDeleteGeneric env opCtx rjCtx boolExpParser tableSelectionAsMutationOutput field
   where

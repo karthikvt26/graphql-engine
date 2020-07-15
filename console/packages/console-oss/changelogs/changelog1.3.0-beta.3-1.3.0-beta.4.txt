@@ -1,0 +1,7 @@
+- [X] 53a40bc2beceeb1991303b3d37e004cb34d68a54 console: handle generated and identity columns in console data section (close #4552, #4863) (#4761)
+- [X] 6cd9eb282a8afdfee41dc87bf85d09b1df85d61c console: add button to cancel one-off scheduled events and cron-trigger events (close #5161) (#5236)
+- [X] af452de754af052caac3108f8f1b3743fca19252 console: support tracking partitioned tables (close #5071) (#5258)
+- [X] a78f17b79c39305e35c23781c5a78bd0f65fb1f9 console: add code exporter to graphiql (close #4531) (#4652) (required installation of `graphiql-code-exporter` module
+- [X] b9918e0eac4333da0e352a283b765dba6efdfd76 console: allow configuring statement timeout on console RawSQL page (close #4998) (#5045)
+- [X] ab311cd9f1f195d0b2e8f51d42335a90889a102b console: add eslint-plugin-react-hooks (#5219)
+- [X] f8b58ea698a75d0b529c698a19e6ff20cd549c37 console: fix styling of table row content on relationship page (close #4974) (#4979)

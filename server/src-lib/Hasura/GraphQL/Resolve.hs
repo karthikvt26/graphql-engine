@@ -12,9 +12,6 @@ module Hasura.GraphQL.Resolve
   , QueryRootFldUnresolved
   , QueryRootFldResolved
   , toPGQuery
--- <<<<<<< HEAD
---   , toSQLSelect
--- =======
   , toSQLFromItem
 
   , RIntro.schemaR
@@ -31,6 +28,7 @@ import qualified Language.GraphQL.Draft.Syntax     as G
 import qualified Network.HTTP.Client               as HTTP
 import qualified Network.HTTP.Types                as HTTP
 
+import           Hasura.EncJSON
 import           Hasura.GraphQL.Resolve.Context
 import           Hasura.Prelude
 import           Hasura.RQL.Types
@@ -179,10 +177,13 @@ mutFldToTx
      , Has [HTTP.Header] r
      , MonadIO m
      , Tracing.MonadTrace m
+     , MonadIO tx
+     , MonadTx tx
+     , Tracing.MonadTrace tx
      )
   => Env.Environment
   -> V.Field
-  -> m (RespTx, HTTP.ResponseHeaders)
+  -> m (tx EncJSON, HTTP.ResponseHeaders)
 mutFldToTx env fld = do
   userInfo <- asks getter
   reqHeaders <- asks getter
@@ -211,9 +212,6 @@ mutFldToTx env fld = do
       validateHdrs userInfo (_docHeaders ctx)
       noRespHeaders $ RM.convertDeleteByPk env ctx rjCtx fld
     MCAction ctx ->
--- <<<<<<< HEAD
---       RA.resolveActionMutation env fld ctx (_uiSession userInfo)
--- =======
       RA.resolveActionMutation env fld ctx userInfo
 
 getOpCtx
@@ -228,16 +226,6 @@ getOpCtx f = do
   onNothing (Map.lookup f opCtxMap) $ throw500 $
     "lookup failed: opctx: " <> showName f
 
--- <<<<<<< HEAD
--- toSQLSelect :: QueryRootFldResolved -> S.Select
--- toSQLSelect = \case
---   QRFPk s       -> DS.mkSQLSelect DS.JASSingleObject s
---   QRFSimple s   -> DS.mkSQLSelect DS.JASMultipleRows s
---   QRFAgg s      -> DS.mkAggSelect s
---   QRFActionSelect s -> DS.mkSQLSelect DS.JASSingleObject s
---   QRFActionExecuteObject s -> DS.mkSQLSelect DS.JASSingleObject s
---   QRFActionExecuteList s -> DS.mkSQLSelect DS.JASSingleObject s
--- =======
 toSQLFromItem :: S.Alias -> QueryRootFldResolved -> S.FromItem
 toSQLFromItem alias = \case
   QRFNode s                -> fromSelect $ DS.mkSQLSelect DS.JASSingleObject s

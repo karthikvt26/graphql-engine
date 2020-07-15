@@ -486,15 +486,24 @@ prefixErrPath fld =
   withPathK "selectionSet" . fieldAsPath fld . withPathK "args"
 
 convertInsert
-  :: ( HasVersion, MonadReusability m, MonadError QErr m, MonadReader r m
-     , Has FieldMap r , Has OrdByCtx r, Has SQLGenCtx r, Has InsCtxMap r
+  :: ( HasVersion
+     , MonadReusability m
+     , MonadError QErr m
+     , MonadReader r m
+     , Has FieldMap r 
+     , Has OrdByCtx r
+     , Has SQLGenCtx r
+     , Has InsCtxMap r
+     , MonadIO tx
+     , MonadTx tx
+     , Tracing.MonadTrace tx
      )
   => Env.Environment
   -> MutationRemoteJoinCtx
   -> RoleName
   -> QualifiedTable -- table
   -> Field -- the mutation field
-  -> m RespTx
+  -> m (tx EncJSON)
 convertInsert env rjCtx role tn fld = prefixErrPath fld $ do
   selSet <- asObjectSelectionSet $ _fSelSet fld
   mutOutputUnres <- RR.MOutMultirowFields <$> resolveMutationFields (_fType fld) selSet
@@ -524,15 +533,24 @@ convertInsert env rjCtx role tn fld = prefixErrPath fld $ do
     onConflictM = Map.lookup "on_conflict" arguments
 
 convertInsertOne
-  :: ( HasVersion, MonadReusability m, MonadError QErr m, MonadReader r m
-     , Has FieldMap r , Has OrdByCtx r, Has SQLGenCtx r, Has InsCtxMap r
+  :: ( HasVersion
+     , MonadReusability m
+     , MonadError QErr m
+     , MonadReader r m
+     , Has FieldMap r
+     , Has OrdByCtx r
+     , Has SQLGenCtx r
+     , Has InsCtxMap r
+     , MonadIO tx
+     , MonadTx tx
+     , Tracing.MonadTrace tx
      )
   => Env.Environment
   -> MutationRemoteJoinCtx
   -> RoleName
   -> QualifiedTable -- table
   -> Field -- the mutation field
-  -> m RespTx
+  -> m (tx EncJSON)
 convertInsertOne env rjCtx role qt field = prefixErrPath field $ do
   selSet <- asObjectSelectionSet $ _fSelSet field
   tableSelFields <- processTableSelectionSet (_fType field) selSet

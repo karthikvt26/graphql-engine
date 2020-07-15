@@ -33,6 +33,7 @@ import qualified Hasura.GraphQL.Execute                 as E
 import qualified Hasura.GraphQL.Execute.Query           as EQ
 import qualified Hasura.GraphQL.Resolve                 as R
 import qualified Hasura.Server.Telemetry.Counters       as Telem
+import qualified Hasura.Tracing                         as Tracing
 import qualified Language.GraphQL.Draft.Syntax          as G
 import qualified Network.HTTP.Types                     as HTTP
 import qualified Network.Wai.Extended                   as Wai
@@ -45,17 +46,17 @@ class Monad m => MonadExecuteQuery m where
     -> Maybe EQ.GeneratedSqlMap
     -> PGExecCtx
     -> Q.TxAccess
-    -> LazyTx QErr EncJSON
-    -> ExceptT QErr m (HTTP.ResponseHeaders, EncJSON)
+    -> TraceT (LazyTx QErr) EncJSON
+    -> TraceT (ExceptT QErr m) (HTTP.ResponseHeaders, EncJSON)
 
 instance MonadExecuteQuery m => MonadExecuteQuery (ReaderT r m) where
-  executeQuery a b c d e f = hoist lift $ executeQuery a b c d e f
+  executeQuery a b c d e f = hoist (hoist lift) $ executeQuery a b c d e f
 
 instance MonadExecuteQuery m => MonadExecuteQuery (ExceptT r m) where
-  executeQuery a b c d e f = hoist lift $ executeQuery a b c d e f
+  executeQuery a b c d e f = hoist (hoist lift) $ executeQuery a b c d e f
 
 instance MonadExecuteQuery m => MonadExecuteQuery (TraceT m) where
-  executeQuery a b c d e f = hoist lift $ executeQuery a b c d e f
+  executeQuery a b c d e f = hoist (hoist lift) $ executeQuery a b c d e f
 
 
 -- | Run (execute) a single GraphQL query
@@ -157,7 +158,7 @@ runHasuraGQ
   => RequestId
   -> (GQLReqUnparsed, GQLReqParsed)
   -> UserInfo
-  -> E.ExecOp
+  -> E.ExecOp (Tracing.TraceT (LazyTx QErr))
   -> m (DiffTime, Telem.QueryType, HTTP.ResponseHeaders, EncJSON)
   -- ^ Also return 'Mutation' when the operation was a mutation, and the time
   -- spent in the PG query; for telemetry.
@@ -167,11 +168,11 @@ runHasuraGQ reqId (query, queryParsed) userInfo resolvedOp = do
     E.ExOpQuery tx genSql asts -> trace "pg" $ do
       -- log the generated SQL and the graphql query
       logQueryLog logger query genSql reqId
-      executeQuery queryParsed asts genSql pgExecCtx Q.ReadOnly tx
+      Tracing.interpTraceT id $ executeQuery queryParsed asts genSql pgExecCtx Q.ReadOnly tx
 
     E.ExOpMutation respHeaders tx -> trace "pg" $ do
       logQueryLog logger query Nothing reqId
-      (respHeaders,) <$> runLazyTx pgExecCtx Q.ReadWrite (withUserInfo userInfo tx)
+      (respHeaders,) <$> Tracing.interpTraceT (runLazyTx pgExecCtx Q.ReadWrite . withUserInfo userInfo) tx
 
     E.ExOpSubs _ ->
       throw400 UnexpectedPayload

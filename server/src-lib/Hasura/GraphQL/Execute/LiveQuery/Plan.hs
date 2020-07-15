@@ -273,53 +273,6 @@ buildLiveQueryPlan
   :: ( MonadError QErr m
      , MonadReader r m
      , Has UserInfo r
--- <<<<<<< HEAD
---      , Has GR.FieldMap r
---      , Has GR.OrdByCtx r
---      , Has GR.QueryCtxMap r
---      , Has SQLGenCtx r
---      , HasVersion
---      , MonadIO m
---      , Tracing.MonadTrace m
---      )
---   => E.Environment
---   -> IsPGExecCtx
---   -> GV.QueryReusability
---   -> RA.QueryActionExecuter
---   -> GV.SelSet
---   -> m (LiveQueryPlan, Maybe ReusableLiveQueryPlan)
--- buildLiveQueryPlan env isPgCtx initialReusability actionExecutioner fields = do
---   ((resolvedASTs, (queryVariableValues, syntheticVariableValues)), finalReusability) <-
---     GV.runReusabilityTWith initialReusability . flip runStateT mempty $
---       fmap Map.fromList . for (toList fields) $ \field -> case GV._fName field of
---         "__typename" -> throwVE "you cannot create a subscription on '__typename' field"
---         _ -> do
---           unresolvedAST <- GR.queryFldToPGAST env field actionExecutioner
---           resolvedAST <- GR.traverseQueryRootFldAST resolveMultiplexedValue unresolvedAST
---           pure (GV._fAlias field, resolvedAST)
-
---   userInfo <- asks getter
---   let multiplexedQuery = mkMultiplexedQuery resolvedASTs
---       roleName = _uiRole userInfo
---       parameterizedPlan = ParameterizedLiveQueryPlan roleName multiplexedQuery
-
--- -- <<<<<<< HEAD
--- --   -- We need to ensure that the values provided for variables
--- --   -- are correct according to Postgres. Without this check
--- --   -- an invalid value for a variable for one instance of the
--- --   -- subscription will take down the entire multiplexed query
--- --   validatedQueryVars <- validateVariables isPgCtx queryVariableValues
--- --   validatedSyntheticVars <- validateVariables isPgCtx (toList syntheticVariableValues)
--- -- =======
---   -- We need to ensure that the values provided for variables are correct according to Postgres.
---   -- Without this check an invalid value for a variable for one instance of the subscription will
---   -- take down the entire multiplexed query.
---   validatedQueryVars <- validateVariables isPgCtx queryVariableValues
---   validatedSyntheticVars <- validateVariables isPgCtx (toList syntheticVariableValues)
---   let cohortVariables = CohortVariables (_uiSession userInfo) validatedQueryVars validatedSyntheticVars
---       plan = LiveQueryPlan parameterizedPlan cohortVariables
---       varTypes = finalReusability ^? GV._Reusable
--- =======
      , Has FieldMap r
      , Has OrdByCtx r
      , Has QueryCtxMap r

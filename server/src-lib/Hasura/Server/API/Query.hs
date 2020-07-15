@@ -191,22 +191,22 @@ recordSchemaUpdate instanceId invalidations =
              DO UPDATE SET instance_id = $1::uuid, occurred_at = DEFAULT, invalidations = $2::json
             |] (instanceId, Q.AltJ invalidations) True
 
-instance Tracing.MonadTrace (HasSystemDefinedT (CacheRWT Run)) where
-  -- FIXME: Phil - Could you add an implementation of trace here if required?
-
 runQuery
-  :: (HasVersion, MonadIO m, MonadError QErr m)
+  :: (HasVersion, MonadIO m, MonadError QErr m, Tracing.MonadTrace m)
   => Env.Environment -> PGExecCtx -> InstanceId
   -> UserInfo -> RebuildableSchemaCache Run -> HTTP.Manager
   -> SQLGenCtx -> SystemDefined -> RQLQuery -> m (EncJSON, RebuildableSchemaCache Run)
 runQuery env pgExecCtx instanceId userInfo sc hMgr sqlGenCtx systemDefined query = do
   accessMode <- getQueryAccessMode query
-  resE <- runQueryM env query
-    & runHasSystemDefinedT systemDefined
-    & runCacheRWT sc
-    & peelRun runCtx pgExecCtx accessMode
-    & runExceptT
-    & liftIO
+  resE <- runQueryM env query & Tracing.interpTraceT \x -> do
+    a <- x & runHasSystemDefinedT systemDefined
+           & runCacheRWT sc
+           & peelRun runCtx pgExecCtx accessMode
+           & runExceptT
+           & liftIO
+    pure (either 
+      ((, mempty) . Left)
+      (\((js, meta), rsc, ci) -> (Right (js, rsc, ci), meta)) a)
   either throwError withReload resE
   where
     runCtx = RunCtx userInfo hMgr sqlGenCtx

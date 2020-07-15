@@ -16,19 +16,6 @@ import qualified Hasura.RQL.DDL.Permission.Internal            as Permission
 import qualified Hasura.RQL.DDL.QueryCollection                as Collection
 import qualified Hasura.RQL.DDL.Relationship                   as Relationship
 import qualified Hasura.RQL.DDL.Schema                         as Schema
--- <<<<<<< HEAD
-
--- import qualified Data.Aeson                                    as J
--- import qualified Data.HashMap.Strict                           as HM
--- import qualified Data.List.NonEmpty                            as NEList
--- import qualified Data.Text                                     as T
--- import qualified Data.Vector                                   as V
--- import qualified Language.GraphQL.Draft.Parser                 as G
--- import qualified Language.GraphQL.Draft.Syntax                 as G
--- import qualified Language.Haskell.TH.Syntax                    as TH
--- import qualified Network.URI                                   as N
--- =======
--- >>>>>>> master
 
 import           System.Cron.Types
 

@@ -37,6 +37,7 @@ import           Hasura.RQL.Types.Error
 import           Hasura.RQL.Types.Metadata
 import           Hasura.RQL.Types.RemoteSchema (RemoteSchemaName)
 import           Hasura.RQL.Types.SchemaCache
+import           Hasura.Tracing                (TraceT)
 
 -- ----------------------------------------------------------------------------
 -- types used during schema cache construction
@@ -129,6 +130,10 @@ instance Monoid CacheInvalidations where
 
 instance (CacheRWM m) => CacheRWM (ReaderT r m) where
   buildSchemaCacheWithOptions a b = lift $ buildSchemaCacheWithOptions a b
+instance (CacheRWM m) => CacheRWM (TraceT m) where
+  buildSchemaCacheWithOptions a b = lift $ buildSchemaCacheWithOptions a b
+-- instance (CacheRWM m) => CacheRWM (NoReporter m) where
+  -- buildSchemaCacheWithOptions a b = lift $ buildSchemaCacheWithOptions a b
 
 buildSchemaCache :: (CacheRWM m) => m ()
 buildSchemaCache = buildSchemaCacheWithOptions CatalogUpdate mempty
