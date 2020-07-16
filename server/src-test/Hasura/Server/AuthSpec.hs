@@ -1,20 +1,23 @@
+{-# LANGUAGE UndecidableInstances #-}
+
 module Hasura.Server.AuthSpec (spec) where
 
 import           Hasura.Logging
 import           Hasura.Prelude
 import           Hasura.Server.Version
 
-import qualified Crypto.JOSE.JWK        as Jose
-import           Data.Aeson             ((.=))
-import qualified Data.Aeson             as J
-import qualified Network.HTTP.Types     as N
+import           Control.Monad.Trans.Control
+import qualified Crypto.JOSE.JWK             as Jose
+import           Data.Aeson                  ((.=))
+import qualified Data.Aeson                  as J
+import qualified Network.HTTP.Types          as N
 
 import           Hasura.RQL.Types
-import           Hasura.Server.Auth     hiding (getUserInfoWithExpTime, processJwt)
-import           Hasura.Server.Auth.JWT hiding (processJwt)
+import           Hasura.Server.Auth          hiding (getUserInfoWithExpTime, processJwt)
+import           Hasura.Server.Auth.JWT      hiding (processJwt)
 import           Hasura.Server.Utils
 import           Hasura.Session
-import qualified Hasura.Tracing         as Tracing
+import qualified Hasura.Tracing              as Tracing
 import           Test.Hspec
 
 spec :: Spec
@@ -393,6 +396,11 @@ fakeAuthHook = AuthHookG "http://fake" AHTGet
 mkRoleNameE :: Text -> RoleName
 mkRoleNameE = fromMaybe (error "fixme") . mkRoleName
 
+newtype NoReporter a = NoReporter { runNoReporter :: IO a }
+  deriving newtype (Functor, Applicative, Monad, MonadIO, MonadBase IO, MonadBaseControl IO)
+
+instance Tracing.HasReporter NoReporter
+
 setupAuthMode'
   :: Maybe AdminSecretHash
   -> Maybe AuthHook
@@ -402,8 +410,9 @@ setupAuthMode'
 setupAuthMode'  mAdminSecretHash mWebHook mJwtSecret mUnAuthRole =
   withVersion (VersionDev "fake") $
   -- just throw away the error message for ease of testing:
-  fmap (either (const $ Left ()) Right) $
-  Tracing.runNoReporter . runExceptT $
-    setupAuthMode mAdminSecretHash mWebHook mJwtSecret mUnAuthRole
+  fmap (either (const $ Left ()) Right)
+    $ runNoReporter
+    $ runExceptT 
+    $ setupAuthMode mAdminSecretHash mWebHook mJwtSecret mUnAuthRole
       -- NOTE: this won't do any http or launch threads if we don't specify JWT URL:
       (error "H.Manager") (Logger $ void . return)

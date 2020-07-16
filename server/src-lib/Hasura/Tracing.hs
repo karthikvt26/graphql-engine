@@ -13,7 +13,6 @@ module Hasura.Tracing
   , Reporter(..)
   , noReporter
   , HasReporter(..)
-  -- , NoReporter(..)
   , TracingMetadata
   , SuspendedRequest(..)
   , extractHttpContext
@@ -62,14 +61,6 @@ class Monad m => HasReporter m where
 
   default askReporter :: m Reporter
   askReporter = pure noReporter
-
--- newtype NoReporter m a = NoReporter { runNoReporter :: m a }
---   deriving (Functor, Applicative, Monad, MonadIO, MonadBase b, MonadBaseControl b, MonadError e, MonadReader r, MonadUnique)
--- 
--- instance MonadTrans NoReporter where
---   lift = NoReporter
--- 
--- instance Monad m => HasReporter (NoReporter m)
 
 instance HasReporter m => HasReporter (ReaderT r m) where
   askReporter = lift askReporter

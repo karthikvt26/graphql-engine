@@ -95,8 +95,6 @@ instance (UserInfoM m) => UserInfoM (StateT s m) where
   askUserInfo = lift askUserInfo
 instance (UserInfoM m) => UserInfoM (TraceT m) where
   askUserInfo = lift askUserInfo
--- instance (UserInfoM m) => UserInfoM (NoReporter m) where
---   askUserInfo = lift askUserInfo
 
 askTabInfo
   :: (QErrM m, CacheRM m)
@@ -144,8 +142,6 @@ instance (Monoid w, HasHttpManager m) => HasHttpManager (WriterT w m) where
   askHttpManager = lift askHttpManager
 instance (HasHttpManager m) => HasHttpManager (TraceT m) where
   askHttpManager = lift askHttpManager
--- instance (HasHttpManager m) => HasHttpManager (NoReporter m) where
---   askHttpManager = lift askHttpManager
 
 class (Monad m) => HasGCtxMap m where
   askGCtxMap :: m GC.GCtxMap
@@ -173,8 +169,6 @@ instance (HasSQLGenCtx m) => HasSQLGenCtx (TableCoreCacheRT m) where
   askSQLGenCtx = lift askSQLGenCtx
 instance (HasSQLGenCtx m) => HasSQLGenCtx (TraceT m) where
   askSQLGenCtx = lift askSQLGenCtx
--- instance (HasSQLGenCtx m) => HasSQLGenCtx (NoReporter m) where
---   askSQLGenCtx = lift askSQLGenCtx
 
 class (Monad m) => HasSystemDefined m where
   askSystemDefined :: m SystemDefined
@@ -187,8 +181,6 @@ instance (Monoid w, HasSystemDefined m) => HasSystemDefined (WriterT w m) where
   askSystemDefined = lift askSystemDefined
 instance (HasSystemDefined m) => HasSystemDefined (TraceT m) where
   askSystemDefined = lift askSystemDefined
--- instance (HasSystemDefined m) => HasSystemDefined (NoReporter m) where
---   askSystemDefined = lift askSystemDefined
 
 newtype HasSystemDefinedT m a
   = HasSystemDefinedT { unHasSystemDefinedT :: ReaderT SystemDefined m a }

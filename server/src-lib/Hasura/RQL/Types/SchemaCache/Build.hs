@@ -132,8 +132,6 @@ instance (CacheRWM m) => CacheRWM (ReaderT r m) where
   buildSchemaCacheWithOptions a b = lift $ buildSchemaCacheWithOptions a b
 instance (CacheRWM m) => CacheRWM (TraceT m) where
   buildSchemaCacheWithOptions a b = lift $ buildSchemaCacheWithOptions a b
--- instance (CacheRWM m) => CacheRWM (NoReporter m) where
-  -- buildSchemaCacheWithOptions a b = lift $ buildSchemaCacheWithOptions a b
 
 buildSchemaCache :: (CacheRWM m) => m ()
 buildSchemaCache = buildSchemaCacheWithOptions CatalogUpdate mempty

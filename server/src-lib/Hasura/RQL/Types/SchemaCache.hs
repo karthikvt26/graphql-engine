@@ -251,8 +251,6 @@ instance (Monoid w, TableCoreInfoRM m) => TableCoreInfoRM (WriterT w m) where
   lookupTableCoreInfo = lift . lookupTableCoreInfo
 instance (TableCoreInfoRM m) => TableCoreInfoRM (TraceT m) where
   lookupTableCoreInfo = lift . lookupTableCoreInfo
--- instance (TableCoreInfoRM m) => TableCoreInfoRM (NoReporter m) where
---   lookupTableCoreInfo = lift . lookupTableCoreInfo
 
 newtype TableCoreCacheRT m a
   = TableCoreCacheRT { runTableCoreCacheRT :: Dependency TableCoreCache -> m a }
@@ -277,8 +275,6 @@ instance (Monoid w, CacheRM m) => CacheRM (WriterT w m) where
   askSchemaCache = lift askSchemaCache
 instance (CacheRM m) => CacheRM (TraceT m) where
   askSchemaCache = lift askSchemaCache
--- instance (CacheRM m) => CacheRM (NoReporter m) where
---   askSchemaCache = lift askSchemaCache
 
 newtype CacheRT m a = CacheRT { runCacheRT :: SchemaCache -> m a }
   deriving (Functor, Applicative, Monad, MonadError e, MonadWriter w) via (ReaderT SchemaCache m)
