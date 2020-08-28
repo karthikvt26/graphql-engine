@@ -154,9 +154,6 @@ module.exports = {
   },
   optimization: {
     minimize: true,
-    splitChunks: {
-      chunks: 'all',
-    },
     minimizer: [
       new TerserPlugin({
         terserOptions: {
