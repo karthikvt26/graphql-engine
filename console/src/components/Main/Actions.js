@@ -87,6 +87,7 @@ const fetchConsoleNotifications = () => (dispatch, getState) => {
   if (
     consoleStateDB &&
     consoleStateDB.console_notifications &&
+    consoleStateDB.console_notifications[userType] &&
     consoleStateDB.console_notifications[userType].date
   ) {
     toShowBadge = consoleStateDB.console_notifications[userType].showBadge;
@@ -185,7 +186,7 @@ const fetchConsoleNotifications = () => (dispatch, getState) => {
           dispatch(
             updateConsoleNotificationsState({
               read: newReadValue,
-              date: consoleStateDB.console_notifications[userType].date,
+              date: consoleStateDB && consoleStateDB.console_notifications && consoleStateDB.console_notifications[userType] && consoleStateDB.console_notifications[userType].date,
               showBadge: toShowBadge,
             })
           );

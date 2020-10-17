@@ -519,7 +519,7 @@ const HasuraNotifications: React.FC<
   const previouslyReadState = React.useMemo(
     () =>
       console_opts?.console_notifications &&
-      console_opts?.console_notifications[userType].read,
+      console_opts?.console_notifications[userType]?.read,
     [console_opts?.console_notifications, userType]
   );
   const showBadge = React.useMemo(
