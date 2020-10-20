@@ -3,7 +3,7 @@
   "description": "Console for Hasura GraphQL Engine",
   "author": "Hasura (https://github.com/hasura/graphql-engine)",
   "license": "Apache 2.0",
-  "version": "0.1.0-test",
+  "version": "0.1.0-test-0.1",
   "repository": {
     "type": "git",
     "url": "https://github.com/hasura/graphql-engine"
@@ -23,7 +23,6 @@
     "build-lib-table": "webpack --progress -p --colors --display-error-details --config webpack/bundle-table.config.js",
     "server-build": "make server-build",
     "build-unused": "webpack --verbose --colors --display-error-details --config webpack/prod.config.js --json | webpack-unused -s src",
-    "postinstall": "webpack --display-error-details --config webpack/prod.config.js",
     "cypress": "cypress open",
     "test": "cypress run --spec 'cypress/integration/**/**/test.ts' --key $CYPRESS_KEY --parallel --record",
     "lint": "eslint -c .eslintrc src --ext .js,.ts,.tsx",
