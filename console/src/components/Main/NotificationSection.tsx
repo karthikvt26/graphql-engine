@@ -511,8 +511,12 @@ const HasuraNotifications: React.FC<
 
   let userType = 'admin';
 
-  if (dataHeaders?.[HASURA_COLLABORATOR_TOKEN]) {
-    const collabToken = dataHeaders[HASURA_COLLABORATOR_TOKEN];
+  const headerHasCollabToken = Object.keys(dataHeaders).find(
+    header => header.toLowerCase() === HASURA_COLLABORATOR_TOKEN
+  );
+
+  if (headerHasCollabToken) {
+    const collabToken = dataHeaders[headerHasCollabToken];
     userType = getUserType(collabToken);
   }
 
