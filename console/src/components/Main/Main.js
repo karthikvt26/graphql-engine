@@ -57,8 +57,9 @@ const updateRequestHeaders = props => {
   );
 
   if (collabTokenPresent) {
-    const userID = getUserType(collabTokenPresent.value);
-    if (!props.console_opts.console_notifications[userID]) {
+    const collabToken = requestHeaders[collabTokenPresent];
+    const userID = getUserType(collabToken);
+    if (props.console_opts && !props.console_opts.console_notifications[userID]) {
       dispatch({
         type: UPDATE_CONSOLE_NOTIFICATIONS,
         data: {
@@ -491,6 +492,10 @@ const mapStateToProps = (state, ownProps) => {
     console_opts: state.telemetry.console_opts,
     requestHeaders: state.tables.dataHeaders,
   };
+};
+
+export {
+  updateRequestHeaders
 };
 
 export default connect(mapStateToProps)(Main);
