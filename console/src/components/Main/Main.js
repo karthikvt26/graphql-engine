@@ -36,6 +36,7 @@ import {
   setProClickState,
   getLoveConsentState,
   setLoveConsentState,
+  getUserType,
 } from './utils';
 import { getSchemaBaseRoute } from '../Common/utils/routesUtils';
 import {
@@ -45,6 +46,41 @@ import {
 } from '../Common/utils/localStorageUtils';
 import { ProPopup } from './components/ProPopup';
 import LoveSection from './LoveSection';
+// import { Help, ProPopup } from './components/';
+import { UPDATE_DATA_HEADERS } from '../Services/Data/DataActions';
+import { HASURA_COLLABORATOR_TOKEN } from '../../constants';
+import { UPDATE_CONSOLE_NOTIFICATIONS } from '../../telemetry/Actions';
+
+const updateRequestHeaders = props => {
+  const { requestHeaders, dispatch } = props;
+  const validHeaders = requestHeaders.filter(header => header.key !== '');
+  const headers = validHeaders.reduce((hdrs, header) => {
+    return { ...hdrs, [header.key]: header.value };
+  }, {});
+
+  dispatch({ type: UPDATE_DATA_HEADERS, data: headers });
+
+  const collabTokenPresent = validHeaders.find(
+    hdr => hdr.key.toLowerCase() === HASURA_COLLABORATOR_TOKEN
+  );
+
+  if (collabTokenPresent) {
+    const userID = getUserType(collabTokenPresent.value);
+    if (!props.console_opts.console_notifications[userID]) {
+      dispatch({
+        type: UPDATE_CONSOLE_NOTIFICATIONS,
+        data: {
+          ...props.console_opts.console_notifications,
+          [userID]: {
+            read: [],
+            date: null,
+            showBadge: true,
+          },
+        },
+      });
+    }
+  }
+};
 
 class Main extends React.Component {
   constructor(props) {
@@ -63,6 +99,7 @@ class Main extends React.Component {
   componentDidMount() {
     const { dispatch } = this.props;
 
+    updateRequestHeaders(this.props);
     dispatch(loadServerVersion()).then(() => {
       dispatch(featureCompatibilityInit());
 
@@ -77,6 +114,18 @@ class Main extends React.Component {
     });
 
     dispatch(fetchServerConfig());
+  }
+
+  componentDidUpdate(prevProps) {
+    const prevHeaders = Object.keys(prevProps.requestHeaders);
+    const currHeaders = Object.keys(this.props.requestHeaders);
+
+    if (
+      prevHeaders.length !== currHeaders.length ||
+      prevHeaders.filter(hdr => !currHeaders.includes(hdr)).length
+    ) {
+      updateRequestHeaders(this.props);
+    }
   }
 
   toggleProPopup = () => {
@@ -448,6 +497,7 @@ const mapStateToProps = (state, ownProps) => {
     currentSchema: state.tables.currentSchema,
     metadata: state.metadata,
     console_opts: state.telemetry.console_opts,
+    requestHeaders: state.apiexplorer.displayedApi.request.headers,
   };
 };
 
