@@ -1531,6 +1531,30 @@
   }
 }
 
+@media (max-width: 1250px) {
+  .secureSectionText {
+    display: none;
+  }
+}
+
+@media (max-width: 1050px) {
+  .sidebar {
+    .sidebarItems {
+      li {
+        p {
+          display: none;
+        }
+      }
+    }
+  }
+}
+
+@media (max-width: 600px) {
+  .sidebar {
+    min-width: 600px;
+  }
+}
+
 .pixelLoveSection {
   display: flex;
   align-items: center;
