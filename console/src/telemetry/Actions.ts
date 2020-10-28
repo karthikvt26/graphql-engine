@@ -173,7 +173,8 @@ const updateConsoleNotificationsState = (updatedState: NotificationsState) => {
         [userType]: updatedState,
       },
     };
-    if (userType !== 'admin') {
+    // If the userType is any spread all the state
+    if (userType !== 'admin' || userType === 'admin') {
       const currentState = restState?.console_notifications;
       if (Object.keys(currentState ?? {}).length > 1) {
         composedUpdatedState = {
